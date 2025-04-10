@@ -1,6 +1,6 @@
 -- PlayerManager.lua
 -- โมดูลจัดการข้อมูลผู้เล่นทั้งหมดในเกม
--- Version: 1.0.0
+-- Version: 1.1.0 (Optimized)
 
 local PlayerManager = {}
 PlayerManager.__index = PlayerManager
@@ -45,23 +45,20 @@ function PlayerManager:RegisterPlayer(player)
 			armor = {},
 			shields = {}
 		},
-		position = nil, -- Will store board position once game starts
+		position = nil,
 		isAlive = true
 	}
 
-	-- Increment player count
+	-- Increment counter
 	self.playerCount = self.playerCount + 1
 
-	print("Player registered: " .. player.Name .. " (Total: " .. self.playerCount .. ")")
 	return self.players[player.UserId]
 end
 
 function PlayerManager:UnregisterPlayer(player)
-	-- Remove player data
 	if self.players[player.UserId] then
 		self.players[player.UserId] = nil
 		self.playerCount = self.playerCount - 1
-		print("Player unregistered: " .. player.Name .. " (Total: " .. self.playerCount .. ")")
 	end
 end
 
@@ -88,57 +85,52 @@ end
 
 function PlayerManager:SetPlayerClass(player, class)
 	local playerData = self:GetPlayerData(player)
-	if playerData then
-		playerData.class = class
+	if not playerData then return false end
 
-		-- Apply initial class stats
-		if class == "Warrior" then
-			playerData.stats.attack = playerData.stats.attack + 5
-			playerData.stats.defense = playerData.stats.defense + 3
-			playerData.stats.maxHp = playerData.stats.maxHp + 20
-			playerData.stats.hp = playerData.stats.maxHp
-		elseif class == "Mage" then
-			playerData.stats.magic = playerData.stats.magic + 8
-			playerData.stats.maxMp = playerData.stats.maxMp + 30
-			playerData.stats.mp = playerData.stats.maxMp
-		elseif class == "Thief" then
-			playerData.stats.attack = playerData.stats.attack + 3
-			playerData.stats.defense = playerData.stats.defense + 2
-			playerData.stats.money = playerData.stats.money + 50
-		end
+	playerData.class = class
 
-		print("Player " .. player.Name .. " assigned class: " .. class)
-		return true
+	-- Apply initial class stats
+	if class == "Warrior" then
+		playerData.stats.attack = playerData.stats.attack + 5
+		playerData.stats.defense = playerData.stats.defense + 3
+		playerData.stats.maxHp = playerData.stats.maxHp + 20
+		playerData.stats.hp = playerData.stats.maxHp
+	elseif class == "Mage" then
+		playerData.stats.magic = playerData.stats.magic + 8
+		playerData.stats.maxMp = playerData.stats.maxMp + 30
+		playerData.stats.mp = playerData.stats.maxMp
+	elseif class == "Thief" then
+		playerData.stats.attack = playerData.stats.attack + 3
+		playerData.stats.defense = playerData.stats.defense + 2
+		playerData.stats.money = playerData.stats.money + 50
 	end
 
-	return false
+	return true
 end
 
 function PlayerManager:UpdatePlayerStats(player, statUpdates)
 	local playerData = self:GetPlayerData(player)
-	if playerData then
-		-- Update each stat
-		for stat, value in pairs(statUpdates) do
-			if playerData.stats[stat] ~= nil then
-				playerData.stats[stat] = value
-			end
+	if not playerData then return false end
+
+	-- Update stats
+	for stat, value in pairs(statUpdates) do
+		if playerData.stats[stat] ~= nil then
+			playerData.stats[stat] = value
 		end
-
-		-- Make sure HP and MP don't exceed maximums
-		playerData.stats.hp = math.min(playerData.stats.hp, playerData.stats.maxHp)
-		playerData.stats.mp = math.min(playerData.stats.mp, playerData.stats.maxMp)
-
-		return true
 	end
 
-	return false
+	-- Ensure hp/mp don't exceed maximums
+	playerData.stats.hp = math.min(playerData.stats.hp, playerData.stats.maxHp)
+	playerData.stats.mp = math.min(playerData.stats.mp, playerData.stats.maxMp)
+
+	return true
 end
 
 function PlayerManager:GetPlayersSortedByJoinTime()
 	local sortedPlayers = {}
 
 	-- Collect players
-	for userId, playerData in pairs(self.players) do
+	for _, playerData in pairs(self.players) do
 		table.insert(sortedPlayers, playerData)
 	end
 
