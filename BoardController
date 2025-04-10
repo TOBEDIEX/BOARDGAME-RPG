@@ -1,0 +1,500 @@
+print("!!! BOARD CONTROLLER SCRIPT HAS STARTED !!!") -- DEBUG: ยืนยันว่า Script เริ่มทำงาน
+
+--[[
+	BoardController.lua (Client-Side)
+	จัดการการเคลื่อนที่ของตัวละครบนกระดานแบบ Step-by-Step,
+	แสดง UI เลือกเส้นทาง, และแสดงผลเอฟเฟคต่างๆ บน Client
+	Version: 2.1 (Refactored)
+--]]
+
+local BoardController = {}
+BoardController.__index = BoardController
+
+--==============================================================================
+-- Services (บริการต่างๆ ของ Roblox)
+--==============================================================================
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local TweenService = game:GetService("TweenService")
+local Debris = game:GetService("Debris") -- เพิ่ม Debris Service สำหรับจัดการเสียง
+
+--==============================================================================
+-- Local Player & Controls (ข้อมูลผู้เล่นและระบบควบคุม)
+--==============================================================================
+local player = Players.LocalPlayer
+local PlayerScripts = player:WaitForChild("PlayerScripts")
+local PlayerModule = require(PlayerScripts:WaitForChild("PlayerModule"))
+local Controls = PlayerModule:GetControls()
+
+--==============================================================================
+-- Constants (ค่าคงที่)
+--==============================================================================
+local DIRECTIONS = { FRONT = "FRONT", LEFT = "LEFT", RIGHT = "RIGHT" }
+local STEP_TIMEOUT = 5.0        -- เวลาสูงสุดที่รอให้ถึงแต่ละช่อง (วินาที)
+local DELAY_BETWEEN_STEPS = 0.1 -- หน่วงเวลาเล็กน้อยระหว่างก้าว (วินาที)
+local EFFECT_DURATION = 1.5     -- ระยะเวลาแสดงผลเอฟเฟค (วินาที)
+local SOUND_VOLUME = 0.6        -- ระดับเสียง
+
+--==============================================================================
+-- Module Variables (ตัวแปรระดับโมดูล)
+--==============================================================================
+local DiceRollUI = nil              -- Cache reference to DiceRollUI
+local PathSelectionContainer = nil  -- Cache reference to PathSelectionContainer
+local RemainingStepsText = nil      -- Cache reference to RemainingStepsText
+local ForwardButton = nil           -- Cache reference to ForwardButton
+local LeftButton = nil              -- Cache reference to LeftButton
+local RightButton = nil             -- Cache reference to RightButton
+
+--==============================================================================
+-- Initialization (ฟังก์ชันเริ่มต้นการทำงาน)
+--==============================================================================
+
+function BoardController.new()
+	local self = setmetatable({}, BoardController)
+
+	self.tilePositions = {}              -- Cache ตำแหน่งช่อง {tileId = Vector3}
+	self.controlsDisabled = false        -- สถานะการปิด Controls
+	self.remotes = self:GetRemoteEvents() -- Remote Events
+	self.uiConnections = {}              -- เก็บการเชื่อมต่อ Event ของปุ่ม UI
+	self.activeMovementCoroutines = {} -- เก็บ Coroutine การเคลื่อนที่ {playerId = coroutine}
+
+	self:InitializeUIReferences()       -- เรียกใช้ฟังก์ชันเพื่อหา UI elements
+	self:ConnectEvents()                -- เชื่อมต่อ Remote Events
+
+	print("[BoardController] Initialized")
+	return self
+end
+
+-- หาและเก็บ Reference ของ UI elements ที่ใช้บ่อย
+function BoardController:InitializeUIReferences()
+	local PlayerGui = player:WaitForChild("PlayerGui")
+	if not PlayerGui then warn("[BoardController] PlayerGui not found!") return end
+	local PopupUI = PlayerGui:WaitForChild("PopupUI")
+	if not PopupUI then warn("[BoardController] PopupUI not found!") return end
+	DiceRollUI = PopupUI:WaitForChild("DiceRollUI")
+	if not DiceRollUI then warn("[BoardController] DiceRollUI not found!") return end
+
+	PathSelectionContainer = DiceRollUI:FindFirstChild("PathSelectionContainer")
+	if not PathSelectionContainer then warn("[BoardController] PathSelectionContainer not found!") return end
+
+	RemainingStepsText = PathSelectionContainer:FindFirstChild("RemainingStepsText")
+	ForwardButton = PathSelectionContainer:FindFirstChild("ForwardButton")
+	LeftButton = PathSelectionContainer:FindFirstChild("LeftButton")
+	RightButton = PathSelectionContainer:FindFirstChild("RightButton")
+
+	if not RemainingStepsText or not ForwardButton or not LeftButton or not RightButton then
+		warn("[BoardController] One or more path selection UI components are missing!")
+	end
+	print("[BoardController] UI References Initialized.")
+end
+
+-- รับ Remote Events จาก ReplicatedStorage
+function BoardController:GetRemoteEvents()
+	print("[BoardController] Getting Remote Events...")
+	local remotes = ReplicatedStorage:WaitForChild("Remotes")
+	local boardRemotes = remotes:WaitForChild("BoardRemotes")
+	local events = {
+		-- ไม่จำเป็นต้องใช้ rollDice ที่นี่แล้ว ถ้า DiceRollHandler จัดการการส่ง Event เอง
+		-- rollDice = boardRemotes:WaitForChild("RollDice"),
+		playerArrivedAtTile = boardRemotes:WaitForChild("PlayerArrivedAtTile"),
+		choosePath = boardRemotes:WaitForChild("ChoosePath"),
+		startPlayerMovementPath = boardRemotes:WaitForChild("StartPlayerMovementPath"),
+		tileTriggerEvent = boardRemotes:WaitForChild("TileTriggerEvent"),
+		activityComplete = boardRemotes:WaitForChild("ActivityComplete")
+	}
+	print("[BoardController] Remote Events Acquired.")
+	return events
+end
+
+-- เชื่อมต่อฟังก์ชันกับ Remote Events ที่ได้รับจาก Server
+function BoardController:ConnectEvents()
+	print("[BoardController] Connecting Remote Events...")
+
+	-- รับข้อมูลการเคลื่อนที่ (path และ directions)
+	self.remotes.startPlayerMovementPath.OnClientEvent:Connect(function(playerId, movementData)
+		print(string.format("[DEBUG] Received startPlayerMovementPath for Player %d. Data Type: %s", playerId, type(movementData)))
+		if type(movementData) ~= "table" or not movementData.path or type(movementData.path) ~= "table" or #movementData.path == 0 then
+			warn("[DEBUG] Received invalid movement data!")
+			if type(movementData) == "table" then print("[DEBUG] Data Content:", movementData) end
+			return
+		end
+		local path = movementData.path
+		local directions = movementData.directions -- อาจจะเป็น nil
+		print(string.format("[DEBUG] Received Path: {%s}, Directions: %s", table.concat(path, ", "), directions and #directions .. " options" or "nil"))
+		self:StartMoveAlongPath(playerId, path, directions) -- เริ่มเคลื่อนที่
+	end)
+
+	-- รับ Event แสดงผลเอฟเฟคของช่อง
+	self.remotes.tileTriggerEvent.OnClientEvent:Connect(function(playerId, tileId, tileType)
+		print(string.format("[DEBUG] Received TileTriggerEvent for Player %d on Tile %s (%s)", playerId, tostring(tileId), tileType))
+		self:ShowTileEffect(playerId, tileId, tileType)
+	end)
+
+	-- รับ Event ยืนยันจาก Server ว่าถึงปลายทาง (ทาง Logic)
+	self.remotes.playerArrivedAtTile.OnClientEvent:Connect(function(playerId, tileId)
+		print(string.format("[DEBUG] Server confirmed Player %d arrived logically at Tile %s", playerId, tostring(tileId)))
+		-- อาจจะใช้ Event นี้ทำอย่างอื่นเพิ่มเติมได้ เช่น อัปเดต UI สถานะ
+	end)
+
+	print("[BoardController] Remote Events Connected.")
+end
+
+--==============================================================================
+-- Movement Logic (Logic การเคลื่อนที่หลัก)
+--==============================================================================
+
+-- เริ่มต้น Coroutine สำหรับการเคลื่อนที่ตามเส้นทาง
+function BoardController:StartMoveAlongPath(playerId, path, availableDirections)
+	print(string.format("[DEBUG] StartMoveAlongPath called for Player %d", playerId))
+	-- หยุด Coroutine เก่า (ถ้ามี) เพื่อเริ่มการเคลื่อนที่ใหม่
+	if self.activeMovementCoroutines[playerId] then
+		print("[DEBUG] Cancelling previous movement coroutine for Player " .. playerId)
+		coroutine.close(self.activeMovementCoroutines[playerId])
+		self.activeMovementCoroutines[playerId] = nil
+	end
+
+	-- สร้างและเริ่ม Coroutine ใหม่
+	local co = coroutine.create(function()
+		print(string.format("[DEBUG] Coroutine created for Player %d movement", playerId))
+		self:MovePlayerAlongPath(playerId, path, availableDirections)
+	end)
+
+	self.activeMovementCoroutines[playerId] = co
+	print(string.format("[DEBUG] Resuming coroutine for Player %d", playerId))
+	local success, err = coroutine.resume(co)
+	if not success then
+		warn(string.format("[DEBUG] Error resuming movement coroutine for Player %d: %s", playerId, tostring(err)))
+		self.activeMovementCoroutines[playerId] = nil -- ล้าง ref ถ้าเกิดข้อผิดพลาด
+	else
+		print(string.format("[DEBUG] Coroutine for Player %d resumed successfully.", playerId))
+	end
+end
+
+-- ฟังก์ชันหลักที่ทำงานใน Coroutine เพื่อเคลื่อนที่ตัวละครทีละก้าว
+function BoardController:MovePlayerAlongPath(playerId, path, availableDirections)
+	print(string.format("[DEBUG] MovePlayerAlongPath started inside coroutine for Player %d", playerId))
+	-- ตรวจสอบข้อมูลเบื้องต้น (Player, Character, Humanoid, RootPart)
+	local targetPlayer = Players:GetPlayerByUserId(playerId)
+	if not targetPlayer then warn("[DEBUG] MovePlayerAlongPath: Cannot find player ID: " .. playerId) self.activeMovementCoroutines[playerId] = nil return end
+	local character = targetPlayer.Character
+	if not character then warn("[DEBUG] MovePlayerAlongPath: Cannot find character for " .. targetPlayer.Name) self.activeMovementCoroutines[playerId] = nil return end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then warn("[DEBUG] MovePlayerAlongPath: Cannot find Humanoid for " .. targetPlayer.Name) self.activeMovementCoroutines[playerId] = nil return end
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if not rootPart then warn("[DEBUG] MovePlayerAlongPath: Cannot find HumanoidRootPart for " .. targetPlayer.Name) self.activeMovementCoroutines[playerId] = nil return end
+	print(string.format("[DEBUG] Found Character, Humanoid, RootPart for Player %d. RootPart Anchored: %s", playerId, tostring(rootPart.Anchored)))
+	if rootPart.Anchored then warn("[DEBUG] HumanoidRootPart is Anchored! Setting to false.") rootPart.Anchored = false end
+
+	print(string.format("[DEBUG] Starting step-by-step movement for Player %d along path: %s", playerId, table.concat(path, " -> ")))
+	-- ปิดการควบคุมถ้าเป็นผู้เล่นท้องถิ่น
+	if playerId == player.UserId then self:DisableControls() end
+	humanoid.WalkSpeed = 16 -- ตั้งค่าความเร็วการเดิน
+
+	-- วน Loop การเดินทีละช่อง
+	print(string.format("[DEBUG] Path length: %d. Starting loop from i=2.", #path))
+	local movementSuccess = true -- Track if all steps were successful
+	for i = 2, #path do
+		print(string.format("[DEBUG] Loop iteration i = %d", i))
+		-- ตรวจสอบว่า Coroutine ถูกยกเลิกหรือไม่
+		if not self.activeMovementCoroutines[playerId] or coroutine.status(self.activeMovementCoroutines[playerId]) == "dead" then
+			print("[DEBUG] Movement coroutine cancelled/cleared during loop for Player " .. playerId)
+			movementSuccess = false
+			break -- ออกจาก Loop
+		end
+
+		local currentTileId = path[i-1]
+		local nextTileId = path[i]
+		print(string.format("[DEBUG] Current Tile: %s, Next Tile: %s", tostring(currentTileId), tostring(nextTileId)))
+		local targetPosition = self:GetTilePosition(nextTileId) -- หาตำแหน่งช่องถัดไป
+
+		if targetPosition then
+			print(string.format("[DEBUG] Target Position for Tile %s: %s", tostring(nextTileId), tostring(targetPosition)))
+			print(string.format("[DEBUG] Calling MoveTo for Player %d to %s", playerId, tostring(targetPosition)))
+			humanoid:MoveTo(targetPosition) -- สั่งให้เดิน
+			print(string.format("[DEBUG] Waiting for MoveToFinished for Player %d (Timeout: %.1fs)...", playerId, STEP_TIMEOUT))
+			local success, result = pcall(function() return humanoid.MoveToFinished:Wait(STEP_TIMEOUT) end) -- รอให้เดินถึง (พร้อม Timeout)
+
+			if success then
+				print(string.format("[DEBUG] MoveToFinished Wait completed for Player %d. Result (Finished=true/Timeout=false): %s", playerId, tostring(result)))
+				if not result then -- ถ้า Timeout
+					warn(string.format("[DEBUG] MoveToFinished timed out for Player %d moving to Tile %s. Warping...", playerId, tostring(nextTileId)))
+					rootPart.CFrame = CFrame.new(targetPosition + Vector3.new(0, 3, 0)) -- วาร์ปไปเลย
+				end
+			else -- ถ้าเกิด Error ตอน Wait
+				warn(string.format("[DEBUG] Error during MoveToFinished:Wait() for Player %d: %s. Warping...", playerId, tostring(result)))
+				rootPart.CFrame = CFrame.new(targetPosition + Vector3.new(0, 3, 0)) -- วาร์ปไปเลย
+			end
+
+			print(string.format("[DEBUG] Waiting delay between steps (%.2f s)", DELAY_BETWEEN_STEPS))
+			task.wait(DELAY_BETWEEN_STEPS) -- หน่วงเวลาเล็กน้อย
+		else
+			warn(string.format("[DEBUG] Cannot find position for Tile %s in path for Player %d. Stopping movement.", tostring(nextTileId), playerId))
+			movementSuccess = false
+			break -- หยุด Loop ถ้าหาตำแหน่งช่องไม่เจอ
+		end
+	end -- จบ Loop การเดิน
+
+	-- ตรวจสอบสถานะ Coroutine อีกครั้งหลัง Loop จบ
+	if not self.activeMovementCoroutines[playerId] or coroutine.status(self.activeMovementCoroutines[playerId]) == "dead" then
+		print("[DEBUG] Movement coroutine cancelled/cleared after loop completion for Player " .. playerId)
+		movementSuccess = false
+	end
+
+	if movementSuccess then
+		print(string.format("[DEBUG] Finished step-by-step movement loop successfully for Player %d at Tile %s", playerId, tostring(path[#path])))
+		-- ตรวจสอบและแสดง UI เลือกทาง หรือ เปิด Controls
+		if playerId == player.UserId then
+			if availableDirections and #availableDirections > 0 then
+				print("[DEBUG] Movement finished, showing path selection UI.")
+				self:ShowPathSelectionUI(availableDirections)
+			else
+				print("[DEBUG] Movement finished, no directions to choose. Enabling controls.")
+				self:EnableControls()
+			end
+		end
+	else
+		print(string.format("[DEBUG] Movement loop finished (possibly prematurely) for Player %d.", playerId))
+		-- ถ้าการเคลื่อนที่ถูกยกเลิก หรือ ไม่สำเร็จ อาจจะไม่ต้องทำอะไรต่อ หรือแค่เปิด Controls
+		if playerId == player.UserId then
+			print("[DEBUG] Enabling controls after unsuccessful/cancelled movement.")
+			self:EnableControls()
+		end
+	end
+
+	-- ล้าง Coroutine reference ถ้ายังเป็น Coroutine ปัจจุบันที่ทำงานเสร็จ
+	if self.activeMovementCoroutines[playerId] == co then
+		print(string.format("[DEBUG] Clearing completed coroutine reference for Player %d", playerId))
+		self.activeMovementCoroutines[playerId] = nil
+	end
+end
+
+--==============================================================================
+-- UI Handling (การจัดการ User Interface)
+--==============================================================================
+
+-- แสดง UI สำหรับเลือกเส้นทาง
+function BoardController:ShowPathSelectionUI(availableDirections)
+	print("[DEBUG] ShowPathSelectionUI called with " .. #availableDirections .. " directions.")
+	-- ตรวจสอบ UI elements ที่จำเป็น
+	if not PathSelectionContainer or not RemainingStepsText or not ForwardButton or not LeftButton or not RightButton then
+		warn("[DEBUG] Cannot show path selection, UI components missing or not initialized.")
+		return
+	end
+
+	-- ล้างการเชื่อมต่อ Event ของปุ่มเก่า
+	for _, connection in pairs(self.uiConnections) do
+		if connection.Connected then connection:Disconnect() end
+	end
+	self.uiConnections = {}
+
+	-- แสดง Container และซ่อนปุ่มทั้งหมดก่อน
+	PathSelectionContainer.Visible = true
+	ForwardButton.Visible = false
+	LeftButton.Visible = false
+	RightButton.Visible = false
+
+	-- แสดงจำนวนก้าวที่เหลือ (ถ้ามีข้อมูล)
+	local steps = "N/A"
+	if #availableDirections > 0 and availableDirections[1].stepsRemaining then
+		steps = availableDirections[1].stepsRemaining
+	end
+	RemainingStepsText.Text = "Steps: " .. steps
+	print("[DEBUG] Steps Remaining for Selection UI: " .. steps)
+
+	-- แสดงปุ่มตามทิศทางที่เลือกได้ และเชื่อมต่อ Event 'Activated'
+	for _, dirInfo in ipairs(availableDirections) do
+		local button = nil
+		local directionEnum = nil
+
+		if dirInfo.direction == DIRECTIONS.FRONT then button = ForwardButton; directionEnum = DIRECTIONS.FRONT
+		elseif dirInfo.direction == DIRECTIONS.LEFT then button = LeftButton; directionEnum = DIRECTIONS.LEFT
+		elseif dirInfo.direction == DIRECTIONS.RIGHT then button = RightButton; directionEnum = DIRECTIONS.RIGHT
+		end
+
+		if button then
+			button.Visible = true
+			print("[DEBUG] Enabling button for direction: " .. dirInfo.direction)
+			local connection = button.Activated:Connect(function() -- ใช้ Activated ครอบคลุม Click และ Touch
+				print("[DEBUG] Button Activated for direction: " .. directionEnum)
+				self:ChooseDirection(directionEnum)
+			end)
+			table.insert(self.uiConnections, connection) -- เก็บ connection ไว้เผื่อต้อง disconnect
+		end
+	end
+end
+
+-- จัดการเมื่อผู้เล่นคลิกเลือกทิศทาง
+function BoardController:ChooseDirection(direction)
+	print("[DEBUG] ChooseDirection called: " .. direction)
+	-- ซ่อน UI เลือกเส้นทาง
+	if PathSelectionContainer then
+		print("[DEBUG] Hiding PathSelectionContainer after choice")
+		PathSelectionContainer.Visible = false
+	end
+
+	-- เปิด Controls ทันทีเพื่อให้ผู้เล่นรู้สึกว่าเกมตอบสนอง
+	-- Server จะส่ง path ใหม่มา และ Client จะ Disable Controls อีกครั้งเมื่อเริ่มเดินก้าวต่อไป
+	if self.controlsDisabled then
+		self:EnableControls()
+	end
+
+	-- ส่งการเลือกไปยัง Server
+	print("[DEBUG] Sending ChoosePath event to server: " .. direction)
+	self.remotes.choosePath:FireServer(direction)
+end
+
+--==============================================================================
+-- Utility Functions (ฟังก์ชันช่วยเหลือต่างๆ)
+--==============================================================================
+
+-- ปิดการควบคุมของผู้เล่น (ป้องกันการเดินเอง)
+function BoardController:DisableControls()
+	if self.controlsDisabled then print("[DEBUG] Controls already disabled.") return end
+	print("🔒 [DEBUG] Disabling Controls")
+	Controls:Disable()
+	self.controlsDisabled = true
+end
+
+-- เปิดการควบคุมของผู้เล่น
+function BoardController:EnableControls()
+	-- ตรวจสอบว่าไม่มี Coroutine การเคลื่อนที่ของ Local Player ทำงานอยู่
+	if self.activeMovementCoroutines[player.UserId] then
+		print("❕ [DEBUG] Cannot enable controls yet, movement coroutine active for local player.")
+		return
+	end
+	if not self.controlsDisabled then print("[DEBUG] Controls already enabled.") return end
+	print("🔓 [DEBUG] Enabling Controls")
+	Controls:Enable()
+	self.controlsDisabled = false
+end
+
+-- ค้นหาตำแหน่ง Vector3 ของช่องจาก Tile ID
+function BoardController:GetTilePosition(tileId)
+	print(string.format("[DEBUG] GetTilePosition called for Tile ID: %s (Type: %s)", tostring(tileId), type(tileId)))
+	-- ตรวจสอบ Cache ก่อน
+	if self.tilePositions[tileId] then
+		print(string.format("[DEBUG] Found Tile %s position in cache: %s", tostring(tileId), tostring(self.tilePositions[tileId])))
+		return self.tilePositions[tileId]
+	end
+
+	-- ค้นหาใน Workspace
+	local tilesFolder = Workspace:FindFirstChild("BoardTiles")
+	if not tilesFolder then warn("[DEBUG] BoardTiles folder not found!") return nil end
+	print("[DEBUG] Found BoardTiles folder.")
+
+	-- ลองหา Part ด้วยชื่อ "Tile<ID>" หรือ "<ID>"
+	local tileName1 = "Tile" .. tostring(tileId)
+	local tileName2 = tostring(tileId)
+	print(string.format("[DEBUG] Trying to find Part named '%s' or '%s'", tileName1, tileName2))
+	local tilePart = tilesFolder:FindFirstChild(tileName1) or tilesFolder:FindFirstChild(tileName2)
+
+	-- ตรวจสอบว่าเจอ Part และเป็น BasePart หรือไม่
+	if not tilePart or not tilePart:IsA("BasePart") then
+		warn(string.format("[DEBUG] Could not find valid BasePart named '%s' or '%s'.", tileName1, tileName2))
+		return nil
+	end
+
+	-- เก็บตำแหน่งใน Cache และคืนค่า
+	print(string.format("[DEBUG] Found Tile Part: %s. Position: %s", tilePart.Name, tostring(tilePart.Position)))
+	self.tilePositions[tileId] = tilePart.Position
+	return tilePart.Position
+end
+
+--==============================================================================
+-- Visual Effects (การแสดงผลเอฟเฟคและเสียง)
+--==============================================================================
+
+-- แสดงผลเอฟเฟคเมื่อผู้เล่นตกกระทบช่อง
+function BoardController:ShowTileEffect(playerId, tileId, tileType)
+	print(string.format("[DEBUG] ShowTileEffect called for Player %d, Tile %s, Type %s", playerId, tostring(tileId), tileType))
+	-- แสดงผลเฉพาะผู้เล่นท้องถิ่น
+	if playerId ~= player.UserId then return end
+
+	local tilePosition = self:GetTilePosition(tileId)
+	if not tilePosition then warn("[DEBUG] ShowTileEffect: Could not get position for Tile " .. tostring(tileId)) return end
+
+	-- เลือกสีตามประเภทช่อง
+	local color = Color3.fromRGB(200, 200, 200) -- สีเทา (Default)
+	if tileType == "shop" then color = Color3.fromRGB(255, 215, 0) -- สีทอง
+	elseif tileType == "battle" then color = Color3.fromRGB(255, 0, 0) -- สีแดง
+	elseif tileType == "item" then color = Color3.fromRGB(0, 255, 0) -- สีเขียว
+	elseif tileType == "money" then color = Color3.fromRGB(255, 255, 0) -- สีเหลือง
+	elseif tileType == "casino" then color = Color3.fromRGB(255, 0, 255) -- สีม่วงแดง
+	elseif tileType == "bank" then color = Color3.fromRGB(0, 0, 255) -- สีน้ำเงิน
+	elseif tileType == "castle" then color = Color3.fromRGB(128, 0, 128) -- สีม่วง
+	end
+
+	self:CreateParticleEffect(tilePosition, color, tileType:upper()) -- สร้าง Particle
+	self:PlayTileSound(tileType) -- เล่นเสียง
+end
+
+-- สร้าง Particle Effect ที่ตำแหน่งที่กำหนด
+function BoardController:CreateParticleEffect(position, color, effectType)
+	print("[DEBUG] Creating Particle Effect: " .. effectType)
+	local effectPart = Instance.new("Part")
+	effectPart.Anchored = true
+	effectPart.CanCollide = false
+	effectPart.Transparency = 0.5
+	effectPart.Size = Vector3.new(2, 2, 2)
+	effectPart.Position = position + Vector3.new(0, 3, 0) -- แสดงเหนือพื้นเล็กน้อย
+	effectPart.Color = color
+	effectPart.Material = Enum.Material.Neon
+	effectPart.Shape = Enum.PartType.Ball
+	effectPart.Parent = Workspace.CurrentCamera -- ใส่ใน Camera เพื่อให้เห็นตลอด
+
+	-- สร้าง Animation ให้หมุน, โปร่งใส, และเล็กลง
+	local tweenInfo = TweenInfo.new(EFFECT_DURATION, Enum.EasingStyle.Linear)
+	local goal = {
+		Orientation = effectPart.Orientation + Vector3.new(0, 360, 0),
+		Transparency = 1,
+		Size = Vector3.new(0.1, 0.1, 0.1)
+	}
+	local tween = TweenService:Create(effectPart, tweenInfo, goal)
+	tween:Play()
+
+	-- ลบ Part หลังจาก Animation จบ
+	tween.Completed:Connect(function()
+		effectPart:Destroy()
+	end)
+end
+
+-- เล่นเสียงตามประเภทของช่อง
+function BoardController:PlayTileSound(tileType)
+	print("[DEBUG] Playing Tile Sound for type: " .. tileType)
+	local soundId = nil
+	-- กำหนด Sound ID ตามประเภท (ควรเปลี่ยนเป็น ID ที่ต้องการ)
+	if tileType == "shop" then soundId = "rbxassetid://89427667950628" -- เสียงเหรียญ
+	elseif tileType == "battle" then soundId = "rbxassetid://89427667950628" -- เสียงดาบ
+	elseif tileType == "item" then soundId = "rbxassetid://89427667950628" -- เสียงเก็บของ
+	elseif tileType == "money" then soundId = "rbxassetid://89427667950628" -- เสียงเหรียญ
+		-- ... เพิ่มเสียงสำหรับประเภทอื่นๆ ...
+	else soundId = "rbxassetid://4067980844" -- เสียงก้าวเท้าเบาๆ (Default)
+	end
+
+	if soundId then
+		local sound = Instance.new("Sound")
+		sound.SoundId = soundId
+		sound.Volume = SOUND_VOLUME
+		-- หาตำแหน่งใส่เสียง (Head หรือ RootPart)
+		local soundParent = player.Character and (player.Character:FindFirstChild("Head") or player.Character:FindFirstChild("HumanoidRootPart"))
+		if soundParent then
+			sound.Parent = soundParent
+			sound:Play()
+			-- ใช้ Debris Service ลบเสียงอัตโนมัติเมื่อเล่นจบ + buffer เล็กน้อย
+			Debris:AddItem(sound, sound.TimeLength + 0.5)
+		else
+			warn("[DEBUG] Cannot find Head or HumanoidRootPart to play tile sound.")
+		end
+	else
+		print("[DEBUG] No sound ID defined for tile type: " .. tileType)
+	end
+end
+
+--==============================================================================
+-- Initialization Call (เรียกใช้งาน Controller)
+--==============================================================================
+local boardControllerInstance = BoardController.new()
+return boardControllerInstance -- คืนค่า Instance ของ Controller
