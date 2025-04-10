@@ -1,0 +1,582 @@
+-- LoadingScreenHandler.lua
+-- Manages game loading screen and player status display
+-- Version: 3.0.1 (Fixed RemoteEvents connections)
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ContentProvider = game:GetService("ContentProvider")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+-- Get current player
+local player = Players.LocalPlayer 
+if not player then
+	-- Wait for LocalPlayer if not available yet
+	Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+	player = Players.LocalPlayer
+end
+
+-- UI References
+local PlayerGui
+local LoadingScreen, Background, LoadingBarFrame, LoadingBarFill
+local LoadingText, PlayersReadyText
+
+-- RemoteEvents References
+local remotes = {}
+
+-- Loading state
+local loadingState = {
+	assetsProgress = 0,
+	playersReady = 0,
+	totalPlayers = 0,
+	minRequired = 2,
+	maxPlayers = 4,
+	isAssetsLoaded = false,
+	allPlayersReady = false,
+	assetLoadedSent = false, -- Track if the assetsLoaded signal has been sent
+	autoReadyTimerId = nil   -- Timer for auto-ready signal
+}
+
+-- Track connections
+local connections = {}
+
+-- Forward declarations
+local initializeUI
+local connectRemoteEvents
+local setupEventConnections
+local updateLoadingProgress
+local updatePlayersReadyStatus
+local updatePlayersReadyText
+local checkIfReadyToAdvance
+local preloadAssets
+local setupPlayerCountUpdater
+local cleanupConnections
+local startAutoReadySystem  -- Auto-ready system
+local sendReadySignal      -- Ready signal function
+
+-- Update frequency control variables
+local lastUpdateTime = 0
+local updateThreshold = 0.05 -- 50ms
+
+-- Clean up all connections
+local function cleanupConnections()
+	for _, connection in ipairs(connections) do
+		if typeof(connection) == "RBXScriptConnection" and connection.Connected then
+			connection:Disconnect()
+		end
+	end
+	connections = {}
+end
+
+-- Initialize UI with validation checks
+local function initializeUI()
+	print("LoadingScreenHandler: Initializing UI...")
+
+	-- Get PlayerGui with validation check
+	PlayerGui = player:WaitForChild("PlayerGui", 10)
+	if not PlayerGui then
+		warn("LoadingScreenHandler: PlayerGui not found within timeout")
+		return false
+	end
+
+	-- Get LoadingScreen UI with validation
+	LoadingScreen = PlayerGui:WaitForChild("LoadingScreen", 5)
+	if not LoadingScreen then
+		warn("LoadingScreenHandler: LoadingScreen not found within timeout")
+		return false
+	end
+
+	-- Get UI components with validation
+	Background = LoadingScreen:WaitForChild("Background", 3)
+	if not Background then
+		warn("LoadingScreenHandler: Background not found within timeout")
+		return false
+	end
+
+	LoadingBarFrame = Background:WaitForChild("LoadingBarFrame", 2)
+	LoadingBarFill = LoadingBarFrame and LoadingBarFrame:WaitForChild("LoadingBarFill", 1)
+	LoadingText = Background:WaitForChild("LoadingText", 2)
+	PlayersReadyText = Background:WaitForChild("PlayersReadyText", 2)
+
+	-- Verify all essential UI components are available
+	if not LoadingBarFill or not LoadingText or not PlayersReadyText then
+		warn("LoadingScreenHandler: Some UI components are not ready")
+		return false
+	end
+
+	-- Set initial values
+	LoadingBarFill.Size = UDim2.new(0, 0, 1, 0)
+	LoadingText.Text = "Loading game... 0%"
+	PlayersReadyText.Text = "Players ready: 0/0"
+
+	-- Show LoadingScreen and hide other UIs
+	LoadingScreen.Enabled = true
+
+	for _, gui in pairs(PlayerGui:GetChildren()) do
+		if gui:IsA("ScreenGui") and gui ~= LoadingScreen then
+			gui.Enabled = false
+		end
+	end
+
+	print("LoadingScreenHandler: UI initialized successfully")
+	return true
+end
+
+-- Connect to RemoteEvents with validation checks
+local function connectRemoteEvents()
+	print("LoadingScreenHandler: Connecting to RemoteEvents...")
+
+	-- Get RemoteEvents with validation
+	local remotesFolder = ReplicatedStorage:WaitForChild("Remotes", 10)
+	if not remotesFolder then
+		warn("LoadingScreenHandler: Remotes folder not found within timeout")
+		return false
+	end
+
+	local uiRemotes = remotesFolder:WaitForChild("UIRemotes", 5)
+	local gameRemotes = remotesFolder:WaitForChild("GameRemotes", 5)
+
+	if not uiRemotes or not gameRemotes then
+		warn("LoadingScreenHandler: UIRemotes or GameRemotes folder not found within timeout")
+		return false
+	end
+
+	-- Reference RemoteEvents
+	remotes.updateLoading = uiRemotes:WaitForChild("UpdateLoading", 3)
+	remotes.updatePlayersReady = uiRemotes:WaitForChild("UpdatePlayersReady", 3)
+	remotes.showClassSelection = uiRemotes:WaitForChild("ShowClassSelection", 3)
+	remotes.assetsLoaded = gameRemotes:WaitForChild("AssetsLoaded", 3)
+
+	-- Validate connections
+	if not remotes.updateLoading or not remotes.updatePlayersReady or 
+		not remotes.showClassSelection or not remotes.assetsLoaded then
+		warn("LoadingScreenHandler: Some RemoteEvents are not ready")
+		return false
+	end
+
+	print("LoadingScreenHandler: RemoteEvents connected successfully")
+	return true
+end
+
+-- Update loading progress (improved with debounce)
+local function updateLoadingProgress(progress)
+	-- Control update frequency for performance
+	local currentTime = tick()
+	if currentTime - lastUpdateTime < updateThreshold then return end
+	lastUpdateTime = currentTime
+
+	-- Record progress
+	loadingState.assetsProgress = progress
+
+	-- Update LoadingBar with tween
+	local fillTween = TweenService:Create(
+		LoadingBarFill,
+		TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{Size = UDim2.new(progress, 0, 1, 0)}
+	)
+	fillTween:Play()
+
+	-- Update text as percentage (without decimals)
+	LoadingText.Text = "Loading game... " .. math.floor(progress * 100) .. "%"
+
+	-- Check if loading is complete
+	if progress >= 1 then
+		loadingState.isAssetsLoaded = true
+		LoadingText.Text = "Loading complete 100%"
+		checkIfReadyToAdvance()
+	end
+end
+
+-- Update player ready status (improved)
+local function updatePlayersReadyStatus(playersReady, totalPlayers)
+	-- Validate received values
+	if type(playersReady) ~= "number" or type(totalPlayers) ~= "number" then
+		warn("LoadingScreenHandler: Invalid values received:", playersReady, totalPlayers)
+		return
+	end
+
+	-- Skip updates if no changes to avoid unnecessary processing
+	if loadingState.playersReady == playersReady and loadingState.totalPlayers == totalPlayers then
+		return
+	end
+
+	-- Record new state
+	loadingState.playersReady = playersReady
+	loadingState.totalPlayers = totalPlayers
+
+	-- Count actual players for accuracy
+	local actualPlayerCount = #Players:GetPlayers()
+
+	-- If received total players doesn't match reality
+	if totalPlayers ~= actualPlayerCount then
+		print("LoadingScreenHandler: Correcting player count from", totalPlayers, "to", actualPlayerCount)
+		totalPlayers = actualPlayerCount
+		loadingState.totalPlayers = actualPlayerCount
+	end
+
+	-- Update text
+	if PlayersReadyText then
+		PlayersReadyText.Text = "Players ready: " .. playersReady .. "/" .. totalPlayers
+	end
+
+	-- Check if all players are ready and there are enough players
+	loadingState.allPlayersReady = (playersReady >= totalPlayers and totalPlayers >= loadingState.minRequired)
+
+	-- Update text color based on status
+	if PlayersReadyText then
+		if loadingState.allPlayersReady then
+			PlayersReadyText.TextColor3 = Color3.fromRGB(0, 255, 0) -- Green when all ready
+		elseif totalPlayers < loadingState.minRequired then
+			PlayersReadyText.TextColor3 = Color3.fromRGB(255, 0, 0) -- Red when not enough players
+		else
+			PlayersReadyText.TextColor3 = Color3.fromRGB(255, 255, 0) -- Yellow when waiting for players
+		end
+	end
+
+	-- Check if ready to advance
+	checkIfReadyToAdvance()
+end
+
+-- Send ready signal to Server
+sendReadySignal = function(forceReady)
+	if not remotes.assetsLoaded then
+		warn("LoadingScreenHandler: AssetsLoaded RemoteEvent not found")
+		return false
+	end
+
+	-- Send signal only when assets are loaded or when forced
+	if loadingState.isAssetsLoaded or forceReady then
+		remotes.assetsLoaded:FireServer()
+		print("LoadingScreenHandler: Ready signal sent to Server")
+		return true
+	end
+
+	return false
+end
+
+-- Check if ready to advance to next screen
+checkIfReadyToAdvance = function()
+	if loadingState.isAssetsLoaded and loadingState.allPlayersReady then
+		-- Show ready message
+		LoadingText.Text = "Ready to start game!"
+		LoadingText.TextColor3 = Color3.fromRGB(0, 255, 0)
+
+		-- Notify server we're ready (with validation)
+		if not loadingState.assetLoadedSent then
+			loadingState.assetLoadedSent = true
+			sendReadySignal(true)
+
+			-- Start auto-ready system in case server doesn't respond
+			startAutoReadySystem()
+		end
+	end
+end
+
+-- Auto-ready system (sends signal every 2 seconds until screen changes)
+startAutoReadySystem = function()
+	-- Cancel previous timer if exists
+	if loadingState.autoReadyTimerId then
+		spawn(function()
+			while true do
+				-- Still loading, send ready signal every 2 seconds
+				if loadingState.isAssetsLoaded and LoadingScreen and LoadingScreen.Enabled then
+					print("LoadingScreenHandler: Auto-ready signal")
+					sendReadySignal(true)
+					wait(2)
+				else
+					-- Stop when we leave the LoadingScreen
+					break
+				end
+			end
+		end)
+	end
+end
+
+-- Transition to class selection screen
+local function transitionToClassSelection()
+	print("LoadingScreenHandler: Transitioning to class selection...")
+
+	-- Fade out LoadingScreen with tween
+	local fadeOutTween = TweenService:Create(
+		Background,
+		TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{BackgroundTransparency = 1}
+	)
+
+	fadeOutTween:Play()
+	fadeOutTween.Completed:Connect(function()
+		-- Disable LoadingScreen after tween
+		LoadingScreen.Enabled = false
+
+		-- Look for class selection screen with validation
+		local ClassSelection = PlayerGui:WaitForChild("ClassSelection", 5)
+		if ClassSelection then
+			-- Enable class selection screen with tween
+			ClassSelection.Enabled = true
+
+			-- Check class selection background
+			local classBackground = ClassSelection:FindFirstChild("Background")
+			if classBackground then
+				-- Start with transparency then fade in
+				classBackground.BackgroundTransparency = 1
+
+				local fadeInTween = TweenService:Create(
+					classBackground,
+					TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+					{BackgroundTransparency = 0}
+				)
+				fadeInTween:Play()
+			end
+
+			print("LoadingScreenHandler: Successfully transitioned to class selection")
+		else
+			warn("LoadingScreenHandler: Class selection screen not found")
+		end
+
+		-- Clean up resources and connections
+		cleanupConnections()
+	end)
+end
+
+-- Load assets with realistic progress display
+local function preloadAssets()
+	print("LoadingScreenHandler: Starting assets loading...")
+
+	-- Start loading
+	updateLoadingProgress(0)
+
+	-- Group assets by type for batch loading
+	local assetsToLoad = {
+		images = {},
+		sounds = {},
+		meshes = {},
+		others = {}
+	}
+
+	-- Find main UIs to preload
+	local uiToPreload = {
+		PlayerGui:FindFirstChild("ClassSelection"),
+		PlayerGui:FindFirstChild("MainGameUI"),
+		PlayerGui:FindFirstChild("PopupUI"),
+		PlayerGui:FindFirstChild("GameOverScreen")
+	}
+
+	-- Count total assets to load
+	local totalAssets = 0
+
+	-- Collect assets to load
+	for _, ui in ipairs(uiToPreload) do
+		if ui then
+			for _, descendant in ipairs(ui:GetDescendants()) do
+				local assetType = "others"
+
+				if descendant:IsA("ImageLabel") or descendant:IsA("ImageButton") then
+					assetType = "images"
+				elseif descendant:IsA("Sound") then
+					assetType = "sounds"
+				elseif descendant:IsA("MeshPart") or descendant:IsA("SpecialMesh") then
+					assetType = "meshes"
+				elseif descendant:IsA("Decal") or descendant:IsA("Texture") then
+					assetType = "images"
+				end
+
+				if assetType ~= "others" or descendant:IsA("Script") or descendant:IsA("LocalScript") then
+					table.insert(assetsToLoad[assetType], descendant)
+					totalAssets = totalAssets + 1
+				end
+			end
+		end
+	end
+
+	-- If no assets to load
+	if totalAssets == 0 then
+		print("LoadingScreenHandler: No assets found to load")
+		updateLoadingProgress(1)
+		wait(0.5) -- Brief delay to show completion
+		loadingState.isAssetsLoaded = true
+		checkIfReadyToAdvance()
+		return
+	end
+
+	print("LoadingScreenHandler: Found " .. totalAssets .. " assets to load")
+
+	-- Use simulated progress system for better UX
+	local startTime = tick()
+	local simulatedProgress = 0
+	local progressConnection = nil
+
+	-- Simulate progress if ContentProvider doesn't report it
+	progressConnection = RunService.Heartbeat:Connect(function()
+		local elapsed = tick() - startTime
+		local maxTime = 8 -- Maximum expected loading time (seconds)
+
+		-- Increase progress towards 90% (reserve 10% for final completion)
+		simulatedProgress = math.min(0.9, (elapsed / maxTime) * 1.5)
+		updateLoadingProgress(simulatedProgress)
+	end)
+
+	-- Add to connections list for cleanup
+	table.insert(connections, progressConnection)
+
+	-- Assets loaded counter
+	local loadedAssets = 0
+
+	-- Batch loading function
+	local function loadBatch(assets, batchName)
+		if #assets == 0 then return end
+
+		print("LoadingScreenHandler: Loading batch " .. batchName .. " with " .. #assets .. " items")
+
+		local success, err = pcall(function()
+			ContentProvider:PreloadAsync(assets)
+		end)
+
+		if not success then
+			warn("LoadingScreenHandler: Error loading batch " .. batchName .. ": " .. tostring(err))
+		end
+
+		loadedAssets = loadedAssets + #assets
+		local actualProgress = loadedAssets / totalAssets
+
+		-- Never decrease progress
+		simulatedProgress = math.max(simulatedProgress, actualProgress * 0.9)
+		updateLoadingProgress(simulatedProgress)
+
+		-- Brief pause to allow UI updates
+		wait(0.05)
+	end
+
+	-- Load each batch in priority order
+	loadBatch(assetsToLoad.images, "Images")
+	loadBatch(assetsToLoad.sounds, "Sounds")
+	loadBatch(assetsToLoad.meshes, "Models")
+	loadBatch(assetsToLoad.others, "Others")
+
+	-- Cancel progress simulation
+	if progressConnection then
+		progressConnection:Disconnect()
+		progressConnection = nil
+	end
+
+	-- Show 100% completion
+	updateLoadingProgress(1)
+
+	-- Report loading time
+	local loadTime = tick() - startTime
+	print(string.format("LoadingScreenHandler: Assets loaded in %.2f seconds", loadTime))
+
+	-- Brief pause to show 100% completion
+	wait(0.5)
+
+	-- Set assets loaded state
+	loadingState.isAssetsLoaded = true
+	checkIfReadyToAdvance()
+end
+
+-- Setup event connections
+local function setupEventConnections()
+	-- Clear previous connections
+	cleanupConnections()
+
+	-- Connect to RemoteEvents
+	if remotes.updateLoading then
+		local connection = remotes.updateLoading.OnClientEvent:Connect(updateLoadingProgress)
+		table.insert(connections, connection)
+	end
+
+	-- Ensure connection to updatePlayersReady RemoteEvent
+	if remotes.updatePlayersReady then
+		local connection = remotes.updatePlayersReady.OnClientEvent:Connect(function(playersReady, totalPlayers)
+			-- Validate received data
+			if type(playersReady) == "number" and type(totalPlayers) == "number" then
+				updatePlayersReadyStatus(playersReady, totalPlayers)
+			else
+				warn("LoadingScreenHandler: Invalid data received from updatePlayersReady:", playersReady, totalPlayers)
+			end
+		end)
+		table.insert(connections, connection)
+	else
+		warn("LoadingScreenHandler: UpdatePlayersReady RemoteEvent not found")
+	end
+
+	if remotes.showClassSelection then
+		local connection = remotes.showClassSelection.OnClientEvent:Connect(transitionToClassSelection)
+		table.insert(connections, connection)
+	end
+
+	-- Track player count changes
+	local connection = Players.PlayerAdded:Connect(function()
+		-- Update player count immediately when new player joins
+		local currentPlayers = #Players:GetPlayers()
+		updatePlayersReadyStatus(loadingState.playersReady, currentPlayers)
+	end)
+	table.insert(connections, connection)
+
+	connection = Players.PlayerRemoving:Connect(function()
+		-- Wait for player removal to complete for accurate count
+		wait()
+		local currentPlayers = #Players:GetPlayers()
+		updatePlayersReadyStatus(loadingState.playersReady, currentPlayers)
+	end)
+	table.insert(connections, connection)
+
+	-- Detect F9 key press to accelerate loading (for testing only)
+	connection = UserInputService.InputBegan:Connect(function(input)
+		if input.KeyCode == Enum.KeyCode.F9 and loadingState.assetsProgress < 1 then
+			-- Press F9 to force 100% loading (for testing)
+			print("LoadingScreenHandler: Accelerating loading to 100% (F9 pressed)")
+			updateLoadingProgress(1)
+		end
+	end)
+	table.insert(connections, connection)
+
+	print("LoadingScreenHandler: Event connections setup complete")
+end
+
+-- Main initialization function
+local function initialize()
+	print("LoadingScreenHandler: Starting system...")
+
+	-- Setup UI
+	if not initializeUI() then
+		warn("LoadingScreenHandler: Unable to initialize UI")
+		return
+	end
+
+	-- Connect to RemoteEvents
+	if not connectRemoteEvents() then
+		warn("LoadingScreenHandler: Unable to connect to RemoteEvents")
+		return
+	end
+
+	-- Setup event connections
+	setupEventConnections()
+
+	-- Start loading assets
+	preloadAssets()
+
+	-- Start auto-ready system after 5 seconds
+	spawn(function()
+		wait(5) -- Wait 5 seconds for potential quick loading
+		if not loadingState.allPlayersReady and loadingState.isAssetsLoaded then
+			print("LoadingScreenHandler: Starting auto-ready system")
+			sendReadySignal(true)
+			startAutoReadySystem()
+		end
+	end)
+
+	-- Latest version
+	print("LoadingScreenHandler v3.0.1: Initialization complete")
+end
+
+-- Setup cleanup when player leaves
+Players.PlayerRemoving:Connect(function(plr)
+	if plr == player then
+		cleanupConnections()
+		print("LoadingScreenHandler: Resources cleaned up due to player leaving")
+	end
+end)
+
+-- Start system
+initialize()
