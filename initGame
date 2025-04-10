@@ -1,6 +1,6 @@
 -- Init.server.lua
 -- สคริปต์เริ่มต้นเกม ทำหน้าที่เริ่มต้นระบบทั้งหมด
--- Version: 2.0.0 (Optimized)
+-- Version: 2.1.0 (Optimized)
 
 -- Services
 local ServerStorage = game:GetService("ServerStorage")
@@ -9,7 +9,7 @@ local Players = game:GetService("Players")
 
 -- Ensure Remotes folder structure is set up
 local function ensureRemotesExist()
-	-- Check if Remotes folder exists in ReplicatedStorage
+	-- Create main Remotes folder
 	local remotes = ReplicatedStorage:FindFirstChild("Remotes")
 	if not remotes then
 		remotes = Instance.new("Folder")
@@ -17,7 +17,7 @@ local function ensureRemotesExist()
 		remotes.Parent = ReplicatedStorage
 	end
 
-	-- Create remote folders if they don't exist
+	-- Create subfolders
 	local remoteFolders = {
 		"GameRemotes",
 		"UIRemotes",
@@ -33,7 +33,7 @@ local function ensureRemotesExist()
 		end
 	end
 
-	-- Create game remote events
+	-- Create game events
 	local gameRemotes = remotes:WaitForChild("GameRemotes")
 	local gameEvents = {
 		"StartGame",
@@ -54,7 +54,7 @@ local function ensureRemotesExist()
 		end
 	end
 
-	-- Create UI remote events
+	-- Create UI events
 	local uiRemotes = remotes:WaitForChild("UIRemotes")
 	local uiEvents = {
 		"UpdateLoading",
@@ -80,7 +80,7 @@ local function ensureRemotesExist()
 		end
 	end
 
-	-- Create board remote events
+	-- Create board events
 	local boardRemotes = remotes:WaitForChild("BoardRemotes")
 	local boardEvents = {
 		"RollDice",
@@ -101,69 +101,62 @@ local function ensureRemotesExist()
 		end
 	end
 
-	print("Remote events initialized successfully")
 	return remotes
 end
 
--- Ensure optimization modules exist
-local function ensureOptimizationModulesExist()
-	-- Create Optimization folder if it doesn't exist
-	local optimizationFolder = ReplicatedStorage:FindFirstChild("Optimization")
-	if not optimizationFolder then
-		optimizationFolder = Instance.new("Folder")
-		optimizationFolder.Name = "Optimization"
-		optimizationFolder.Parent = ReplicatedStorage
-
-		-- Note: The actual module scripts would need to be created separately
-		print("Created Optimization folder in ReplicatedStorage")
-	end
-
-	-- Check for Systems folder in ServerStorage
+-- Ensure module structure exists
+local function ensureModuleStructureExists()
+	-- Create Modules folder
 	local modulesFolder = ServerStorage:FindFirstChild("Modules")
 	if not modulesFolder then
 		modulesFolder = Instance.new("Folder")
 		modulesFolder.Name = "Modules"
 		modulesFolder.Parent = ServerStorage
-		print("Created Modules folder in ServerStorage")
 	end
 
+	-- Create Systems subfolder
 	local systemsFolder = modulesFolder:FindFirstChild("Systems")
 	if not systemsFolder then
 		systemsFolder = Instance.new("Folder")
 		systemsFolder.Name = "Systems"
 		systemsFolder.Parent = modulesFolder
-		print("Created Systems folder in ServerStorage/Modules")
 	end
 
-	print("Ensured optimization module structure exists")
+	-- Create Optimization folder in ReplicatedStorage
+	local optimizationFolder = ReplicatedStorage:FindFirstChild("Optimization")
+	if not optimizationFolder then
+		optimizationFolder = Instance.new("Folder")
+		optimizationFolder.Name = "Optimization"
+		optimizationFolder.Parent = ReplicatedStorage
+	end
 end
 
 -- Initialize modules
 local function initializeModules()
-	-- Create all remote events first
+	-- Create remote events
 	ensureRemotesExist()
 
-	-- Ensure optimization module structure
-	ensureOptimizationModulesExist()
+	-- Ensure module structure
+	ensureModuleStructureExists()
 
-	-- Load all modules - Make sure these exist as ModuleScripts
+	-- Load core modules
 	local Modules = ServerStorage:WaitForChild("Modules")
 	local GameManager = require(Modules:WaitForChild("GameManager"))
 	local PlayerManager = require(Modules:WaitForChild("PlayerManager"))
 	local ClassSystem = require(Modules:WaitForChild("ClassSystem"))
 
-	-- Create GameManager instance
+	-- Create GameManager
 	local gameManager = GameManager.new()
 
-	-- Set up PlayerManager and ClassSystem
+	-- Create supporting systems
 	local playerManager = PlayerManager.new(gameManager)
 	local classSystem = ClassSystem.new()
 
-	-- Connect modules
+	-- Connect systems
 	gameManager.playerManager = playerManager
 	gameManager.classSystem = classSystem
 
-	-- Create global reference to GameManager (using _G for server scripts)
+	-- Create global reference
 	_G.GameManager = gameManager
 
 	-- Set up RemoteEvent handlers
@@ -171,14 +164,13 @@ local function initializeModules()
 	local gameRemotes = remotes:WaitForChild("GameRemotes")
 	local uiRemotes = remotes:WaitForChild("UIRemotes")
 
-	-- Set up AssetsLoaded handler
+	-- Assets loaded handler
 	local assetsLoadedEvent = gameRemotes:WaitForChild("AssetsLoaded")
 	assetsLoadedEvent.OnServerEvent:Connect(function(player)
-		print("Player " .. player.Name .. " has loaded assets")
 		gameManager:OnPlayerReady(player)
 	end)
 
-	-- Set up PlayerSelectedClass handler
+	-- Class selection handler
 	local playerSelectedClassEvent = uiRemotes:WaitForChild("PlayerSelectedClass")
 	playerSelectedClassEvent.OnServerEvent:Connect(function(player, selectedClass)
 		gameManager:OnPlayerSelectedClass(player, selectedClass)
@@ -187,59 +179,51 @@ local function initializeModules()
 	return gameManager
 end
 
--- Initialize UI for a player
+-- Initialize player UI
 local function initializePlayerUI(player)
-	-- Set initial UI states
 	local function onCharacterAdded(character)
-		-- Get UI elements
+		-- Get PlayerGui
 		local PlayerGui = player:WaitForChild("PlayerGui")
 
-		-- Wait for all required GUIs (with timeout)
+		-- Helper function to wait for or create GUI
 		local function waitForGui(name, timeout)
 			local startTime = os.time()
 			while os.time() - startTime < timeout do
 				local gui = PlayerGui:FindFirstChild(name)
-				if gui then
-					return gui
-				end
+				if gui then return gui end
 				wait(0.1)
 			end
 
-			-- Create the GUI if it doesn't exist
-			print("Creating missing GUI: " .. name)
+			-- Create if not found
 			local newGui = Instance.new("ScreenGui")
 			newGui.Name = name
 			newGui.Parent = PlayerGui
 			return newGui
 		end
 
-		-- Get all required GUIs with 5 second timeout
+		-- Get required GUIs
 		local LoadingScreen = waitForGui("LoadingScreen", 5)
 		local ClassSelection = waitForGui("ClassSelection", 5)
 		local MainGameUI = waitForGui("MainGameUI", 5)
 		local PopupUI = waitForGui("PopupUI", 5)
 		local GameOverScreen = waitForGui("GameOverScreen", 5)
 
-		-- Set initial visibility
+		-- Set initial state
 		LoadingScreen.Enabled = true
 		ClassSelection.Enabled = false
 		MainGameUI.Enabled = false
 		GameOverScreen.Enabled = false
 
-		-- Make sure PopupUI is visible but its children are hidden
+		-- Configure PopupUI
 		PopupUI.Enabled = true
-
-		-- Hide all popup UIs
 		for _, ui in pairs(PopupUI:GetChildren()) do
 			if ui:IsA("Frame") or ui:IsA("ScreenGui") then
 				ui.Visible = false
 			end
 		end
-
-		print("UI initialized for player: " .. player.Name)
 	end
 
-	-- Check if character already exists
+	-- Initialize for existing character
 	if player.Character then
 		onCharacterAdded(player.Character)
 	end
@@ -248,7 +232,7 @@ local function initializePlayerUI(player)
 	player.CharacterAdded:Connect(onCharacterAdded)
 end
 
--- โหลดบริการโดยไม่ใช้ require
+-- Load services
 local function loadServices()
 	local ServerScriptService = game:GetService("ServerScriptService")
 	local Services = ServerScriptService:FindFirstChild("Services")
@@ -258,7 +242,7 @@ local function loadServices()
 		return
 	end
 
-	-- แสดงรายการบริการที่พบเพื่อการดีบัก
+	-- List services for debugging
 	print("Found services:")
 	for _, service in pairs(Services:GetChildren()) do
 		if service:IsA("Script") then
@@ -266,11 +250,11 @@ local function loadServices()
 		end
 	end
 
-	-- ไม่ต้องทำอะไร - ServerScripts จะทำงานโดยอัตโนมัติ
+	-- Server scripts execute automatically
 	print("All services will initialize automatically")
 end
 
--- Initialize game
+-- Main initialization
 local function initGame()
 	-- Initialize modules
 	local gameManager = initializeModules()
@@ -278,17 +262,17 @@ local function initGame()
 	-- Initialize GameManager
 	gameManager:Initialize()
 
-	-- Initialize UI for all current players
+	-- Setup UI for current players
 	for _, player in pairs(Players:GetPlayers()) do
 		initializePlayerUI(player)
 	end
 
-	-- Connect to PlayerAdded for future players
+	-- Connect for future players
 	Players.PlayerAdded:Connect(function(player)
 		initializePlayerUI(player)
 	end)
 
-	-- Initialize services through the new loading method
+	-- Load services
 	loadServices()
 
 	print("Game initialized successfully")
