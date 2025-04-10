@@ -1,0 +1,185 @@
+--[[
+  File: ReplicatedStorage/SharedModules/ClassData.lua
+  Type: ModuleScript
+  Description: Contains data definitions for all character classes,
+               including base stats, descriptions, icons, and upgrade paths.
+]]
+
+local ClassData = {}
+
+ClassData.Classes = {
+	-- ================== Warrior Path ==================
+	Warrior = {
+		DisplayName = "นักรบ",
+		Description = "เชี่ยวชาญการต่อสู้ระยะประชิด มีพลังชีวิตและพลังป้องกันเริ่มต้นที่สมดุล",
+		IconAssetId = "rbxassetid://0", -- !! แทนที่ด้วย Asset ID ของไอคอนนักรบ !!
+		BaseStats = {
+			MaxHP = 120,
+			MaxMP = 30,
+			ATK = 12,  -- พลังโจมตีกายภาพ
+			DEF = 8,   -- พลังป้องกันกายภาพ
+			MAGIC = 5, -- พลังโจมตีเวทย์ (อาจไม่ค่อยได้ใช้)
+			MDEF = 5,  -- พลังป้องกันเวทย์
+			AGI = 7,   -- ความเร็ว/การหลบหลีก (ถ้ามี)
+		},
+		NextClass = "Knight", -- คลาสถัดไป
+		UpgradeCondition = { Type = "Level", Value = 10 }, -- เงื่อนไขการอัปเกรด (ตัวอย่าง: เลเวล 10)
+	},
+	Knight = {
+		DisplayName = "อัศวิน",
+		Description = "นักรบผู้ช่ำชอง เกราะหนาและพลังโจมตีที่หนักหน่วงขึ้น สามารถปกป้องเพื่อนร่วมทีมได้",
+		IconAssetId = "rbxassetid://0", -- !! แทนที่ด้วย Asset ID ของไอคอนอัศวิน !!
+		BaseStats = {
+			MaxHP = 180,
+			MaxMP = 50,
+			ATK = 18,
+			DEF = 15,
+			MAGIC = 7,
+			MDEF = 10,
+			AGI = 5,
+		},
+		NextClass = "Paladin", -- คลาสถัดไป (ตัวอย่าง)
+		UpgradeCondition = { Type = "Quest", Value = "ProveYourValor" }, -- เงื่อนไข (ตัวอย่าง: ทำเควส)
+	},
+	Paladin = {
+		DisplayName = "พาลาดิน",
+		Description = "อัศวินศักดิ์สิทธิ์ ผู้ผสานพลังแห่งการต่อสู้เข้ากับการปกป้องและเวทมนตร์สนับสนุน",
+		IconAssetId = "rbxassetid://0", -- !! แทนที่ด้วย Asset ID ของไอคอนพาลาดิน !!
+		BaseStats = {
+			MaxHP = 250,
+			MaxMP = 100,
+			ATK = 22,
+			DEF = 20,
+			MAGIC = 15, -- มีพลังเวทย์เพิ่มขึ้น
+			MDEF = 18,
+			AGI = 6,
+		},
+		NextClass = nil, -- คลาสสูงสุดในสายนี้
+		UpgradeCondition = nil,
+	},
+
+	-- ================== Mage Path ==================
+	Mage = {
+		DisplayName = "นักเวทย์",
+		Description = "ผู้ใช้พลังเวทมนตร์ โจมตีจากระยะไกลด้วยคาถาหลากหลายรูปแบบ",
+		IconAssetId = "rbxassetid://0", -- !! แทนที่ด้วย Asset ID ของไอคอนนักเวทย์ !!
+		BaseStats = {
+			MaxHP = 80,
+			MaxMP = 80,
+			ATK = 5,
+			DEF = 5,
+			MAGIC = 15,
+			MDEF = 10,
+			AGI = 8,
+		},
+		NextClass = "Wizard",
+		UpgradeCondition = { Type = "Level", Value = 10 },
+	},
+	Wizard = {
+		DisplayName = "พ่อมด/แม่มด",
+		Description = "เชี่ยวชาญเวทมนตร์ธาตุต่างๆ มีพลังทำลายล้างสูงขึ้นและคาถาที่ซับซ้อนกว่าเดิม",
+		IconAssetId = "rbxassetid://0", -- !! แทนที่ด้วย Asset ID ของไอคอนพ่อมด/แม่มด !!
+		BaseStats = {
+			MaxHP = 110,
+			MaxMP = 150,
+			ATK = 7,
+			DEF = 8,
+			MAGIC = 25,
+			MDEF = 18,
+			AGI = 7,
+		},
+		NextClass = "Archmage",
+		UpgradeCondition = { Type = "Item", Value = "AncientGrimoire" }, -- เงื่อนไข (ตัวอย่าง: ใช้ไอเทม)
+	},
+	Archmage = {
+		DisplayName = "จอมเวทย์",
+		Description = "ผู้บรรลุศาสตร์แห่งเวทมนตร์ขั้นสูงสุด ควบคุมพลังอันมหาศาลและคาถาที่เปลี่ยนแปลงสนามรบได้",
+		IconAssetId = "rbxassetid://0", -- !! แทนที่ด้วย Asset ID ของไอคอนจอมเวทย์ !!
+		BaseStats = {
+			MaxHP = 150,
+			MaxMP = 250,
+			ATK = 10,
+			DEF = 12,
+			MAGIC = 35,
+			MDEF = 25,
+			AGI = 9,
+		},
+		NextClass = nil,
+		UpgradeCondition = nil,
+	},
+
+	-- ================== Thief Path ==================
+	Thief = {
+		DisplayName = "โจร",
+		Description = "ว่องไวและมีเล่ห์เหลี่ยม สามารถสร้างความเสียหายอย่างรวดเร็วและหลบหลีกศัตรู",
+		IconAssetId = "rbxassetid://0", -- !! แทนที่ด้วย Asset ID ของไอคอนโจร !!
+		BaseStats = {
+			MaxHP = 90,
+			MaxMP = 50,
+			ATK = 10,
+			DEF = 6,
+			MAGIC = 6,
+			MDEF = 6,
+			AGI = 12, -- โดดเด่นด้านความเร็ว
+		},
+		NextClass = "Assassin",
+		UpgradeCondition = { Type = "Level", Value = 10 },
+	},
+	Assassin = {
+		DisplayName = "นักฆ่า",
+		Description = "เชี่ยวชาญการลอบสังหาร สร้างความเสียหายคริติคอลอย่างรุนแรงและเคลื่อนไหวในเงามืด",
+		IconAssetId = "rbxassetid://0", -- !! แทนที่ด้วย Asset ID ของไอคอนนักฆ่า !!
+		BaseStats = {
+			MaxHP = 130,
+			MaxMP = 80,
+			ATK = 16, -- อาจเน้น ATK หรือมีกลไกคริติคอลพิเศษ
+			DEF = 9,
+			MAGIC = 8,
+			MDEF = 9,
+			AGI = 18,
+		},
+		NextClass = "Shadow",
+		UpgradeCondition = { Type = "Skill", Value = "MasterStealth" }, -- เงื่อนไข (ตัวอย่าง: เรียนรู้สกิล)
+	},
+	Shadow = {
+		DisplayName = "ชาโดว์",
+		Description = "ปรมาจารย์แห่งเงา ผู้ใช้ทักษะลอบเร้นและการโจมตีที่ศัตรูไม่อาจคาดเดาได้",
+		IconAssetId = "rbxassetid://0", -- !! แทนที่ด้วย Asset ID ของไอคอนชาโดว์ !!
+		BaseStats = {
+			MaxHP = 180,
+			MaxMP = 120,
+			ATK = 20,
+			DEF = 14,
+			MAGIC = 12,
+			MDEF = 14,
+			AGI = 25,
+		},
+		NextClass = nil,
+		UpgradeCondition = nil,
+	},
+
+	-- สามารถเพิ่มคลาส หรือสายอาชีพอื่นๆ ได้ตามต้องการ
+}
+
+-- ฟังก์ชันช่วยเหลือ (เผื่อต้องการใช้)
+function ClassData:GetClassInfo(className)
+	return self.Classes[className]
+end
+
+function ClassData:GetBaseStats(className)
+	local info = self:GetClassInfo(className)
+	return info and info.BaseStats
+end
+
+function ClassData:GetNextClass(className)
+	local info = self:GetClassInfo(className)
+	return info and info.NextClass
+end
+
+function ClassData:GetUpgradeCondition(className)
+	local info = self:GetClassInfo(className)
+	return info and info.UpgradeCondition
+end
+
+
+return ClassData
