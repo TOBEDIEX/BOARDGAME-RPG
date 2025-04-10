@@ -1,0 +1,298 @@
+-- Init.server.lua
+-- สคริปต์เริ่มต้นเกม ทำหน้าที่เริ่มต้นระบบทั้งหมด
+-- Version: 2.0.0 (Optimized)
+
+-- Services
+local ServerStorage = game:GetService("ServerStorage")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+
+-- Ensure Remotes folder structure is set up
+local function ensureRemotesExist()
+	-- Check if Remotes folder exists in ReplicatedStorage
+	local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+	if not remotes then
+		remotes = Instance.new("Folder")
+		remotes.Name = "Remotes"
+		remotes.Parent = ReplicatedStorage
+	end
+
+	-- Create remote folders if they don't exist
+	local remoteFolders = {
+		"GameRemotes",
+		"UIRemotes",
+		"BoardRemotes",
+		"CombatRemotes"
+	}
+
+	for _, folderName in ipairs(remoteFolders) do
+		if not remotes:FindFirstChild(folderName) then
+			local folder = Instance.new("Folder")
+			folder.Name = folderName
+			folder.Parent = remotes
+		end
+	end
+
+	-- Create game remote events
+	local gameRemotes = remotes:WaitForChild("GameRemotes")
+	local gameEvents = {
+		"StartGame",
+		"EndGame",
+		"AssetsLoaded",
+		"UpdateTurn",
+		"UpdateTurnTimer",
+		"TurnAction",
+		"TurnState",
+		"GameStats"
+	}
+
+	for _, eventName in ipairs(gameEvents) do
+		if not gameRemotes:FindFirstChild(eventName) then
+			local event = Instance.new("RemoteEvent")
+			event.Name = eventName
+			event.Parent = gameRemotes
+		end
+	end
+
+	-- Create UI remote events
+	local uiRemotes = remotes:WaitForChild("UIRemotes")
+	local uiEvents = {
+		"UpdateLoading",
+		"UpdatePlayersReady",
+		"ShowClassSelection",
+		"PlayerSelectedClass",
+		"UpdateClassSelection",
+		"UpdateClassSelectionTimer",
+		"ClassAssigned",
+		"NotifyRandomClass",
+		"ShowMainGameUI",
+		"UpdatePlayerStats",
+		"LevelUp",
+		"ClassLevelUp",
+		"UpdateTurnDetails"
+	}
+
+	for _, eventName in ipairs(uiEvents) do
+		if not uiRemotes:FindFirstChild(eventName) then
+			local event = Instance.new("RemoteEvent")
+			event.Name = eventName
+			event.Parent = uiRemotes
+		end
+	end
+
+	-- Create board remote events
+	local boardRemotes = remotes:WaitForChild("BoardRemotes")
+	local boardEvents = {
+		"RollDice",
+		"MovePlayer",
+		"PlayerArrivedAtTile",
+		"ShowPathSelection",
+		"ChoosePath",
+		"UpdatePlayerPosition",
+		"TileTriggerEvent",
+		"ActivityComplete"
+	}
+
+	for _, eventName in ipairs(boardEvents) do
+		if not boardRemotes:FindFirstChild(eventName) then
+			local event = Instance.new("RemoteEvent")
+			event.Name = eventName
+			event.Parent = boardRemotes
+		end
+	end
+
+	print("Remote events initialized successfully")
+	return remotes
+end
+
+-- Ensure optimization modules exist
+local function ensureOptimizationModulesExist()
+	-- Create Optimization folder if it doesn't exist
+	local optimizationFolder = ReplicatedStorage:FindFirstChild("Optimization")
+	if not optimizationFolder then
+		optimizationFolder = Instance.new("Folder")
+		optimizationFolder.Name = "Optimization"
+		optimizationFolder.Parent = ReplicatedStorage
+
+		-- Note: The actual module scripts would need to be created separately
+		print("Created Optimization folder in ReplicatedStorage")
+	end
+
+	-- Check for Systems folder in ServerStorage
+	local modulesFolder = ServerStorage:FindFirstChild("Modules")
+	if not modulesFolder then
+		modulesFolder = Instance.new("Folder")
+		modulesFolder.Name = "Modules"
+		modulesFolder.Parent = ServerStorage
+		print("Created Modules folder in ServerStorage")
+	end
+
+	local systemsFolder = modulesFolder:FindFirstChild("Systems")
+	if not systemsFolder then
+		systemsFolder = Instance.new("Folder")
+		systemsFolder.Name = "Systems"
+		systemsFolder.Parent = modulesFolder
+		print("Created Systems folder in ServerStorage/Modules")
+	end
+
+	print("Ensured optimization module structure exists")
+end
+
+-- Initialize modules
+local function initializeModules()
+	-- Create all remote events first
+	ensureRemotesExist()
+
+	-- Ensure optimization module structure
+	ensureOptimizationModulesExist()
+
+	-- Load all modules - Make sure these exist as ModuleScripts
+	local Modules = ServerStorage:WaitForChild("Modules")
+	local GameManager = require(Modules:WaitForChild("GameManager"))
+	local PlayerManager = require(Modules:WaitForChild("PlayerManager"))
+	local ClassSystem = require(Modules:WaitForChild("ClassSystem"))
+
+	-- Create GameManager instance
+	local gameManager = GameManager.new()
+
+	-- Set up PlayerManager and ClassSystem
+	local playerManager = PlayerManager.new(gameManager)
+	local classSystem = ClassSystem.new()
+
+	-- Connect modules
+	gameManager.playerManager = playerManager
+	gameManager.classSystem = classSystem
+
+	-- Create global reference to GameManager (using _G for server scripts)
+	_G.GameManager = gameManager
+
+	-- Set up RemoteEvent handlers
+	local remotes = ReplicatedStorage:WaitForChild("Remotes")
+	local gameRemotes = remotes:WaitForChild("GameRemotes")
+	local uiRemotes = remotes:WaitForChild("UIRemotes")
+
+	-- Set up AssetsLoaded handler
+	local assetsLoadedEvent = gameRemotes:WaitForChild("AssetsLoaded")
+	assetsLoadedEvent.OnServerEvent:Connect(function(player)
+		print("Player " .. player.Name .. " has loaded assets")
+		gameManager:OnPlayerReady(player)
+	end)
+
+	-- Set up PlayerSelectedClass handler
+	local playerSelectedClassEvent = uiRemotes:WaitForChild("PlayerSelectedClass")
+	playerSelectedClassEvent.OnServerEvent:Connect(function(player, selectedClass)
+		gameManager:OnPlayerSelectedClass(player, selectedClass)
+	end)
+
+	return gameManager
+end
+
+-- Initialize UI for a player
+local function initializePlayerUI(player)
+	-- Set initial UI states
+	local function onCharacterAdded(character)
+		-- Get UI elements
+		local PlayerGui = player:WaitForChild("PlayerGui")
+
+		-- Wait for all required GUIs (with timeout)
+		local function waitForGui(name, timeout)
+			local startTime = os.time()
+			while os.time() - startTime < timeout do
+				local gui = PlayerGui:FindFirstChild(name)
+				if gui then
+					return gui
+				end
+				wait(0.1)
+			end
+
+			-- Create the GUI if it doesn't exist
+			print("Creating missing GUI: " .. name)
+			local newGui = Instance.new("ScreenGui")
+			newGui.Name = name
+			newGui.Parent = PlayerGui
+			return newGui
+		end
+
+		-- Get all required GUIs with 5 second timeout
+		local LoadingScreen = waitForGui("LoadingScreen", 5)
+		local ClassSelection = waitForGui("ClassSelection", 5)
+		local MainGameUI = waitForGui("MainGameUI", 5)
+		local PopupUI = waitForGui("PopupUI", 5)
+		local GameOverScreen = waitForGui("GameOverScreen", 5)
+
+		-- Set initial visibility
+		LoadingScreen.Enabled = true
+		ClassSelection.Enabled = false
+		MainGameUI.Enabled = false
+		GameOverScreen.Enabled = false
+
+		-- Make sure PopupUI is visible but its children are hidden
+		PopupUI.Enabled = true
+
+		-- Hide all popup UIs
+		for _, ui in pairs(PopupUI:GetChildren()) do
+			if ui:IsA("Frame") or ui:IsA("ScreenGui") then
+				ui.Visible = false
+			end
+		end
+
+		print("UI initialized for player: " .. player.Name)
+	end
+
+	-- Check if character already exists
+	if player.Character then
+		onCharacterAdded(player.Character)
+	end
+
+	-- Connect for future spawns
+	player.CharacterAdded:Connect(onCharacterAdded)
+end
+
+-- โหลดบริการโดยไม่ใช้ require
+local function loadServices()
+	local ServerScriptService = game:GetService("ServerScriptService")
+	local Services = ServerScriptService:FindFirstChild("Services")
+
+	if not Services then
+		warn("Services folder not found")
+		return
+	end
+
+	-- แสดงรายการบริการที่พบเพื่อการดีบัก
+	print("Found services:")
+	for _, service in pairs(Services:GetChildren()) do
+		if service:IsA("Script") then
+			print(" - " .. service.Name)
+		end
+	end
+
+	-- ไม่ต้องทำอะไร - ServerScripts จะทำงานโดยอัตโนมัติ
+	print("All services will initialize automatically")
+end
+
+-- Initialize game
+local function initGame()
+	-- Initialize modules
+	local gameManager = initializeModules()
+
+	-- Initialize GameManager
+	gameManager:Initialize()
+
+	-- Initialize UI for all current players
+	for _, player in pairs(Players:GetPlayers()) do
+		initializePlayerUI(player)
+	end
+
+	-- Connect to PlayerAdded for future players
+	Players.PlayerAdded:Connect(function(player)
+		initializePlayerUI(player)
+	end)
+
+	-- Initialize services through the new loading method
+	loadServices()
+
+	print("Game initialized successfully")
+end
+
+-- Start initialization
+initGame()
