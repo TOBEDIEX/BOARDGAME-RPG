@@ -1,0 +1,62 @@
+-- ClassService.server.lua
+-- จัดการระบบคลาสและการเลือกคลาส server-side
+-- Version: 1.0.0
+
+local ServerStorage = game:GetService("ServerStorage")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+
+-- Get modules and remote events
+local Modules = ServerStorage:WaitForChild("Modules")
+local ClassSystem = require(Modules:WaitForChild("ClassSystem"))
+
+-- Get remotes
+local remotes = ReplicatedStorage:WaitForChild("Remotes")
+local uiRemotes = remotes:WaitForChild("UIRemotes")
+
+-- Get GameManager from global
+local function getGameManager()
+	while not _G.GameManager do
+		wait(0.1)
+	end
+	return _G.GameManager
+end
+
+-- Main function
+local function initializeClassService()
+	print("ClassService initializing...")
+
+	-- Wait for GameManager to be available
+	local gameManager = getGameManager()
+
+	-- Create a class system if not already created
+	if not gameManager.classSystem then
+		gameManager.classSystem = ClassSystem.new()
+	end
+
+	-- Set up RemoteEvent connections if not already set up in GameManager
+
+	-- ClassAssigned event - when a class is assigned to a player
+	local classAssignedEvent = uiRemotes:WaitForChild("ClassAssigned")
+
+	-- Function to handle class assignment
+	local function handleClassAssignment(player, className, classData)
+		-- Update player's appearance based on class if needed
+		local character = player.Character
+		if character then
+			-- Could update character appearance, equipment, etc.
+			-- For example, give starting equipment based on class
+		end
+
+		-- Update UI
+		classAssignedEvent:FireClient(player, className, classData)
+	end
+
+	-- Connect to class system events
+	gameManager.classSystem.onClassAssigned = handleClassAssignment
+
+	print("ClassService initialized")
+end
+
+-- Initialize the service
+initializeClassService()
