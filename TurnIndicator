@@ -1,0 +1,125 @@
+-- TurnIndicator.lua
+-- โมดูลสำหรับสร้าง UI แสดงเทิร์นปัจจุบัน
+-- Version: 1.0.0
+-- วางไฟล์นี้ที่ StarterPlayer/StarterPlayerScripts/UI
+
+-- ฟังก์ชันสร้าง Turn Indicator UI
+local function createTurnIndicator(parent)
+	-- ต้องการตำแหน่ง parent (ปกติคือ MainGameUI)
+	if not parent then return nil end
+
+	-- สร้างเฟรมหลัก
+	local turnIndicator = Instance.new("Frame")
+	turnIndicator.Name = "CurrentTurnIndicator"
+	turnIndicator.Size = UDim2.new(0.25, 0, 0.08, 0)
+	turnIndicator.Position = UDim2.new(0.375, 0, 0.05, 0)
+	turnIndicator.BackgroundColor3 = Color3.fromRGB(50, 80, 120)
+	turnIndicator.BackgroundTransparency = 0.2
+	turnIndicator.BorderSizePixel = 0
+	turnIndicator.ZIndex = 5
+	turnIndicator.Parent = parent
+
+	-- UICorner
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = turnIndicator
+
+	-- UIStroke
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(100, 150, 200)
+	stroke.Thickness = 2
+	stroke.Parent = turnIndicator
+
+	-- Turn Text
+	local turnText = Instance.new("TextLabel")
+	turnText.Name = "TurnText"
+	turnText.Size = UDim2.new(1, 0, 0.5, 0)
+	turnText.Position = UDim2.new(0, 0, 0, 0)
+	turnText.BackgroundTransparency = 1
+	turnText.Text = "Waiting for turn..."
+	turnText.TextColor3 = Color3.fromRGB(255, 255, 255)
+	turnText.TextSize = 18
+	turnText.Font = Enum.Font.GothamBold
+	turnText.ZIndex = 6
+	turnText.Parent = turnIndicator
+
+	-- Player Class Label
+	local playerClassLabel = Instance.new("TextLabel")
+	playerClassLabel.Name = "PlayerClassLabel"
+	playerClassLabel.Size = UDim2.new(0.5, 0, 0.3, 0)
+	playerClassLabel.Position = UDim2.new(0.05, 0, 0.5, 0)
+	playerClassLabel.BackgroundTransparency = 1
+	playerClassLabel.Text = "Class: Unknown"
+	playerClassLabel.TextColor3 = Color3.fromRGB(220, 220, 255)
+	playerClassLabel.TextSize = 14
+	playerClassLabel.Font = Enum.Font.Gotham
+	playerClassLabel.TextXAlignment = Enum.TextXAlignment.Left
+	playerClassLabel.ZIndex = 6
+	playerClassLabel.Parent = turnIndicator
+
+	-- Player Level Label
+	local playerLevelLabel = Instance.new("TextLabel")
+	playerLevelLabel.Name = "PlayerLevelLabel"
+	playerLevelLabel.Size = UDim2.new(0.4, 0, 0.3, 0)
+	playerLevelLabel.Position = UDim2.new(0.55, 0, 0.5, 0)
+	playerLevelLabel.BackgroundTransparency = 1
+	playerLevelLabel.Text = "Lv.1"
+	playerLevelLabel.TextColor3 = Color3.fromRGB(220, 220, 255)
+	playerLevelLabel.TextSize = 14
+	playerLevelLabel.Font = Enum.Font.Gotham
+	playerLevelLabel.TextXAlignment = Enum.TextXAlignment.Left
+	playerLevelLabel.ZIndex = 6
+	playerLevelLabel.Parent = turnIndicator
+
+	-- Timer Frame
+	local timerFrame = Instance.new("Frame")
+	timerFrame.Name = "TurnTimerFrame"
+	timerFrame.Size = UDim2.new(0.9, 0, 0.15, 0)
+	timerFrame.Position = UDim2.new(0.05, 0, 0.8, 0)
+	timerFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+	timerFrame.BackgroundTransparency = 0.2
+	timerFrame.BorderSizePixel = 0
+	timerFrame.ZIndex = 6
+	timerFrame.Parent = turnIndicator
+
+	-- Timer Corner
+	local timerCorner = Instance.new("UICorner")
+	timerCorner.CornerRadius = UDim.new(0, 4)
+	timerCorner.Parent = timerFrame
+
+	-- Timer Fill
+	local timerFill = Instance.new("Frame")
+	timerFill.Name = "TimerFill"
+	timerFill.Size = UDim2.new(1, 0, 1, 0)
+	timerFill.Position = UDim2.new(0, 0, 0, 0)
+	timerFill.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+	timerFill.BorderSizePixel = 0
+	timerFill.ZIndex = 7
+	timerFill.Parent = timerFrame
+
+	-- Timer Fill Corner
+	local fillCorner = Instance.new("UICorner")
+	fillCorner.CornerRadius = UDim.new(0, 4)
+	fillCorner.Parent = timerFill
+
+	-- Timer Text
+	local timerText = Instance.new("TextLabel")
+	timerText.Name = "TimerText"
+	timerText.Size = UDim2.new(1, 0, 1, 0)
+	timerText.Position = UDim2.new(0, 0, 0, 0)
+	timerText.BackgroundTransparency = 1
+	timerText.Text = "120s"
+	timerText.TextColor3 = Color3.fromRGB(255, 255, 255)
+	timerText.TextSize = 12
+	timerText.Font = Enum.Font.GothamBold
+	timerText.ZIndex = 8
+	timerText.Parent = timerFrame
+
+	return turnIndicator
+end
+
+-- เรียกใช้ฟังก์ชันนี้ใน MainGameUIHandler ดังนี้:
+-- local TurnIndicator = require(script.Parent.UI.TurnIndicator)
+-- local indicator = TurnIndicator(MainGameUI)
+
+return createTurnIndicator
