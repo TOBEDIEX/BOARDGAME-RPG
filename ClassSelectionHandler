@@ -1,79 +1,73 @@
 -- ClassSelectionHandler.lua
 -- Manages character class selection screen
--- Version: 3.0.1 (Fixed transition issues)
+-- Version: 3.1.0 (Optimized)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
 
 -- Get current player
 local player = Players.LocalPlayer
 if not player then
-	-- Wait if LocalPlayer is not available yet
 	Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
 	player = Players.LocalPlayer
 end
 
--- Main UI references
-local PlayerGui
-local ClassSelection, Background, TitleText, ClassesContainer
+-- UI references
+local PlayerGui, ClassSelection, Background, TitleText, ClassesContainer
 local ConfirmButton, TimerFrame, TimerText, PlayersSelectionStatus
-
--- Class references
 local WarriorClass, MageClass, ThiefClass
 
 -- RemoteEvents references
-local remotes = {
-	playerSelectedClass = nil,
-	updateClassSelection = nil,
-	updateClassSelectionTimer = nil,
-	classAssigned = nil,
-	notifyRandomClass = nil,
-	showMainGameUI = nil
-}
+local remotes = {}
 
 -- Selection state
 local selectionState = {
-	selectedClass = nil,  -- Currently selected class
-	isConfirmed = false,  -- Whether selection is confirmed
-	playerSelections = {}, -- Player selections {[userId] = className}
-	playerFrames = {},    -- References to player status frames
-	timerValue = 30,      -- Remaining selection time
-	isTimerActive = false -- Timer active status
+	selectedClass = nil,
+	isConfirmed = false,
+	playerSelections = {},
+	playerFrames = {},
+	timerValue = 30,
+	isTimerActive = false
 }
 
 -- Track connections
 local connections = {}
 
--- Standard colors for UI (stored for reuse to reduce Color3 creation)
+-- Standard UI colors
 local COLORS = {
-	DEFAULT_FRAME = Color3.fromRGB(50, 50, 70),  -- Default class frame color
-	SELECTED_FRAME = Color3.fromRGB(60, 90, 140), -- Selected class frame color
-	HOVER_FRAME = Color3.fromRGB(60, 70, 100),   -- Hover class frame color
-	DEFAULT_STROKE = Color3.fromRGB(100, 100, 150), -- Default stroke color
-	SELECTED_STROKE = Color3.fromRGB(100, 200, 255), -- Selected stroke color
-	CONFIRM_ENABLED = Color3.fromRGB(40, 140, 60), -- Enabled confirm button color
-	CONFIRM_DISABLED = Color3.fromRGB(60, 60, 80), -- Disabled confirm button color
-	TIMER_NORMAL = Color3.fromRGB(255, 255, 255), -- Normal timer color
-	TIMER_WARNING = Color3.fromRGB(255, 150, 50), -- Warning timer color (running low)
-	TIMER_CRITICAL = Color3.fromRGB(255, 50, 50)  -- Critical timer color (very low)
+	DEFAULT_FRAME = Color3.fromRGB(50, 50, 70),
+	SELECTED_FRAME = Color3.fromRGB(60, 90, 140),
+	HOVER_FRAME = Color3.fromRGB(60, 70, 100),
+	DEFAULT_STROKE = Color3.fromRGB(100, 100, 150),
+	SELECTED_STROKE = Color3.fromRGB(100, 200, 255),
+	CONFIRM_ENABLED = Color3.fromRGB(40, 140, 60),
+	CONFIRM_DISABLED = Color3.fromRGB(60, 60, 80),
+	TIMER_NORMAL = Color3.fromRGB(255, 255, 255),
+	TIMER_WARNING = Color3.fromRGB(255, 150, 50),
+	TIMER_CRITICAL = Color3.fromRGB(255, 50, 50)
 }
 
--- Tween control variables
+-- Tween settings
 local tweenInfo = {
-	fast = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-	normal = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-	slow = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-	bounce = TweenInfo.new(0.4, Enum.EasingStyle.Bounce, Enum.EasingDirection.Out)
+	fast = TweenInfo.new(0.2, Enum.EasingStyle.Quad),
+	normal = TweenInfo.new(0.3, Enum.EasingStyle.Quad),
+	slow = TweenInfo.new(0.5, Enum.EasingStyle.Quad),
+	bounce = TweenInfo.new(0.4, Enum.EasingStyle.Bounce)
 }
 
--- UI update frequency control variables
-local lastUpdateTime = 0
-local updateThreshold = 0.05 -- 50ms
+-- Helper function for creating tweens
+local function createTween(object, properties, duration, style)
+	local info = TweenInfo.new(
+		duration or 0.3, 
+		style or Enum.EasingStyle.Quad, 
+		Enum.EasingDirection.Out
+	)
+	return TweenService:Create(object, info, properties)
+end
 
--- Clean up all connections to prevent memory leaks
+-- Clean up connections
 local function cleanupConnections()
 	for _, connection in ipairs(connections) do
 		if typeof(connection) == "RBXScriptConnection" and connection.Connected then
@@ -83,51 +77,44 @@ local function cleanupConnections()
 	connections = {}
 end
 
--- Apply special effects to UI elements
+-- Apply effects to UI elements
 local function applyUIEffects()
-	-- Make class frames slightly transparent
+	-- Add hover effects to class frames
 	for _, classFrame in pairs({WarriorClass, MageClass, ThiefClass}) do
-		if classFrame then
-			classFrame.BackgroundTransparency = 0.1
+		if not classFrame then continue end
 
-			-- Add UIStroke if none exists
-			if not classFrame:FindFirstChild("UIStroke") then
-				local stroke = Instance.new("UIStroke")
-				stroke.Color = COLORS.DEFAULT_STROKE
-				stroke.Thickness = 2
-				stroke.Parent = classFrame
-			end
+		classFrame.BackgroundTransparency = 0.1
 
-			-- Add hover effects
-			classFrame.MouseEnter:Connect(function()
-				if selectionState.selectedClass == nil or 
-					(classFrame.Name:sub(1, -6) ~= selectionState.selectedClass) then
-					local highlightTween = TweenService:Create(
-						classFrame, 
-						tweenInfo.fast,
-						{BackgroundColor3 = COLORS.HOVER_FRAME}
-					)
-					highlightTween:Play()
-				end
-			end)
-
-			classFrame.MouseLeave:Connect(function()
-				if selectionState.selectedClass == nil or 
-					(classFrame.Name:sub(1, -6) ~= selectionState.selectedClass) then
-					local defaultTween = TweenService:Create(
-						classFrame, 
-						tweenInfo.fast,
-						{BackgroundColor3 = COLORS.DEFAULT_FRAME}
-					)
-					defaultTween:Play()
-				end
-			end)
+		-- Add UIStroke if missing
+		if not classFrame:FindFirstChild("UIStroke") then
+			local stroke = Instance.new("UIStroke")
+			stroke.Color = COLORS.DEFAULT_STROKE
+			stroke.Thickness = 2
+			stroke.Parent = classFrame
 		end
+
+		-- Add hover effects
+		local mouseEnter = classFrame.MouseEnter:Connect(function()
+			if not selectionState.selectedClass or 
+				classFrame.Name:sub(1, -6) ~= selectionState.selectedClass then
+				createTween(classFrame, {BackgroundColor3 = COLORS.HOVER_FRAME}, 0.2):Play()
+			end
+		end)
+
+		local mouseLeave = classFrame.MouseLeave:Connect(function()
+			if not selectionState.selectedClass or 
+				classFrame.Name:sub(1, -6) ~= selectionState.selectedClass then
+				createTween(classFrame, {BackgroundColor3 = COLORS.DEFAULT_FRAME}, 0.2):Play()
+			end
+		end)
+
+		table.insert(connections, mouseEnter)
+		table.insert(connections, mouseLeave)
 	end
 
 	-- Add confirm button effects
 	if ConfirmButton then
-		-- Add UIStroke if none exists
+		-- Add UIStroke if missing
 		if not ConfirmButton:FindFirstChild("UIStroke") then
 			local stroke = Instance.new("UIStroke")
 			stroke.Color = COLORS.DEFAULT_STROKE
@@ -135,177 +122,108 @@ local function applyUIEffects()
 			stroke.Parent = ConfirmButton
 		end
 
-		-- Get button text
-		local confirmText = ConfirmButton:FindFirstChild("ConfirmText")
-		if confirmText then
-			confirmText.Text = "Confirm Selection"
-		end
-
 		-- Add hover effects
-		ConfirmButton.MouseEnter:Connect(function()
+		local mouseEnter = ConfirmButton.MouseEnter:Connect(function()
 			if selectionState.selectedClass and not selectionState.isConfirmed then
-				local scaleTween = TweenService:Create(
+				createTween(
 					ConfirmButton, 
-					tweenInfo.fast,
-					{Size = UDim2.new(ConfirmButton.Size.X.Scale * 1.05, 0, ConfirmButton.Size.Y.Scale * 1.05, 0)}
-				)
-				scaleTween:Play()
+					{Size = UDim2.new(ConfirmButton.Size.X.Scale * 1.05, 0, ConfirmButton.Size.Y.Scale * 1.05, 0)},
+					0.2
+				):Play()
 			end
 		end)
 
-		ConfirmButton.MouseLeave:Connect(function()
+		local mouseLeave = ConfirmButton.MouseLeave:Connect(function()
 			if selectionState.selectedClass and not selectionState.isConfirmed then
-				local scaleTween = TweenService:Create(
+				createTween(
 					ConfirmButton, 
-					tweenInfo.fast,
-					{Size = UDim2.new(ConfirmButton.Size.X.Scale / 1.05, 0, ConfirmButton.Size.Y.Scale / 1.05, 0)}
-				)
-				scaleTween:Play()
+					{Size = UDim2.new(ConfirmButton.Size.X.Scale / 1.05, 0, ConfirmButton.Size.Y.Scale / 1.05, 0)},
+					0.2
+				):Play()
 			end
 		end)
+
+		table.insert(connections, mouseEnter)
+		table.insert(connections, mouseLeave)
+	end
 	end
 
-	-- Add effects to timer
-	if TimerFrame then
-		-- Add UIStroke if none exists
-		if not TimerFrame:FindFirstChild("UIStroke") then
-			local stroke = Instance.new("UIStroke")
-			stroke.Color = Color3.fromRGB(180, 180, 180)
-			stroke.Thickness = 2
-			stroke.Parent = TimerFrame
-		end
-	end
-end
-
--- Initialize UI with validation checks
+	-- Initialize UI references
 local function initializeUI()
-	print("ClassSelectionHandler: Initializing UI...")
-
-	-- Get PlayerGui with validation check
+	-- Get PlayerGui and ClassSelection
 	PlayerGui = player:WaitForChild("PlayerGui", 10)
-	if not PlayerGui then
-		warn("ClassSelectionHandler: PlayerGui not found within timeout")
-		return false
-	end
+	if not PlayerGui then return false end
 
-	-- Get ClassSelection UI with validation
 	ClassSelection = PlayerGui:WaitForChild("ClassSelection", 5)
-	if not ClassSelection then
-		warn("ClassSelectionHandler: ClassSelection not found within timeout")
-		return false
-	end
+	if not ClassSelection then return false end
 
-	-- Get UI components with validation
+	-- Get main UI components
 	Background = ClassSelection:WaitForChild("Background", 3)
-	if not Background then
-		warn("ClassSelectionHandler: Background not found within timeout")
-		return false
-	end
+	if not Background then return false end
 
-	-- Get main components of class selection screen
 	TitleText = Background:WaitForChild("TitleText", 2)
 	ClassesContainer = Background:WaitForChild("ClassesContainer", 2)
 	ConfirmButton = Background:WaitForChild("ConfirmButton", 2)
 	TimerFrame = Background:WaitForChild("TimerFrame", 2)
 
-	-- Check text and status components
-	if TimerFrame then
-		TimerText = TimerFrame:WaitForChild("TimerText", 1)
-	end
-
+	if TimerFrame then TimerText = TimerFrame:WaitForChild("TimerText", 1) end
 	PlayersSelectionStatus = Background:WaitForChild("PlayersSelectionStatus", 2)
 
-	-- Check if required components exist
+	-- Validate required components
 	if not TitleText or not ClassesContainer or not ConfirmButton or 
 		not TimerFrame or not TimerText or not PlayersSelectionStatus then
-		warn("ClassSelectionHandler: Some UI components are not ready")
 		return false
 	end
 
-	-- Get class elements
+	-- Get class frames
 	WarriorClass = ClassesContainer:FindFirstChild("WarriorClass")
 	MageClass = ClassesContainer:FindFirstChild("MageClass")
 	ThiefClass = ClassesContainer:FindFirstChild("ThiefClass")
 
-	-- Validate class components
 	if not WarriorClass or not MageClass or not ThiefClass then
-		warn("ClassSelectionHandler: Class components are incomplete")
 		return false
 	end
 
-	-- Set initial UI states
+	-- Set initial UI state
 	ClassSelection.Enabled = true
 	TimerText.Text = "Time remaining: " .. selectionState.timerValue .. " seconds"
 
-	-- Setup user-friendly UI effects
-	applyUIEffects()
-
-	print("ClassSelectionHandler: UI initialization complete")
 	return true
 end
 
-
--- Connect to RemoteEvents with validation checks
+-- Connect to RemoteEvents
 local function connectRemoteEvents()
-	print("ClassSelectionHandler: Connecting to RemoteEvents...")
-
-	-- Get RemoteEvents with validation
+	-- Get Remotes folders
 	local remotesFolder = ReplicatedStorage:WaitForChild("Remotes", 10)
-	if not remotesFolder then
-		warn("ClassSelectionHandler: Remotes folder not found within timeout")
-		return false
-	end
+	if not remotesFolder then return false end
 
 	local uiRemotes = remotesFolder:WaitForChild("UIRemotes", 5)
-	local gameRemotes = remotesFolder:WaitForChild("GameRemotes", 5)
 
-	if not uiRemotes or not gameRemotes then
-		warn("ClassSelectionHandler: UIRemotes or GameRemotes folder not found within timeout")
-		return false
-	end
-
-	-- Reference RemoteEvents
+	-- Get RemoteEvents
 	remotes.playerSelectedClass = uiRemotes:WaitForChild("PlayerSelectedClass", 3)
 	remotes.updateClassSelection = uiRemotes:WaitForChild("UpdateClassSelection", 3)
 	remotes.updateClassSelectionTimer = uiRemotes:WaitForChild("UpdateClassSelectionTimer", 3)
-	remotes.classAssigned = uiRemotes:WaitForChild("ClassAssigned", 3)
 	remotes.notifyRandomClass = uiRemotes:WaitForChild("NotifyRandomClass", 3)
 	remotes.showMainGameUI = uiRemotes:WaitForChild("ShowMainGameUI", 3)
 
-	-- Verify all needed RemoteEvents are available
+	-- Validate all remotes
 	for name, remote in pairs(remotes) do
-		if not remote then
-			warn("ClassSelectionHandler: RemoteEvent " .. name .. " not found")
-			return false
-		end
+		if not remote then return false end
 	end
 
-	print("ClassSelectionHandler: RemoteEvents connected successfully")
 	return true
 end
 
 -- Update class display
 local function updateClassVisuals()
-	-- Control update frequency
-	local currentTime = tick()
-	if currentTime - lastUpdateTime < updateThreshold then return end
-	lastUpdateTime = currentTime
-
-	-- Reset display for all classes
+	-- Reset all class frames
 	for _, classFrame in pairs({WarriorClass, MageClass, ThiefClass}) do
 		if classFrame then
-			-- Set default background
-			local defaultTween = TweenService:Create(
-				classFrame,
-				tweenInfo.normal,
-				{
-					BackgroundColor3 = COLORS.DEFAULT_FRAME,
-					BackgroundTransparency = 0.1
-				}
-			)
-			defaultTween:Play()
+			createTween(classFrame, {
+				BackgroundColor3 = COLORS.DEFAULT_FRAME,
+				BackgroundTransparency = 0.1
+			}):Play()
 
-			-- Set default UIStroke
 			local stroke = classFrame:FindFirstChild("UIStroke")
 			if stroke then
 				stroke.Color = COLORS.DEFAULT_STROKE
@@ -317,27 +235,17 @@ local function updateClassVisuals()
 	-- Highlight selected class
 	if selectionState.selectedClass then
 		local selectedFrame
-		if selectionState.selectedClass == "Warrior" then
-			selectedFrame = WarriorClass
-		elseif selectionState.selectedClass == "Mage" then
-			selectedFrame = MageClass
-		elseif selectionState.selectedClass == "Thief" then
-			selectedFrame = ThiefClass
+		if selectionState.selectedClass == "Warrior" then selectedFrame = WarriorClass
+		elseif selectionState.selectedClass == "Mage" then selectedFrame = MageClass
+		elseif selectionState.selectedClass == "Thief" then selectedFrame = ThiefClass
 		end
 
 		if selectedFrame then
-			-- Highlight background
-			local highlightTween = TweenService:Create(
-				selectedFrame,
-				tweenInfo.normal,
-				{
-					BackgroundColor3 = COLORS.SELECTED_FRAME,
-					BackgroundTransparency = 0
-				}
-			)
-			highlightTween:Play()
+			createTween(selectedFrame, {
+				BackgroundColor3 = COLORS.SELECTED_FRAME,
+				BackgroundTransparency = 0
+			}):Play()
 
-			-- Highlight border
 			local stroke = selectedFrame:FindFirstChild("UIStroke")
 			if stroke then
 				stroke.Color = COLORS.SELECTED_STROKE
@@ -346,11 +254,10 @@ local function updateClassVisuals()
 		end
 	end
 
-	-- Update confirm button
+	-- Update confirm button state
 	if ConfirmButton then
-		-- Set button state based on selection
 		if selectionState.selectedClass and not selectionState.isConfirmed then
-			-- Button is active
+			-- Active state
 			ConfirmButton.BackgroundColor3 = COLORS.CONFIRM_ENABLED
 			ConfirmButton.Active = true
 			ConfirmButton.AutoButtonColor = true
@@ -366,7 +273,7 @@ local function updateClassVisuals()
 				confirmText.TextColor3 = Color3.fromRGB(255, 255, 255)
 			end
 		else
-			-- Button is inactive
+			-- Inactive state
 			ConfirmButton.BackgroundColor3 = COLORS.CONFIRM_DISABLED
 
 			if selectionState.isConfirmed then
@@ -396,14 +303,13 @@ local function updateClassVisuals()
 	end
 end
 
--- Class selection function
+-- Select class function
 local function selectClass(className)
-	-- Check confirmation status
+	-- Don't allow selection after confirmation
 	if selectionState.isConfirmed then return end
 
 	-- Validate class name
 	if className ~= "Warrior" and className ~= "Mage" and className ~= "Thief" then
-		warn("ClassSelectionHandler: Invalid class name: " .. tostring(className))
 		return
 	end
 
@@ -415,87 +321,70 @@ local function selectClass(className)
 
 	-- Show selection effect
 	local selectedFrame
-	if className == "Warrior" then
-		selectedFrame = WarriorClass
-	elseif className == "Mage" then
-		selectedFrame = MageClass
-	elseif className == "Thief" then
-		selectedFrame = ThiefClass
+	if className == "Warrior" then selectedFrame = WarriorClass
+	elseif className == "Mage" then selectedFrame = MageClass
+	elseif className == "Thief" then selectedFrame = ThiefClass
 	end
 
 	if selectedFrame then
-		-- Create selection effect
-		local pulseTween = TweenService:Create(
+		-- Pulse animation
+		createTween(
 			selectedFrame,
-			tweenInfo.bounce,
-			{Size = UDim2.new(selectedFrame.Size.X.Scale * 1.05, 0, selectedFrame.Size.Y.Scale * 1.05, 0)}
-		)
-		pulseTween:Play()
+			{Size = UDim2.new(selectedFrame.Size.X.Scale * 1.05, 0, selectedFrame.Size.Y.Scale * 1.05, 0)},
+			0.4,
+			Enum.EasingStyle.Bounce
+		):Play()
 
-		pulseTween.Completed:Connect(function()
-			if selectionState.selectedClass == className then
-				local returnTween = TweenService:Create(
-					selectedFrame,
-					tweenInfo.normal,
-					{Size = UDim2.new(selectedFrame.Size.X.Scale / 1.05, 0, selectedFrame.Size.Y.Scale / 1.05, 0)}
-				)
-				returnTween:Play()
-			end
-		end)
+		wait(0.4)
+
+		if selectionState.selectedClass == className then
+			createTween(
+				selectedFrame,
+				{Size = UDim2.new(selectedFrame.Size.X.Scale / 1.05, 0, selectedFrame.Size.Y.Scale / 1.05, 0)}
+			):Play()
+		end
 	end
-
-	print("ClassSelectionHandler: Selected class " .. className)
 end
 
--- Update timer function
+-- Update timer display
 local function updateTimer(timeLeft)
-	-- Validate received value
-	if type(timeLeft) ~= "number" then
-		warn("ClassSelectionHandler: Invalid time value:", timeLeft)
-		return
-	end
-
-	-- Record time value
+	-- Update timer value
 	selectionState.timerValue = timeLeft
 
 	-- Update display
 	if TimerText then
 		TimerText.Text = "Time remaining: " .. timeLeft .. " seconds"
 
-		-- Change color based on remaining time
+		-- Change color based on time
 		if timeLeft <= 5 then
 			TimerText.TextColor3 = COLORS.TIMER_CRITICAL
 
-			-- Add flashing effect when time is very low
-			local flashTween = TweenService:Create(
+			-- Flash effect
+			local flashTween = createTween(
 				TimerFrame,
-				TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true),
-				{BackgroundColor3 = Color3.fromRGB(200, 50, 50)}
+				{BackgroundColor3 = Color3.fromRGB(200, 50, 50)},
+				0.3
 			)
+			flashTween.Completed:Connect(function()
+				createTween(
+					TimerFrame,
+					{BackgroundColor3 = TimerFrame.BackgroundColor3},
+					0.3
+				):Play()
+			end)
 			flashTween:Play()
+
 		elseif timeLeft <= 10 then
 			TimerText.TextColor3 = COLORS.TIMER_WARNING
 		else
 			TimerText.TextColor3 = COLORS.TIMER_NORMAL
 		end
 	end
-
-	-- If time runs out and no selection made, show notification
-	if timeLeft == 0 and not selectionState.isConfirmed then
-		-- Notification will be handled by notifyRandomClass RemoteEvent
-		print("ClassSelectionHandler: Time's up, waiting for random class")
-	end
 end
 
 -- Update player selection status
 local function updatePlayerSelectionStatus(userId, className)
-	-- Validate received value
-	if type(userId) ~= "number" then
-		warn("ClassSelectionHandler: Invalid userId:", userId)
-		return
-	end
-
-	-- Record player selection
+	-- Store player selection
 	selectionState.playerSelections[userId] = className
 
 	-- Find or create player status frame
@@ -504,7 +393,7 @@ local function updatePlayerSelectionStatus(userId, className)
 		local template = PlayersSelectionStatus:FindFirstChild("PlayerStatus")
 
 		if template then
-			-- Create new status display from template
+			-- Create new status display
 			local newStatus = template:Clone()
 			newStatus.Visible = true
 			newStatus.Name = "PlayerStatus_" .. userId
@@ -521,7 +410,7 @@ local function updatePlayerSelectionStatus(userId, className)
 			-- Set initial text
 			newStatus.Text = playerName .. ": Selecting..."
 
-			-- Set position in list
+			-- Set position
 			local playerCount = 0
 			for _ in pairs(selectionState.playerFrames) do
 				playerCount = playerCount + 1
@@ -530,12 +419,7 @@ local function updatePlayerSelectionStatus(userId, className)
 
 			-- Store reference
 			selectionState.playerFrames[userId] = newStatus
-
-			-- Display
 			newStatus.Parent = PlayersSelectionStatus
-		else
-			warn("ClassSelectionHandler: PlayerStatus template not found")
-			return
 		end
 	end
 
@@ -553,134 +437,92 @@ local function updatePlayerSelectionStatus(userId, className)
 
 		-- Update text and color
 		statusFrame.Text = playerName .. ": " .. className
-		statusFrame.TextColor3 = Color3.fromRGB(100, 255, 100) -- Green color
+		statusFrame.TextColor3 = Color3.fromRGB(100, 255, 100)
 
-		-- Add selection effect
-		local pulseTween = TweenService:Create(
-			statusFrame,
-			tweenInfo.normal,
-			{TextSize = statusFrame.TextSize + 2}
-		)
-		pulseTween:Play()
-
-		pulseTween.Completed:Connect(function()
-			local returnTween = TweenService:Create(
-				statusFrame,
-				tweenInfo.normal,
-				{TextSize = statusFrame.TextSize - 2}
-			)
-			returnTween:Play()
-		end)
+		-- Pulse animation
+		createTween(statusFrame, {TextSize = statusFrame.TextSize + 2}, 0.3):Play()
+		wait(0.3)
+		createTween(statusFrame, {TextSize = statusFrame.TextSize - 2}, 0.3):Play()
 	end
 
-	-- Update player count display
+	-- Update count
 	local selectedCount = 0
 	local totalPlayers = #Players:GetPlayers()
 
 	for _, selection in pairs(selectionState.playerSelections) do
-		if selection then
-			selectedCount = selectedCount + 1
-		end
+		if selection then selectedCount = selectedCount + 1 end
 	end
 
-	-- Show selection count in title
+	-- Update title
 	if TitleText then
 		TitleText.Text = "Select Your Character Class (" .. selectedCount .. "/" .. totalPlayers .. ")"
 	end
-
-	-- Check if everyone has selected
-	if selectedCount >= totalPlayers and totalPlayers > 0 then
-		print("ClassSelectionHandler: All players have selected")
-	end
 end
 
--- Selection confirmation function
+-- Confirm selection function
 local function confirmSelection()
 	-- Check if class is selected and not already confirmed
-	if not selectionState.selectedClass or selectionState.isConfirmed then
-		return
-	end
+	if not selectionState.selectedClass or selectionState.isConfirmed then return end
 
-	-- Set confirmation status
+	-- Set confirmed state
 	selectionState.isConfirmed = true
 
-	-- Disable buttons and class selection
+	-- Disable class selection
 	for _, classFrame in pairs({WarriorClass, MageClass, ThiefClass}) do
-		if classFrame then
-			classFrame.Active = false
-		end
+		if classFrame then classFrame.Active = false end
 	end
 
-	-- Update confirm button
+	-- Update button
 	if ConfirmButton then
 		ConfirmButton.Active = false
 		ConfirmButton.AutoButtonColor = false
 
-		-- Confirm button effect
-		local confirmTween = TweenService:Create(
-			ConfirmButton,
-			tweenInfo.normal,
-			{
-				BackgroundColor3 = Color3.fromRGB(30, 100, 30),
-				BackgroundTransparency = 0.3
-			}
-		)
-		confirmTween:Play()
+		createTween(ConfirmButton, {
+			BackgroundColor3 = Color3.fromRGB(30, 100, 30),
+			BackgroundTransparency = 0.3
+		}):Play()
 
-		-- Update text
 		local confirmText = ConfirmButton:FindFirstChild("ConfirmText")
 		if confirmText then
 			confirmText.Text = "Waiting for others..."
 		end
 	end
 
-	-- Send data to server
+	-- Send to server
 	if remotes.playerSelectedClass then
 		remotes.playerSelectedClass:FireServer(selectionState.selectedClass)
-		print("ClassSelectionHandler: Sent class selection " .. selectionState.selectedClass .. " to server")
-	else
-		warn("ClassSelectionHandler: PlayerSelectedClass RemoteEvent not found")
 	end
 
 	-- Update own selection status
 	updatePlayerSelectionStatus(player.UserId, selectionState.selectedClass)
 end
 
--- Handle random class assignment notification
+-- Handle random class assignment
 local function handleRandomClassAssignment(className)
-	-- Validate received value
-	if type(className) ~= "string" then
-		warn("ClassSelectionHandler: Invalid class name:", className)
-		return
-	end
-
-	print("ClassSelectionHandler: Received random class assignment " .. className)
-
-	-- Select the assigned random class
+	-- Select the random class
 	selectClass(className)
 
 	-- Create notification
 	local notification = Instance.new("Frame")
 	notification.Name = "RandomClassNotification"
 	notification.Size = UDim2.new(0.6, 0, 0.15, 0)
-	notification.Position = UDim2.new(0.2, 0, -0.2, 0) -- Start off-screen
+	notification.Position = UDim2.new(0.2, 0, -0.2, 0)
 	notification.BackgroundColor3 = Color3.fromRGB(200, 80, 80)
 	notification.BackgroundTransparency = 0.2
 	notification.BorderSizePixel = 0
 	notification.ZIndex = 10
 
-	-- Add UICorner
+	-- Add design elements
 	local corner = Instance.new("UICorner")
 	corner.CornerRadius = UDim.new(0, 8)
 	corner.Parent = notification
 
-	-- Add UIStroke
 	local stroke = Instance.new("UIStroke")
 	stroke.Color = Color3.fromRGB(255, 150, 150)
 	stroke.Thickness = 3
 	stroke.Parent = notification
 
-	-- Add notification text
+	-- Add text
 	local notificationText = Instance.new("TextLabel")
 	notificationText.Size = UDim2.new(1, 0, 1, 0)
 	notificationText.BackgroundTransparency = 1
@@ -692,123 +534,70 @@ local function handleRandomClassAssignment(className)
 	notificationText.ZIndex = 11
 	notificationText.Parent = notification
 
-	-- Display on screen
+	-- Show notification
 	notification.Parent = Background
 
-	-- Slide-in effect
-	local slideTween = TweenService:Create(
-		notification,
-		tweenInfo.slow,
-		{Position = UDim2.new(0.2, 0, 0.1, 0)}
-	)
-	slideTween:Play()
+	-- Slide in
+	createTween(notification, {Position = UDim2.new(0.2, 0, 0.1, 0)}, 0.5):Play()
 
-	-- Confirm selection after displaying notification
+	-- Confirm selection
 	wait(0.8)
 	confirmSelection()
 
-	-- Hide notification after 3 seconds
+	-- Remove notification
 	wait(3)
-	local hideTween = TweenService:Create(
-		notification,
-		tweenInfo.normal,
-		{
-			Position = UDim2.new(0.2, 0, -0.2, 0),
-			BackgroundTransparency = 1
-		}
-	)
-	hideTween:Play()
+	createTween(notification, {
+		Position = UDim2.new(0.2, 0, -0.2, 0),
+		BackgroundTransparency = 1
+	}, 0.5):Play()
 
-	hideTween.Completed:Connect(function()
-		notification:Destroy()
-	end)
+	wait(0.5)
+	notification:Destroy()
 end
 
--- Transition to main game screen
+-- Transition to main game
 local function transitionToMainGame()
-	print("ClassSelectionHandler: Transitioning to main game screen...")
-
 	-- Fade out effect
-	local fadeOutTween = TweenService:Create(
-		Background,
-		tweenInfo.slow,
-		{BackgroundTransparency = 1}
-	)
+	local fadeOutTween = createTween(Background, {BackgroundTransparency = 1}, 0.5)
 
-	-- Make other elements transparent too with proper type checking
+	-- Fade out all elements
 	local fadeElements = {}
 	for _, element in pairs(Background:GetDescendants()) do
 		if element:IsA("Frame") or element:IsA("ImageLabel") or element:IsA("ImageButton") then
-			-- Elements with only BackgroundTransparency
-			table.insert(fadeElements, {
-				element = element,
-				properties = {BackgroundTransparency = 1}
-			})
+			createTween(element, {BackgroundTransparency = 1}, 0.5):Play()
 		elseif element:IsA("TextLabel") or element:IsA("TextButton") then
-			-- Elements with both BackgroundTransparency and TextTransparency
-			table.insert(fadeElements, {
-				element = element,
-				properties = {BackgroundTransparency = 1, TextTransparency = 1}
-			})
+			createTween(element, {
+				BackgroundTransparency = 1,
+				TextTransparency = 1
+			}, 0.5):Play()
 		end
-	end
-
-	-- Create tween for each element
-	for _, item in pairs(fadeElements) do
-		local elementTween = TweenService:Create(
-			item.element,
-			tweenInfo.slow,
-			item.properties
-		)
-		elementTween:Play()
 	end
 
 	-- Play fade out
 	fadeOutTween:Play()
 
-	-- When fade out completes, disable class selection and enable main game UI
+	-- Handle transition
 	fadeOutTween.Completed:Connect(function()
 		-- Disable class selection
 		ClassSelection.Enabled = false
 
-		-- Find main game UI
+		-- Find and show main game UI
 		local MainGameUI = PlayerGui:WaitForChild("MainGameUI", 5)
 		if MainGameUI then
-			-- Start with transparency
 			MainGameUI.Enabled = true
-
-			-- Find main element of main game UI
-			local mainBackground = MainGameUI:FindFirstChild("StatusBarContainer")
-			if mainBackground then
-				mainBackground.BackgroundTransparency = 1
-
-				-- Fade in main game UI
-				local fadeInTween = TweenService:Create(
-					mainBackground,
-					tweenInfo.slow,
-					{BackgroundTransparency = 1}
-				)
-				fadeInTween:Play()
-			end
-
-			print("ClassSelectionHandler: Successfully transitioned to main game screen")
-		else
-			warn("ClassSelectionHandler: Main game UI not found")
 		end
 
-		-- Clean up resources and connections
+		-- Clean up
 		cleanupConnections()
 	end)
 end
 
--- Setup button and input connections
+-- Setup button connections
 local function setupButtonConnections()
-	print("ClassSelectionHandler: Setting up button connections...")
-
 	-- Clear previous connections
 	cleanupConnections()
 
-	-- Function to connect class button
+	-- Connect class buttons
 	local function connectClassButton(classButton, className)
 		if not classButton then return end
 
@@ -822,12 +611,11 @@ local function setupButtonConnections()
 		table.insert(connections, connection)
 	end
 
-	-- Connect to class buttons
 	connectClassButton(WarriorClass, "Warrior")
 	connectClassButton(MageClass, "Mage")
 	connectClassButton(ThiefClass, "Thief")
 
-	-- Connect to confirm button
+	-- Connect confirm button
 	if ConfirmButton then
 		local connection = ConfirmButton.InputBegan:Connect(function(input)
 			if input.UserInputType == Enum.UserInputType.MouseButton1 or 
@@ -839,24 +627,20 @@ local function setupButtonConnections()
 		table.insert(connections, connection)
 	end
 
-	-- Connect to Enter key press for confirmation
+	-- Connect Enter key for confirmation
 	local connection = UserInputService.InputBegan:Connect(function(input)
-		-- Press Enter to confirm
-		if input.KeyCode == Enum.KeyCode.Return and selectionState.selectedClass and not selectionState.isConfirmed then
+		if input.KeyCode == Enum.KeyCode.Return and 
+			selectionState.selectedClass and not selectionState.isConfirmed then
 			confirmSelection()
 		end
 	end)
 
 	table.insert(connections, connection)
-
-	print("ClassSelectionHandler: Button connections setup complete")
 end
 
--- Setup RemoteEvent connections
+-- Setup remote event connections
 local function setupRemoteConnections()
-	print("ClassSelectionHandler: Setting up RemoteEvent connections...")
-
-	-- Connect to RemoteEvents
+	-- Update class selection status
 	if remotes.updateClassSelection then
 		local connection = remotes.updateClassSelection.OnClientEvent:Connect(function(userId, className)
 			updatePlayerSelectionStatus(userId, className)
@@ -865,6 +649,7 @@ local function setupRemoteConnections()
 		table.insert(connections, connection)
 	end
 
+	-- Update timer
 	if remotes.updateClassSelectionTimer then
 		local connection = remotes.updateClassSelectionTimer.OnClientEvent:Connect(function(timeLeft)
 			updateTimer(timeLeft)
@@ -873,6 +658,7 @@ local function setupRemoteConnections()
 		table.insert(connections, connection)
 	end
 
+	-- Handle random class assignment
 	if remotes.notifyRandomClass then
 		local connection = remotes.notifyRandomClass.OnClientEvent:Connect(function(className)
 			handleRandomClassAssignment(className)
@@ -881,6 +667,7 @@ local function setupRemoteConnections()
 		table.insert(connections, connection)
 	end
 
+	-- Transition to main game
 	if remotes.showMainGameUI then
 		local connection = remotes.showMainGameUI.OnClientEvent:Connect(function()
 			transitionToMainGame()
@@ -889,16 +676,14 @@ local function setupRemoteConnections()
 		table.insert(connections, connection)
 	end
 
-	-- Connect to player count changes
+	-- Player count tracking
 	local connection = Players.PlayerAdded:Connect(function()
-		wait() -- Wait for player addition to complete
+		wait()
 
-		-- Update player count in title
+		-- Update player count
 		local selectedCount = 0
 		for _, selection in pairs(selectionState.playerSelections) do
-			if selection then
-				selectedCount = selectedCount + 1
-			end
+			if selection then selectedCount = selectedCount + 1 end
 		end
 
 		if TitleText then
@@ -909,9 +694,9 @@ local function setupRemoteConnections()
 	table.insert(connections, connection)
 
 	connection = Players.PlayerRemoving:Connect(function(plr)
-		wait() -- Wait for player removal to complete
+		wait()
 
-		-- Remove data for player who left
+		-- Remove data for player
 		if selectionState.playerSelections[plr.UserId] then
 			selectionState.playerSelections[plr.UserId] = nil
 		end
@@ -921,12 +706,10 @@ local function setupRemoteConnections()
 			selectionState.playerFrames[plr.UserId] = nil
 		end
 
-		-- Update player count in title
+		-- Update player count
 		local selectedCount = 0
 		for _, selection in pairs(selectionState.playerSelections) do
-			if selection then
-				selectedCount = selectedCount + 1
-			end
+			if selection then selectedCount = selectedCount + 1 end
 		end
 
 		if TitleText then
@@ -935,30 +718,27 @@ local function setupRemoteConnections()
 	end)
 
 	table.insert(connections, connection)
-
-	print("ClassSelectionHandler: RemoteEvent connections setup complete")
 end
 
 -- Initialization function
 local function initialize()
-	print("ClassSelectionHandler v3.0.1: Starting system...")
-
 	-- Setup UI
 	if not initializeUI() then
-		warn("ClassSelectionHandler: Unable to initialize UI")
 		return
 	end
 
 	-- Connect to RemoteEvents
 	if not connectRemoteEvents() then
-		warn("ClassSelectionHandler: Unable to connect to RemoteEvents")
 		return
 	end
+
+	-- Apply UI effects
+	applyUIEffects()
 
 	-- Setup button connections
 	setupButtonConnections()
 
-	-- Setup RemoteEvent connections
+	-- Setup remote connections
 	setupRemoteConnections()
 
 	-- Update initial display
@@ -969,17 +749,14 @@ local function initialize()
 		TitleText.Text = "Select Your Character Class (0/" .. #Players:GetPlayers() .. ")"
 	end
 
-	-- Show current player status (self)
+	-- Show current player status
 	updatePlayerSelectionStatus(player.UserId)
-
-	print("ClassSelectionHandler: System started successfully")
 end
 
 -- Setup cleanup when player leaves
 Players.PlayerRemoving:Connect(function(plr)
 	if plr == player then
 		cleanupConnections()
-		print("ClassSelectionHandler: Resources cleaned up due to player leaving")
 	end
 end)
 
