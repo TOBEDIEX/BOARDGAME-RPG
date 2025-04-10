@@ -1,0 +1,555 @@
+1. หน้าโหลดเกม (Loading Screen)
+ScreenGui (ชื่อ "LoadingScreen")
+├── Frame (ชื่อ "Background")
+│   ├── ImageLabel (ชื่อ "LoadingBackground")
+│   ├── UICorner
+│   ├── Frame (ชื่อ "LoadingBarFrame")
+│   │   ├── Frame (ชื่อ "LoadingBarFill")
+│   │   ├── UICorner
+│   │   └── UIStroke
+│   ├── TextLabel (ชื่อ "LoadingText")
+│   └── TextLabel (ชื่อ "PlayersReadyText")
+
+2. หน้าเลือกคลาส (Class Selection)
+ScreenGui (ชื่อ "ClassSelection")
+├── Frame (ชื่อ "Background")
+│   ├── ImageLabel (ชื่อ "ClassSelectionBackground")
+│   ├── UICorner
+│   ├── TextLabel (ชื่อ "TitleText")
+│   ├── Frame (ชื่อ "ClassesContainer")
+│   │   ├── UIGridLayout
+│   │   ├── Frame (ชื่อ "WarriorClass")
+│   │   │   ├── UICorner
+│   │   │   ├── UIStroke
+│   │   │   ├── ImageLabel (ชื่อ "WarriorImage")
+│   │   │   ├── TextLabel (ชื่อ "WarriorName")
+│   │   │   ├── TextLabel (ชื่อ "WarriorDescription")
+│   │   │   └── Frame (ชื่อ "WarriorStats")
+│   │   │       ├── TextLabel (ชื่อ "HPStat")
+│   │   │       ├── TextLabel (ชื่อ "ATKStat")
+│   │   │       ├── TextLabel (ชื่อ "DEFStat")
+│   │   │       └── TextLabel (ชื่อ "MAGICStat")
+│   │   ├── Frame (ชื่อ "MageClass")
+│   │   │   ├── UICorner
+│   │   │   ├── UIStroke
+│   │   │   ├── ImageLabel (ชื่อ "MageImage")
+│   │   │   ├── TextLabel (ชื่อ "MageName")
+│   │   │   ├── TextLabel (ชื่อ "MageDescription")
+│   │   │   └── Frame (ชื่อ "MageStats")
+│   │   │       ├── TextLabel (ชื่อ "HPStat")
+│   │   │       ├── TextLabel (ชื่อ "ATKStat")
+│   │   │       ├── TextLabel (ชื่อ "DEFStat")
+│   │   │       └── TextLabel (ชื่อ "MAGICStat")
+│   │   └── Frame (ชื่อ "ThiefClass")
+│   │       ├── UICorner
+│   │       ├── UIStroke
+│   │       ├── ImageLabel (ชื่อ "ThiefImage")
+│   │       ├── TextLabel (ชื่อ "ThiefName")
+│   │       ├── TextLabel (ชื่อ "ThiefDescription")
+│   │       └── Frame (ชื่อ "ThiefStats")
+│   │           ├── TextLabel (ชื่อ "HPStat")
+│   │           ├── TextLabel (ชื่อ "ATKStat")
+│   │           ├── TextLabel (ชื่อ "DEFStat")
+│   │           └── TextLabel (ชื่อ "MAGICStat")
+│   ├── TextButton (ชื่อ "ConfirmButton")
+│   │   ├── UICorner
+│   │   ├── UIStroke
+│   │   └── TextLabel (ชื่อ "ConfirmText")
+│   ├── Frame (ชื่อ "TimerFrame")
+│   │   ├── UICorner
+│   │   ├── UIStroke
+│   │   └── TextLabel (ชื่อ "TimerText")
+│   └── Frame (ชื่อ "PlayersSelectionStatus")
+│       ├── UIListLayout
+│       └── TextLabel (ชื่อ "PlayerStatus") [จะถูกโคลนสำหรับแต่ละผู้เล่น]
+
+3. หน้าเกมหลัก (Main Game Screen)
+ScreenGui (ชื่อ "MainGameUI")
+├── Frame (ชื่อ "StatusBarContainer")
+│   ├── UIListLayout
+│   └── Frame (ชื่อ "PlayerStatusBar") [จะถูกโคลนสำหรับแต่ละผู้เล่น]
+│       ├── UICorner
+│       ├── UIStroke
+│       ├── ImageLabel (ชื่อ "PlayerIcon")
+│       ├── TextLabel (ชื่อ "PlayerName")
+│       ├── TextLabel (ชื่อ "PlayerClass")
+│       ├── TextLabel (ชื่อ "PlayerLevel")
+│       ├── Frame (ชื่อ "HPBar")
+│       │   ├── Frame (ชื่อ "HPFill")
+│       │   └── TextLabel (ชื่อ "HPText")
+│       ├── Frame (ชื่อ "MPBar")
+│       │   ├── Frame (ชื่อ "MPFill")
+│       │   └── TextLabel (ชื่อ "MPText")
+│       ├── Frame (ชื่อ "MoneyContainer")
+│       │   ├── ImageLabel (ชื่อ "CoinIcon")
+│       │   └── TextLabel (ชื่อ "MoneyAmount")
+│       └── Frame (ชื่อ "KeyItemsContainer")
+│           ├── UIGridLayout
+│           └── ImageLabel (ชื่อ "ItemIcon") [จะถูกโคลนสำหรับแต่ละไอเทมสำคัญ]
+├── Frame (ชื่อ "CurrentTurnIndicator")
+│   ├── UICorner
+│   ├── UIStroke
+│   └── TextLabel (ชื่อ "TurnText")
+├── TextButton (ชื่อ "InventoryButton")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── ImageLabel (ชื่อ "InventoryIcon")
+│   └── TextLabel (ชื่อ "InventoryText")
+└── TextButton (ชื่อ "QuestButton")
+    ├── UICorner
+    ├── UIStroke
+    ├── ImageLabel (ชื่อ "QuestIcon")
+    └── TextLabel (ชื่อ "QuestText")
+
+4. หน้าทอยลูกเต๋าและเลือกเส้นทาง (Dice Roll & Path Selection)
+Frame (ชื่อ "DiceRollUI")
+├── UICorner
+├── UIStroke
+├── Frame (ชื่อ "DiceWheel")
+│   ├── UICorner
+│   ├── ImageLabel (ชื่อ "DiceWheelImage")
+│   └── TextLabel (ชื่อ "DiceResult")
+├── TextButton (ชื่อ "RollButton")
+│   ├── UICorner
+│   ├── UIStroke
+│   └── TextLabel (ชื่อ "RollText")
+└── Frame (ชื่อ "PathSelectionContainer")
+    ├── UICorner
+    ├── UIStroke
+    ├── TextLabel (ชื่อ "RemainingStepsText")
+    ├── TextButton (ชื่อ "ForwardButton")
+    │   ├── UICorner
+    │   ├── UIStroke
+    │   ├── ImageLabel (ชื่อ "ForwardArrow")
+    │   └── TextLabel (ชื่อ "ForwardText")
+    ├── TextButton (ชื่อ "LeftButton")
+    │   ├── UICorner
+    │   ├── UIStroke
+    │   ├── ImageLabel (ชื่อ "LeftArrow")
+    │   └── TextLabel (ชื่อ "LeftText")
+    └── TextButton (ชื่อ "RightButton")
+        ├── UICorner
+        ├── UIStroke
+        ├── ImageLabel (ชื่อ "RightArrow")
+        └── TextLabel (ชื่อ "RightText")
+
+5. หน้าต่อสู้ (Combat Screen)
+Frame (ชื่อ "CombatUI")
+├── UICorner
+├── UIStroke
+├── Frame (ชื่อ "PlayerCombatInfo")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── ImageLabel (ชื่อ "PlayerCharacter")
+│   ├── TextLabel (ชื่อ "PlayerName")
+│   ├── Frame (ชื่อ "PlayerHPBar")
+│   │   ├── Frame (ชื่อ "HPFill")
+│   │   └── TextLabel (ชื่อ "HPText")
+│   └── Frame (ชื่อ "PlayerMPBar")
+│       ├── Frame (ชื่อ "MPFill")
+│       └── TextLabel (ชื่อ "MPText")
+├── Frame (ชื่อ "EnemyCombatInfo")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── ImageLabel (ชื่อ "EnemyCharacter")
+│   ├── TextLabel (ชื่อ "EnemyName")
+│   ├── Frame (ชื่อ "EnemyHPBar")
+│   │   ├── Frame (ชื่อ "HPFill")
+│   │   └── TextLabel (ชื่อ "HPText")
+│   └── Frame (ชื่อ "EnemyMPBar")
+│       ├── Frame (ชื่อ "MPFill")
+│       └── TextLabel (ชื่อ "MPText")
+├── Frame (ชื่อ "TurnIndicator")
+│   ├── UICorner
+│   ├── UIStroke
+│   └── TextLabel (ชื่อ "TurnText")
+├── TextButton (ชื่อ "AttackMenuButton")
+│   ├── UICorner
+│   ├── UIStroke
+│   └── TextLabel (ชื่อ "AttackText")
+├── Frame (ชื่อ "AttackMenu")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── TextButton (ชื่อ "NormalAttackButton")
+│   │   ├── UICorner
+│   │   ├── UIStroke
+│   │   └── TextLabel (ชื่อ "NormalAttackText")
+│   ├── TextButton (ชื่อ "StrikeButton")
+│   │   ├── UICorner
+│   │   ├── UIStroke
+│   │   └── TextLabel (ชื่อ "StrikeText")
+│   ├── TextButton (ชื่อ "SpellButton")
+│   │   ├── UICorner
+│   │   ├── UIStroke
+│   │   └── TextLabel (ชื่อ "SpellText")
+│   └── TextButton (ชื่อ "PowerUpButton")
+│       ├── UICorner
+│       ├── UIStroke
+│       └── TextLabel (ชื่อ "PowerUpText")
+├── TextButton (ชื่อ "DefendMenuButton")
+│   ├── UICorner
+│   ├── UIStroke
+│   └── TextLabel (ชื่อ "DefendText")
+├── Frame (ชื่อ "DefendMenu")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── TextButton (ชื่อ "DefendButton")
+│   │   ├── UICorner
+│   │   ├── UIStroke
+│   │   └── TextLabel (ชื่อ "DefendText")
+│   ├── TextButton (ชื่อ "CounterButton")
+│   │   ├── UICorner
+│   │   ├── UIStroke
+│   │   └── TextLabel (ชื่อ "CounterText")
+│   ├── TextButton (ชื่อ "MagicDefendButton")
+│   │   ├── UICorner
+│   │   ├── UIStroke
+│   │   └── TextLabel (ชื่อ "MagicDefendText")
+│   └── TextButton (ชื่อ "GiveUpButton")
+│       ├── UICorner
+│       ├── UIStroke
+│       └── TextLabel (ชื่อ "GiveUpText")
+├── Frame (ชื่อ "TimerFrame")
+│   ├── UICorner
+│   ├── UIStroke
+│   └── TextLabel (ชื่อ "TimerText")
+└── Frame (ชื่อ "CombatLog")
+    ├── UICorner
+    ├── UIStroke
+    ├── UIScrollingFrame
+    │   ├── UIListLayout
+    │   └── TextLabel (ชื่อ "LogEntry") [จะถูกโคลนสำหรับแต่ละข้อความ]
+
+6. หน้าร้านค้า (Shop Screen)
+Frame (ชื่อ "ShopUI")
+├── UICorner
+├── UIStroke
+├── Frame (ชื่อ "ShopHeader")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── ImageLabel (ชื่อ "ShopkeeperImage")
+│   └── TextLabel (ชื่อ "ShopName")
+├── Frame (ชื่อ "ItemsContainer")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── UIGridLayout
+│   └── Frame (ชื่อ "ShopItem") [จะถูกโคลนสำหรับแต่ละสินค้า]
+│       ├── UICorner
+│       ├── UIStroke
+│       ├── ImageLabel (ชื่อ "ItemImage")
+│       ├── TextLabel (ชื่อ "ItemName")
+│       ├── TextLabel (ชื่อ "ItemDescription")
+│       ├── Frame (ชื่อ "PriceContainer")
+│       │   ├── ImageLabel (ชื่อ "CoinIcon")
+│       │   └── TextLabel (ชื่อ "ItemPrice")
+│       └── TextButton (ชื่อ "BuyButton")
+│           ├── UICorner
+│           ├── UIStroke
+│           └── TextLabel (ชื่อ "BuyText")
+├── Frame (ชื่อ "PlayerMoneyDisplay")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── ImageLabel (ชื่อ "CoinIcon")
+│   └── TextLabel (ชื่อ "MoneyAmount")
+├── TextButton (ชื่อ "ExitButton")
+│   ├── UICorner
+│   ├── UIStroke
+│   └── TextLabel (ชื่อ "ExitText")
+├── Frame (ชื่อ "TimerFrame")
+│   ├── UICorner
+│   ├── UIStroke
+│   └── TextLabel (ชื่อ "TimerText")
+└── Frame (ชื่อ "PurchaseConfirmation")
+    ├── UICorner
+    ├── UIStroke
+    ├── TextLabel (ชื่อ "ConfirmationText")
+    ├── TextButton (ชื่อ "ConfirmButton")
+    │   ├── UICorner
+    │   ├── UIStroke
+    │   └── TextLabel (ชื่อ "ConfirmText")
+    └── TextButton (ชื่อ "CancelButton")
+        ├── UICorner
+        ├── UIStroke
+        └── TextLabel (ชื่อ "CancelText")
+
+7. หน้า Inventory (Inventory Screen)
+Frame (ชื่อ "InventoryUI")
+├── UICorner
+├── UIStroke
+├── Frame (ชื่อ "InventoryHeader")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── TextLabel (ชื่อ "InventoryTitle")
+│   └── TextLabel (ชื่อ "ItemCountText")
+├── Frame (ชื่อ "CategoryTabs")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── TextButton (ชื่อ "WeaponsTab")
+│   │   ├── UICorner
+│   │   ├── UIStroke
+│   │   └── TextLabel (ชื่อ "WeaponsText")
+│   ├── TextButton (ชื่อ "ArmorTab")
+│   │   ├── UICorner
+│   │   ├── UIStroke
+│   │   └── TextLabel (ชื่อ "ArmorText")
+│   ├── TextButton (ชื่อ "ShieldsTab")
+│   │   ├── UICorner
+│   │   ├── UIStroke
+│   │   └── TextLabel (ชื่อ "ShieldsText")
+│   └── TextButton (ชื่อ "ItemsTab")
+│       ├── UICorner
+│       ├── UIStroke
+│       └── TextLabel (ชื่อ "ItemsText")
+├── Frame (ชื่อ "ItemsGrid")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── UIGridLayout
+│   └── Frame (ชื่อ "InventoryItem") [จะถูกโคลนสำหรับแต่ละไอเทม]
+│       ├── UICorner
+│       ├── UIStroke
+│       ├── ImageLabel (ชื่อ "ItemIcon")
+│       ├── TextLabel (ชื่อ "ItemName")
+│       └── TextLabel (ชื่อ "ItemCount")
+├── Frame (ชื่อ "ItemDetails")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── TextLabel (ชื่อ "SelectedItemName")
+│   ├── TextLabel (ชื่อ "ItemDescription")
+│   └── Frame (ชื่อ "StatEffects")
+│       ├── UIListLayout
+│       └── TextLabel (ชื่อ "StatEffect") [จะถูกโคลนสำหรับแต่ละผลกระทบ]
+├── Frame (ชื่อ "ActionButtons")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── TextButton (ชื่อ "UseButton")
+│   │   ├── UICorner
+│   │   ├── UIStroke
+│   │   └── TextLabel (ชื่อ "UseText")
+│   ├── TextButton (ชื่อ "EquipButton")
+│   │   ├── UICorner
+│   │   ├── UIStroke
+│   │   └── TextLabel (ชื่อ "EquipText")
+│   └── TextButton (ชื่อ "DiscardButton")
+│       ├── UICorner
+│       ├── UIStroke
+│       └── TextLabel (ชื่อ "DiscardText")
+└── TextButton (ชื่อ "CloseButton")
+    ├── UICorner
+    ├── UIStroke
+    └── TextLabel (ชื่อ "CloseText")
+
+8. หน้าแสดงเควส (Quest Screen)
+Frame (ชื่อ "QuestUI")
+├── UICorner
+├── UIStroke
+├── TextLabel (ชื่อ "QuestTitle")
+├── Frame (ชื่อ "QuestDetails")
+│   ├── UICorner
+│   ├── UIStroke
+│   └── TextLabel (ชื่อ "QuestDescription")
+├── Frame (ชื่อ "QuestStatus")
+│   ├── UICorner
+│   ├── UIStroke
+│   └── TextLabel (ชื่อ "StatusText")
+├── Frame (ชื่อ "QuestRewards")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── TextLabel (ชื่อ "RewardsTitle")
+│   ├── Frame (ชื่อ "MoneyReward")
+│   │   ├── ImageLabel (ชื่อ "CoinIcon")
+│   │   └── TextLabel (ชื่อ "MoneyAmount")
+│   └── Frame (ชื่อ "ItemRewards")
+│       ├── UIListLayout
+│       └── Frame (ชื่อ "RewardItem") [จะถูกโคลนสำหรับแต่ละรางวัล]
+│           ├── ImageLabel (ชื่อ "ItemIcon")
+│           └── TextLabel (ชื่อ "ItemName")
+└── TextButton (ชื่อ "CloseButton")
+    ├── UICorner
+    ├── UIStroke
+    └── TextLabel (ชื่อ "CloseText")
+
+9. หน้าคาสิโน (Casino Screen)
+Frame (ชื่อ "CasinoUI")
+├── UICorner
+├── UIStroke
+├── ImageLabel (ชื่อ "CasinoBackground")
+├── TextLabel (ชื่อ "CasinoTitle")
+├── Frame (ชื่อ "GameContainer")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── Frame (ชื่อ "SpinWheel")
+│   │   ├── UICorner
+│   │   ├── ImageLabel (ชื่อ "WheelImage")
+│   │   └── Frame (ชื่อ "Pointer")
+│   └── TextButton (ชื่อ "SpinButton")
+│       ├── UICorner
+│       ├── UIStroke
+│       └── TextLabel (ชื่อ "SpinText")
+├── Frame (ชื่อ "BetContainer")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── TextLabel (ชื่อ "BetTitle")
+│   ├── Frame (ชื่อ "BetInput")
+│   │   ├── UICorner
+│   │   ├── UIStroke
+│   │   ├── TextBox (ชื่อ "BetAmount")
+│   │   ├── TextButton (ชื่อ "IncreaseBet")
+│   │   │   └── TextLabel (ชื่อ "IncreaseText")
+│   │   └── TextButton (ชื่อ "DecreaseBet")
+│   │       └── TextLabel (ชื่อ "DecreaseText")
+│   ├── TextButton (ชื่อ "BetButton")
+│   │   ├── UICorner
+│   │   ├── UIStroke
+│   │   └── TextLabel (ชื่อ "BetText")
+│   └── TextButton (ชื่อ "CancelButton")
+│       ├── UICorner
+│       ├── UIStroke
+│       └── TextLabel (ชื่อ "CancelText")
+├── Frame (ชื่อ "PlayerMoneyDisplay")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── ImageLabel (ชื่อ "CoinIcon")
+│   └── TextLabel (ชื่อ "MoneyAmount")
+└── Frame (ชื่อ "ResultScreen")
+    ├── UICorner
+    ├── UIStroke
+    ├── TextLabel (ชื่อ "ResultText")
+    ├── TextLabel (ชื่อ "WinningsText")
+    └── TextButton (ชื่อ "ContinueButton")
+        ├── UICorner
+        ├── UIStroke
+        └── TextLabel (ชื่อ "ContinueText")
+
+10. หน้าธนาคาร (Bank Screen)
+Frame (ชื่อ "BankUI")
+├── UICorner
+├── UIStroke
+├── ImageLabel (ชื่อ "BankBackground")
+├── TextLabel (ชื่อ "BankTitle")
+├── Frame (ชื่อ "CurrentDepositContainer")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── TextLabel (ชื่อ "DepositTitle")
+│   └── TextLabel (ชื่อ "CurrentDepositAmount")
+├── Frame (ชื่อ "TransactionContainer")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── TextLabel (ชื่อ "TransactionTitle")
+│   ├── Frame (ชื่อ "AmountInput")
+│   │   ├── UICorner
+│   │   ├── UIStroke
+│   │   ├── TextBox (ชื่อ "AmountValue")
+│   │   ├── TextButton (ชื่อ "IncreaseAmount")
+│   │   │   └── TextLabel (ชื่อ "IncreaseText")
+│   │   └── TextButton (ชื่อ "DecreaseAmount")
+│   │       └── TextLabel (ชื่อ "DecreaseText")
+│   ├── TextButton (ชื่อ "DepositButton")
+│   │   ├── UICorner
+│   │   ├── UIStroke
+│   │   └── TextLabel (ชื่อ "DepositText")
+│   └── TextButton (ชื่อ "WithdrawButton")
+│       ├── UICorner
+│       ├── UIStroke
+│       └── TextLabel (ชื่อ "WithdrawText")
+├── Frame (ชื่อ "ReturnInfo")
+│   ├── UICorner
+│   ├── UIStroke
+│   └── TextLabel (ชื่อ "ReturnText")
+├── Frame (ชื่อ "PlayerMoneyDisplay")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── ImageLabel (ชื่อ "CoinIcon")
+│   └── TextLabel (ชื่อ "MoneyAmount")
+└── TextButton (ชื่อ "ExitButton")
+    ├── UICorner
+    ├── UIStroke
+    └── TextLabel (ชื่อ "ExitText")
+
+11. หน้าเมื่อเกมจบ (Game Over Screen)
+ScreenGui (ชื่อ "GameOverScreen")
+├── Frame (ชื่อ "Background")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── ImageLabel (ชื่อ "WinnerBackground")
+│   ├── TextLabel (ชื่อ "WinnerAnnouncement")
+│   ├── TextLabel (ชื่อ "WinnerName")
+│   ├── Frame (ชื่อ "StatsContainer")
+│   │   ├── UICorner
+│   │   ├── UIStroke
+│   │   ├── TextLabel (ชื่อ "StatsTitle")
+│   │   ├── TextLabel (ชื่อ "TurnsStat")
+│   │   ├── TextLabel (ชื่อ "CombatStat")
+│   │   └── TextLabel (ชื่อ "MoneyStat")
+│   ├── TextButton (ชื่อ "PlayAgainButton")
+│   │   ├── UICorner
+│   │   ├── UIStroke
+│   │   └── TextLabel (ชื่อ "PlayAgainText")
+│   └── TextButton (ชื่อ "QuitButton")
+│       ├── UICorner
+│       ├── UIStroke
+│       └── TextLabel (ชื่อ "QuitText")
+
+12. องค์ประกอบ UI เพิ่มเติม
+Frame (ชื่อ "NotificationSystem")
+├── UIListLayout
+└── Frame (ชื่อ "Notification") [จะถูกโคลนสำหรับแต่ละการแจ้งเตือน]
+    ├── UICorner
+    ├── UIStroke
+    ├── ImageLabel (ชื่อ "NotificationIcon")
+    ├── TextLabel (ชื่อ "NotificationText")
+    └── TextButton (ชื่อ "CloseNotification")
+        └── TextLabel (ชื่อ "CloseText")
+
+Frame (ชื่อ "SettingsUI")
+├── UICorner
+├── UIStroke
+├── TextLabel (ชื่อ "SettingsTitle")
+├── Frame (ชื่อ "SoundSettings")
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── TextLabel (ชื่อ "SoundTitle")
+│   ├── Frame (ชื่อ "MusicVolumeSlider")
+│   │   ├── TextLabel (ชื่อ "MusicLabel")
+│   │   ├── Frame (ชื่อ "SliderBackground")
+│   │   │   ├── UICorner
+│   │   │   └── Frame (ชื่อ "SliderFill")
+│   │   │       └── UICorner
+│   │   └── TextButton (ชื่อ "SliderButton")
+│   │       └── UICorner
+│   └── Frame (ชื่อ "SFXVolumeSlider")
+│       ├── TextLabel (ชื่อ "SFXLabel")
+│       ├── Frame (ชื่อ "SliderBackground")
+│       │   ├── UICorner
+│       │   └── Frame (ชื่อ "SliderFill")
+│       │       └── UICorner
+│       └── TextButton (ชื่อ "SliderButton")
+│           └── UICorner
+└── TextButton (ชื่อ "CloseSettings")
+    ├── UICorner
+    ├── UIStroke
+    └── TextLabel (ชื่อ "CloseText")
+
+12. UI สุ่มไอเทมหรือของอื่นๆ
+
+ScreenGui (ชื่อ "ItemCardGui")
+├── Frame (ชื่อ "Backdrop")
+└── Frame (ชื่อ "MainFrame")
+    └── Frame (ชื่อ "OuterCardFrame")
+        └── Frame (ชื่อ "InnerCardFrame")
+            ├── Frame (ชื่อ "HeaderFrame")
+            │   └── TextLabel (ชื่อ "TitleText")
+            ├── Frame (ชื่อ "IconFrameOuter")
+            │   ├── UICorner
+            │   └── Frame (ชื่อ "IconFrame")
+            │       ├── UICorner
+            │       └── ImageLabel (ชื่อ "ItemIcon")
+            ├── Frame (ชื่อ "RarityFrame")
+            │   ├── UICorner
+            │   └── TextLabel (ชื่อ "RarityText")
+            ├── Frame (ชื่อ "DescriptionFrame")
+            │   └── ScrollingFrame (ชื่อ "DescriptionScroll")
+            │       └── TextLabel (ชื่อ "DescriptionText")
+            ├── TextButton (ชื่อ "DiscardButton")
+            │   └── UICorner
+            └── TextButton (ชื่อ "KeepButton")
+                └── UICorner

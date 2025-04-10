@@ -1,0 +1,100 @@
+1. ServerScriptService (สคริปต์ฝั่งเซิร์ฟเวอร์)
+ServerScriptService/
+├── GameManager.server.lua              # ServerScript - สคริปต์หลักที่ควบคุมลอจิกเกมทั้งหมด
+├── Services/
+│   ├── BoardService.server.lua         # ServerScript - จัดการกระดานเกมและตำแหน่ง
+│   ├── ClassService.server.lua         # ServerScript - จัดการระบบคลาสและเลเวล
+│   ├── CombatService.server.lua        # ServerScript - จัดการระบบการต่อสู้
+│   ├── InventoryService.server.lua     # ServerScript - จัดการระบบ Inventory
+│   ├── QuestService.server.lua         # ServerScript - จัดการระบบเควส
+│   ├── ShopService.server.lua          # ServerScript - จัดการร้านค้าและการซื้อขาย
+│   ├── EventService.server.lua         # ServerScript - จัดการอีเว้นต์ช่องพิเศษ
+│   ├── DatabaseService.server.lua      # ServerScript - จัดการฐานข้อมูลและการเก็บข้อมูล
+│   └── TurnService.server.lua          # ServerScript - จัดการระบบเทิร์นและลำดับผู้เล่น
+└── Init.server.lua                     # ServerScript - สคริปต์เริ่มต้นระบบ
+
+2. ServerStorage (เก็บข้อมูลเซิร์ฟเวอร์)
+ServerStorage/
+├── Modules/                            # โมดูลใช้งานฝั่งเซิร์ฟเวอร์
+│   ├── BoardSystem.lua                 # ModuleScript - ระบบกระดานและการเดิน
+│   ├── CombatSystem.lua                # ModuleScript - ระบบการต่อสู้และคำนวณดาเมจ
+│   ├── ClassSystem.lua                 # ModuleScript - ระบบคลาสและการอัพเลเวล
+│   ├── InventorySystem.lua             # ModuleScript - ระบบ Inventory และการจัดการไอเทม
+│   ├── QuestSystem.lua                 # ModuleScript - ระบบเควสและภารกิจ
+│   ├── ShopSystem.lua                  # ModuleScript - ระบบร้านค้าและราคา
+│   ├── CasinoSystem.lua                # ModuleScript - ระบบคาสิโนและการพนัน
+│   ├── BankSystem.lua                  # ModuleScript - ระบบธนาคารและการฝากเงิน
+│   └── Utilities.lua                   # ModuleScript - ฟังก์ชันอรรถประโยชน์ต่างๆ
+├── GameData/                           # ข้อมูลเกม
+│   ├── ItemData.lua                    # ModuleScript - ข้อมูลไอเทมทั้งหมด
+│   ├── ClassData.lua                   # ModuleScript - ข้อมูลคลาสต่างๆ
+│   ├── MapData.lua                     # ModuleScript - ข้อมูลแมพและเส้นทาง
+│   ├── ShopData.lua                    # ModuleScript - ข้อมูลร้านค้าและสินค้า
+│   ├── QuestData.lua                   # ModuleScript - ข้อมูลเควสและรางวัล
+│   └── CombatData.lua                  # ModuleScript - ข้อมูลสกิลและการต่อสู้
+└── PlayerData/                         # โฟลเดอร์สำหรับเก็บข้อมูลผู้เล่น
+
+3. ReplicatedStorage (ข้อมูลที่แชร์ระหว่างเซิร์ฟเวอร์และไคลเอนต์)
+ReplicatedStorage/
+├── Events/
+│   ├── BoardEvents.lua                 # ModuleScript - RemoteEvents สำหรับกระดาน
+│   ├── CombatEvents.lua                # ModuleScript - RemoteEvents สำหรับการต่อสู้
+│   ├── UIEvents.lua                    # ModuleScript - RemoteEvents สำหรับ UI
+│   └── GameEvents.lua                  # ModuleScript - RemoteEvents สำหรับเกม
+├── SharedModules/
+│   ├── Constants.lua                   # ModuleScript - ค่าคงที่ใช้ร่วมกัน
+│   ├── Enums.lua                       # ModuleScript - Enumerations
+│   ├── SharedUtilities.lua             # ModuleScript - ฟังก์ชันที่ใช้ร่วมกัน
+│   └── Types.lua                       # ModuleScript - กำหนดรูปแบบข้อมูล
+└── Remotes/                            # RemoteEvent และ RemoteFunction
+    ├── BoardRemotes/                   # RemoteEvent สำหรับกระดาน
+    ├── CombatRemotes/                  # RemoteEvent สำหรับการต่อสู้
+    ├── UIRemotes/                      # RemoteEvent สำหรับ UI
+    └── GameRemotes/                    # RemoteEvent สำหรับเกม
+#ส่วน event คุณสามารถสร้างเพิ่มเองได้เลย
+
+4. StarterPlayer (สคริปต์ฝั่งผู้เล่น)
+StarterPlayer/
+└── StarterPlayerScripts/
+    ├── ClientMain.client.lua           # LocalScript - สคริปต์หลักฝั่งไคลเอนต์
+    ├── Controllers/
+    │   ├── BoardController.lua         # ModuleScript - ควบคุมการแสดงผลกระดาน
+    │   ├── CombatController.lua        # ModuleScript - ควบคุมการแสดงผลการต่อสู้
+    │   ├── UIController.lua            # ModuleScript - ควบคุม UI ทั้งหมด
+    │   ├── CameraController.lua        # ModuleScript - ควบคุมกล้อง
+    │   ├── InputController.lua         # ModuleScript - ควบคุมการรับอินพุต
+    │   ├── AnimationController.lua     # ModuleScript - ควบคุมแอนิเมชัน
+    │   └── SoundController.lua         # ModuleScript - ควบคุมเสียง
+    └── UI/
+        ├── LoadingScreenHandler.lua    # LocalScript - จัดการหน้าโหลด
+        ├── ClassSelectionHandler.lua   # LocalScript - จัดการหน้าเลือกคลาส
+        ├── MainGameUIHandler.lua       # LocalScript - จัดการ UI หลัก
+        ├── DiceRollHandler.lua         # LocalScript - จัดการหน้าทอยลูกเต๋า
+        ├── CombatUIHandler.lua         # LocalScript - จัดการ UI การต่อสู้
+        ├── ShopUIHandler.lua           # LocalScript - จัดการ UI ร้านค้า
+        ├── InventoryUIHandler.lua      # LocalScript - จัดการ UI คลังของ
+        ├── QuestUIHandler.lua          # LocalScript - จัดการ UI เควส
+        ├── CasinoUIHandler.lua         # LocalScript - จัดการ UI คาสิโน
+        ├── BankUIHandler.lua           # LocalScript - จัดการ UI ธนาคาร
+        └── GameOverHandler.lua         # LocalScript - จัดการหน้าจบเกม
+
+5. StarterGui (UI ที่แสดงเมื่อผู้เล่นเข้าเกม)
+StarterGui/
+├── LoadingScreen/                      # ScreenGui - หน้าโหลดเกม
+├── ClassSelection/                     # ScreenGui - หน้าเลือกคลาส
+├── MainGameUI/                         # ScreenGui - UI หลักระหว่างเล่น
+├── PopupUI/                            # ScreenGui - สำหรับ UI แบบป๊อปอัพ
+│   ├── DiceRollUI/                     # Frame - หน้าทอยลูกเต๋า (ซ่อนไว้ตอนเริ่ม)
+│   ├── CombatUI/                       # Frame - หน้าต่อสู้ (ซ่อนไว้ตอนเริ่ม)
+│   ├── ShopUI/                         # Frame - หน้าร้านค้า (ซ่อนไว้ตอนเริ่ม)
+│   ├── InventoryUI/                    # Frame - หน้า Inventory (ซ่อนไว้ตอนเริ่ม)
+│   ├── QuestUI/                        # Frame - หน้าเควส (ซ่อนไว้ตอนเริ่ม)
+│   ├── CasinoUI/                       # Frame - หน้าคาสิโน (ซ่อนไว้ตอนเริ่ม)
+│   ├── BankUI/                         # Frame - หน้าธนาคาร (ซ่อนไว้ตอนเริ่ม)
+│   └── SettingsUI/                     # Frame - หน้าตั้งค่า (ซ่อนไว้ตอนเริ่ม)
+├── NotificationSystem/                 -- ScreenGui - ระบบแจ้งเตือน
+│   ├── NotificationSystemWorkspace/    -- Frame - หน้าแจ้งเตือน (ซ่อนไว้ตอนเริ่ม)
+└── GameOverScreen/                     # ScreenGui - หน้าเกมจบ (ซ่อนไว้ตอนเริ่ม)
+
+
+ส่วนอื่นๆคุณสามารถเพิ่มเติมได้เลยครับ
