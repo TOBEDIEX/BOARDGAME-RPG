@@ -36,6 +36,7 @@ ServerStorage/
 
 3. ReplicatedStorage (ข้อมูลที่แชร์ระหว่างเซิร์ฟเวอร์และไคลเอนต์)
 ReplicatedStorage/
+├── VFX/                                # MODEL สำหรับเก็บเอฟเฟคต่างๆ(เดี๋ยวผมสร้างเอง)
 ├── Events/
 │   ├── BoardEvents.lua                 # ModuleScript - RemoteEvents สำหรับกระดาน
 │   ├── CombatEvents.lua                # ModuleScript - RemoteEvents สำหรับการต่อสู้
