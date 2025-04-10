@@ -1,0 +1,182 @@
+-- BoardService.server.lua
+-- บริการฝั่งเซิร์ฟเวอร์สำหรับจัดการระบบกระดาน (ปรับปรุง V2: แก้ไข UI เลือกทาง + หมายเหตุจุด Start)
+-- วางที่: ServerScriptService/Services/BoardService.server.lua
+
+local ServerStorage = game:GetService("ServerStorage")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+
+-- โหลดโมดูลที่จำเป็น
+local Modules = ServerStorage:WaitForChild("Modules")
+local BoardSystem = require(Modules:WaitForChild("BoardSystem"))
+local MapData = require(ServerStorage.GameData.MapData)
+
+-- รับ Remote Events
+local remotes = ReplicatedStorage:WaitForChild("Remotes")
+local boardRemotes = remotes:WaitForChild("BoardRemotes")
+local gameRemotes = remotes:WaitForChild("GameRemotes")
+local uiRemotes = remotes:WaitForChild("UIRemotes")
+
+-- ตรวจสอบและสร้าง Remote Events ที่จำเป็น
+local function ensureRemoteEvents()
+	local requiredEvents = {
+		"RollDice",
+		"PlayerArrivedAtTile",
+		-- "ShowPathSelection", -- << ไม่ได้ใช้ส่งจาก Server โดยตรงแล้ว Client จะแสดงเอง
+		"ChoosePath",
+		"TileTriggerEvent",
+		"ActivityComplete",
+		"StartPlayerMovementPath"
+	}
+
+	for _, eventName in ipairs(requiredEvents) do
+		if not boardRemotes:FindFirstChild(eventName) then
+			local event = Instance.new("RemoteEvent")
+			event.Name = eventName
+			event.Parent = boardRemotes
+			print("สร้าง RemoteEvent: " .. eventName)
+		end
+	end
+	-- สร้าง ShowPathSelection เผื่อ Client อื่นยังใช้ (แต่ Service นี้ไม่ควร Fire โดยตรงแล้ว)
+	if not boardRemotes:FindFirstChild("ShowPathSelection") then
+		local event = Instance.new("RemoteEvent", boardRemotes)
+		event.Name = "ShowPathSelection"
+		print("สร้าง RemoteEvent: ShowPathSelection (เผื่อใช้ แต่ไม่ควร Fire จากที่นี่)")
+	end
+end
+
+-- Constants
+local DIRECTIONS = { FRONT = "FRONT", LEFT = "LEFT", RIGHT = "RIGHT" }
+
+-- รับ GameManager จาก global variable (เหมือนเดิม)
+local function getGameManager()
+	local startTime = tick()
+	local timeout = 10
+	while not _G.GameManager do
+		if tick() - startTime > timeout then warn("หมดเวลารอ GameManager ใน BoardService") return nil end
+		task.wait(0.1)
+	end
+	return _G.GameManager
+end
+
+-- ฟังก์ชันหลักสำหรับเริ่มต้นบริการ
+local function initializeBoardService()
+	print("กำลังเริ่มต้น BoardService...")
+	ensureRemoteEvents()
+	local boardSystem = BoardSystem.new()
+
+	-- โหลด Map (เหมือนเดิม)
+	if not MapData then warn("ไม่พบ MapData...") boardSystem:LoadMap({tiles={[1]={type="start", position=Vector3.new(0,0,0)}}, connections={}}) else boardSystem:LoadMap(MapData) end
+
+	local gameManager = getGameManager()
+	if not gameManager then error("ไม่สามารถรับ GameManager ได้ใน BoardService") return end
+	gameManager.boardSystem = boardSystem
+
+	-- ตั้งค่า callbacks (เหมือนเดิม)
+	boardSystem:SetupCallbacks(
+		function(playerId, fromTileId, toTileId)
+			print(string.format("[BoardSystem Callback] Player %d moved logically from %s to %s", playerId, tostring(fromTileId), tostring(toTileId)))
+		end,
+		function(playerId, finalTileId)
+			print(string.format("[BoardSystem Callback] Player %d completed path at tile %s", playerId, tostring(finalTileId)))
+			boardRemotes.PlayerArrivedAtTile:FireAllClients(playerId, finalTileId)
+			task.spawn(function()
+				task.wait(0.5)
+				if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
+					print("จบเทิร์นเนื่องจากเดินทางเสร็จสิ้น (onPlayerPathComplete)")
+					gameManager.turnSystem:EndPlayerTurn(playerId, "move_complete")
+				end
+			end)
+		end,
+		function(playerId, tileId, tileInfo)
+			print(string.format("[BoardSystem Callback] Player %d triggered effect on tile %s (%s)", playerId, tostring(tileId), tileInfo.type))
+			boardRemotes.TileTriggerEvent:FireAllClients(playerId, tileId, tileInfo.type)
+			ProcessTileEffect(playerId, tileId, tileInfo)
+		end
+	)
+
+	-- ฟังก์ชันประมวลผลเอฟเฟคของช่อง (เหมือนเดิม)
+	function ProcessTileEffect(playerId, tileId, tileInfo)
+		-- ... โค้ดเดิม ...
+		print("กำลังประมวลผลเอฟเฟคช่องสำหรับผู้เล่น " .. (Players:GetPlayerByUserId(playerId) and Players:GetPlayerByUserId(playerId).Name or playerId) .. " บนช่อง " .. tileId .. " (ประเภท: " .. tileInfo.type .. ")")
+		-- ... โค้ดเดิม ...
+	end
+
+	-- ตั้งค่า handlers สำหรับ remote events
+
+	-- จัดการการทอยลูกเต๋า
+	boardRemotes.RollDice.OnServerEvent:Connect(function(player, diceResult)
+		local playerId = player.UserId
+		if gameManager.turnSystem and gameManager.turnSystem:GetCurrentPlayerTurn() ~= playerId then warn("ผู้เล่น " .. player.Name .. " พยายามทอยลูกเต๋านอกเทิร์น") return end
+		print("ผู้เล่น " .. player.Name .. " ทอยได้ " .. diceResult)
+
+		local moveInfo = boardSystem:ProcessPlayerMove(playerId, diceResult)
+
+		if moveInfo and moveInfo.autoPath and #moveInfo.autoPath > 0 then
+			print("ส่งข้อมูลการเคลื่อนที่ให้ Client: Path=", table.concat(moveInfo.autoPath, " -> "), "RequiresChoice=", tostring(moveInfo.requiresChoice))
+			-- << ส่งข้อมูล path และ directions (ถ้ามี) ไปใน Event เดียวกัน
+			local movementData = {
+				path = moveInfo.autoPath,
+				directions = moveInfo.requiresChoice and moveInfo.availableDirections or nil
+			}
+			boardRemotes.StartPlayerMovementPath:FireClient(player, playerId, movementData)
+
+			-- << ลบการ Fire ShowPathSelection ออกจากตรงนี้
+			-- if moveInfo.requiresChoice then
+			-- 	print("ต้องเลือกเส้นทาง ส่ง ShowPathSelection")
+			-- 	boardRemotes.ShowPathSelection:FireClient(player, moveInfo.availableDirections)
+			-- end
+		else
+			warn("ProcessPlayerMove ไม่คืนค่า moveInfo หรือ autoPath ที่ถูกต้องสำหรับ Player " .. playerId)
+			if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
+				print("ไม่มีการเคลื่อนไหว จบเทิร์น")
+				gameManager.turnSystem:EndPlayerTurn(playerId, "no_move")
+			end
+		end
+	end)
+
+	-- จัดการการเลือกเส้นทาง
+	boardRemotes.ChoosePath.OnServerEvent:Connect(function(player, direction)
+		local playerId = player.UserId
+		if gameManager.turnSystem and gameManager.turnSystem:GetCurrentPlayerTurn() ~= playerId then warn("ผู้เล่น " .. player.Name .. " พยายามเลือกเส้นทางนอกเทิร์น") return end
+		print("ผู้เล่น " .. player.Name .. " เลือกทิศทาง: " .. direction)
+
+		local moveResult = boardSystem:ProcessDirectionChoice(playerId, direction)
+
+		if moveResult and moveResult.autoPath and #moveResult.autoPath > 0 then
+			print("ส่งข้อมูลการเคลื่อนที่ (หลังเลือก) ให้ Client: Path=", table.concat(moveResult.autoPath, " -> "), "RequiresChoice=", tostring(moveResult.requiresChoice))
+			-- << ส่งข้อมูล path และ directions (ถ้ามี) ไปใน Event เดียวกัน
+			local movementData = {
+				path = moveResult.autoPath,
+				directions = moveResult.requiresChoice and moveResult.availableDirections or nil
+			}
+			boardRemotes.StartPlayerMovementPath:FireClient(player, playerId, movementData)
+
+			-- << ลบการ Fire ShowPathSelection ออกจากตรงนี้
+			-- if moveResult.requiresChoice then
+			-- 	print("ยังต้องเลือกเส้นทางอีก ส่ง ShowPathSelection")
+			-- 	boardRemotes.ShowPathSelection:FireClient(player, moveResult.availableDirections)
+			-- end
+		else
+			warn("ProcessDirectionChoice ไม่คืนค่า moveResult หรือ autoPath ที่ถูกต้องสำหรับ Player " .. playerId .. " direction " .. direction)
+			if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
+				print("การเลือกทิศทางไม่ถูกต้อง จบเทิร์น")
+				gameManager.turnSystem:EndPlayerTurn(playerId, "invalid_choice")
+			end
+		end
+	end)
+
+	-- จัดการการเสร็จสิ้นกิจกรรม (เหมือนเดิม)
+	boardRemotes.ActivityComplete.OnServerEvent:Connect(function(player, activityType)
+		-- ... โค้ดเดิม ...
+	end)
+
+	print("BoardService เริ่มต้นสำเร็จ")
+	return boardSystem
+end
+
+-- เริ่มต้นบริการ
+local boardSystemInstance = initializeBoardService()
+_G.BoardSystem = boardSystemInstance
+return boardSystemInstance
