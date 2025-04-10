@@ -1,34 +1,34 @@
---[[
-  File: ReplicatedStorage/SharedModules/ClassData.lua
-  Type: ModuleScript
-  Description: Contains data definitions for all character classes,
-               including base stats, descriptions, icons, and upgrade paths.
-]]
+-- ClassData.lua
+-- ข้อมูลและคุณสมบัติของคลาสต่างๆ ในเกม
+-- Version: 1.0.1 (Optimized)
+-- วางที่: ReplicatedStorage/SharedModules/ClassData.lua
 
 local ClassData = {}
 
+-- ข้อมูลคลาสทั้งหมด
 ClassData.Classes = {
-	-- ================== Warrior Path ==================
+	-- ===== สายนักรบ =====
 	Warrior = {
-		DisplayName = "นักรบ",
+		DisplayName = "Warrior",
 		Description = "เชี่ยวชาญการต่อสู้ระยะประชิด มีพลังชีวิตและพลังป้องกันเริ่มต้นที่สมดุล",
-		IconAssetId = "rbxassetid://0", -- !! แทนที่ด้วย Asset ID ของไอคอนนักรบ !!
+		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = {
 			MaxHP = 120,
 			MaxMP = 30,
-			ATK = 12,  -- พลังโจมตีกายภาพ
-			DEF = 8,   -- พลังป้องกันกายภาพ
-			MAGIC = 5, -- พลังโจมตีเวทย์ (อาจไม่ค่อยได้ใช้)
-			MDEF = 5,  -- พลังป้องกันเวทย์
-			AGI = 7,   -- ความเร็ว/การหลบหลีก (ถ้ามี)
+			ATK = 12,
+			DEF = 8,
+			MAGIC = 5,
+			MDEF = 5,
+			AGI = 7,
 		},
-		NextClass = "Knight", -- คลาสถัดไป
-		UpgradeCondition = { Type = "Level", Value = 10 }, -- เงื่อนไขการอัปเกรด (ตัวอย่าง: เลเวล 10)
+		NextClass = "Knight",
+		UpgradeCondition = { Type = "Level", Value = 10 },
 	},
+
 	Knight = {
-		DisplayName = "อัศวิน",
+		DisplayName = "Knight",
 		Description = "นักรบผู้ช่ำชอง เกราะหนาและพลังโจมตีที่หนักหน่วงขึ้น สามารถปกป้องเพื่อนร่วมทีมได้",
-		IconAssetId = "rbxassetid://0", -- !! แทนที่ด้วย Asset ID ของไอคอนอัศวิน !!
+		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = {
 			MaxHP = 180,
 			MaxMP = 50,
@@ -38,19 +38,20 @@ ClassData.Classes = {
 			MDEF = 10,
 			AGI = 5,
 		},
-		NextClass = "Paladin", -- คลาสถัดไป (ตัวอย่าง)
-		UpgradeCondition = { Type = "Quest", Value = "ProveYourValor" }, -- เงื่อนไข (ตัวอย่าง: ทำเควส)
+		NextClass = "Paladin",
+		UpgradeCondition = { Type = "Quest", Value = "ProveYourValor" },
 	},
+
 	Paladin = {
-		DisplayName = "พาลาดิน",
+		DisplayName = "Paladin",
 		Description = "อัศวินศักดิ์สิทธิ์ ผู้ผสานพลังแห่งการต่อสู้เข้ากับการปกป้องและเวทมนตร์สนับสนุน",
-		IconAssetId = "rbxassetid://0", -- !! แทนที่ด้วย Asset ID ของไอคอนพาลาดิน !!
+		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = {
 			MaxHP = 250,
 			MaxMP = 100,
 			ATK = 22,
 			DEF = 20,
-			MAGIC = 15, -- มีพลังเวทย์เพิ่มขึ้น
+			MAGIC = 15,
 			MDEF = 18,
 			AGI = 6,
 		},
@@ -58,11 +59,11 @@ ClassData.Classes = {
 		UpgradeCondition = nil,
 	},
 
-	-- ================== Mage Path ==================
+	-- ===== สายเวทย์ =====
 	Mage = {
-		DisplayName = "นักเวทย์",
+		DisplayName = "Mage",
 		Description = "ผู้ใช้พลังเวทมนตร์ โจมตีจากระยะไกลด้วยคาถาหลากหลายรูปแบบ",
-		IconAssetId = "rbxassetid://0", -- !! แทนที่ด้วย Asset ID ของไอคอนนักเวทย์ !!
+		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = {
 			MaxHP = 80,
 			MaxMP = 80,
@@ -75,10 +76,11 @@ ClassData.Classes = {
 		NextClass = "Wizard",
 		UpgradeCondition = { Type = "Level", Value = 10 },
 	},
+
 	Wizard = {
-		DisplayName = "พ่อมด/แม่มด",
+		DisplayName = "Wizard",
 		Description = "เชี่ยวชาญเวทมนตร์ธาตุต่างๆ มีพลังทำลายล้างสูงขึ้นและคาถาที่ซับซ้อนกว่าเดิม",
-		IconAssetId = "rbxassetid://0", -- !! แทนที่ด้วย Asset ID ของไอคอนพ่อมด/แม่มด !!
+		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = {
 			MaxHP = 110,
 			MaxMP = 150,
@@ -89,12 +91,13 @@ ClassData.Classes = {
 			AGI = 7,
 		},
 		NextClass = "Archmage",
-		UpgradeCondition = { Type = "Item", Value = "AncientGrimoire" }, -- เงื่อนไข (ตัวอย่าง: ใช้ไอเทม)
+		UpgradeCondition = { Type = "Item", Value = "AncientGrimoire" },
 	},
+
 	Archmage = {
-		DisplayName = "จอมเวทย์",
+		DisplayName = "Archmage",
 		Description = "ผู้บรรลุศาสตร์แห่งเวทมนตร์ขั้นสูงสุด ควบคุมพลังอันมหาศาลและคาถาที่เปลี่ยนแปลงสนามรบได้",
-		IconAssetId = "rbxassetid://0", -- !! แทนที่ด้วย Asset ID ของไอคอนจอมเวทย์ !!
+		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = {
 			MaxHP = 150,
 			MaxMP = 250,
@@ -108,11 +111,11 @@ ClassData.Classes = {
 		UpgradeCondition = nil,
 	},
 
-	-- ================== Thief Path ==================
+	-- ===== สายโจร =====
 	Thief = {
-		DisplayName = "โจร",
+		DisplayName = "Thief",
 		Description = "ว่องไวและมีเล่ห์เหลี่ยม สามารถสร้างความเสียหายอย่างรวดเร็วและหลบหลีกศัตรู",
-		IconAssetId = "rbxassetid://0", -- !! แทนที่ด้วย Asset ID ของไอคอนโจร !!
+		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = {
 			MaxHP = 90,
 			MaxMP = 50,
@@ -120,31 +123,33 @@ ClassData.Classes = {
 			DEF = 6,
 			MAGIC = 6,
 			MDEF = 6,
-			AGI = 12, -- โดดเด่นด้านความเร็ว
+			AGI = 12,
 		},
 		NextClass = "Assassin",
 		UpgradeCondition = { Type = "Level", Value = 10 },
 	},
+
 	Assassin = {
-		DisplayName = "นักฆ่า",
+		DisplayName = "Assassin",
 		Description = "เชี่ยวชาญการลอบสังหาร สร้างความเสียหายคริติคอลอย่างรุนแรงและเคลื่อนไหวในเงามืด",
-		IconAssetId = "rbxassetid://0", -- !! แทนที่ด้วย Asset ID ของไอคอนนักฆ่า !!
+		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = {
 			MaxHP = 130,
 			MaxMP = 80,
-			ATK = 16, -- อาจเน้น ATK หรือมีกลไกคริติคอลพิเศษ
+			ATK = 16,
 			DEF = 9,
 			MAGIC = 8,
 			MDEF = 9,
 			AGI = 18,
 		},
 		NextClass = "Shadow",
-		UpgradeCondition = { Type = "Skill", Value = "MasterStealth" }, -- เงื่อนไข (ตัวอย่าง: เรียนรู้สกิล)
+		UpgradeCondition = { Type = "Skill", Value = "MasterStealth" },
 	},
+
 	Shadow = {
-		DisplayName = "ชาโดว์",
+		DisplayName = "Shadow",
 		Description = "ปรมาจารย์แห่งเงา ผู้ใช้ทักษะลอบเร้นและการโจมตีที่ศัตรูไม่อาจคาดเดาได้",
-		IconAssetId = "rbxassetid://0", -- !! แทนที่ด้วย Asset ID ของไอคอนชาโดว์ !!
+		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = {
 			MaxHP = 180,
 			MaxMP = 120,
@@ -157,11 +162,9 @@ ClassData.Classes = {
 		NextClass = nil,
 		UpgradeCondition = nil,
 	},
-
-	-- สามารถเพิ่มคลาส หรือสายอาชีพอื่นๆ ได้ตามต้องการ
 }
 
--- ฟังก์ชันช่วยเหลือ (เผื่อต้องการใช้)
+-- ฟังก์ชันช่วยเหลือ
 function ClassData:GetClassInfo(className)
 	return self.Classes[className]
 end
@@ -180,6 +183,5 @@ function ClassData:GetUpgradeCondition(className)
 	local info = self:GetClassInfo(className)
 	return info and info.UpgradeCondition
 end
-
 
 return ClassData
