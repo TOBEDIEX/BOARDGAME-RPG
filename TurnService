@@ -1,6 +1,6 @@
 -- TurnService.server.lua
 -- จัดการระบบเทิร์นและลำดับผู้เล่น
--- Version: 2.0.0
+-- Version: 2.1.0 (Optimized)
 
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -12,46 +12,34 @@ local TurnSystem = require(ServerStorage.Modules.TurnSystem)
 -- สร้าง Service object เพื่อ return
 local TurnService = {}
 
--- หา GameManager จาก global variable
+-- ฟังก์ชันหาบริการอื่นๆ
 local function getGameManager()
 	local startTime = tick()
-	local timeout = 10 -- วินาที
-
-	while not _G.GameManager do
-		if tick() - startTime > timeout then
-			warn("Timeout waiting for GameManager in TurnService")
-			return nil
-		end
+	while not _G.GameManager and tick() - startTime < 10 do
 		wait(0.1)
 	end
-
 	return _G.GameManager
 end
 
--- รับ Player Manager
 local function getPlayerManager()
 	local gameManager = getGameManager()
 	return gameManager and gameManager.playerManager
 end
 
--- รับ Board System
 local function getBoardSystem()
 	local gameManager = getGameManager()
 	return gameManager and gameManager.boardSystem
 end
 
--- รับ Remote Events
-local remotes = ReplicatedStorage:WaitForChild("Remotes")
-local gameRemotes = remotes:WaitForChild("GameRemotes")
-local uiRemotes = remotes:WaitForChild("UIRemotes")
-local boardRemotes = remotes:WaitForChild("BoardRemotes")
-
 -- ฟังก์ชันเริ่มต้นบริการ
 function TurnService:Initialize()
-	print("TurnService initializing...")
-
 	-- สร้างระบบเทิร์น
 	local turnSystem = TurnSystem.new()
+
+	-- รับ Remote Events
+	local remotes = ReplicatedStorage:WaitForChild("Remotes")
+	local gameRemotes = remotes:WaitForChild("GameRemotes")
+	local uiRemotes = remotes:WaitForChild("UIRemotes")
 
 	-- ตั้งค่าการสื่อสารกับ Remote Events
 	turnSystem:InitializeRemotes(gameRemotes)
@@ -59,10 +47,9 @@ function TurnService:Initialize()
 	-- ดึง GameManager
 	local gameManager = getGameManager()
 	if not gameManager then
-		warn("GameManager not found, TurnService initialization delayed")
 		spawn(function()
-			wait(5) -- รอเพิ่มเติม
-			TurnService:Initialize() -- ลองอีกครั้ง
+			wait(5)
+			TurnService:Initialize()
 		end)
 		return nil
 	end
@@ -70,7 +57,7 @@ function TurnService:Initialize()
 	-- ตั้งค่า GameManager
 	gameManager.turnSystem = turnSystem
 
-	-- ตรวจสอบว่ามี Remote Event ที่จำเป็นหรือไม่
+	-- ตรวจสอบและสร้าง Remote Event ที่จำเป็น
 	if not uiRemotes:FindFirstChild("UpdateTurnDetails") then
 		local updateTurnDetailsEvent = Instance.new("RemoteEvent")
 		updateTurnDetailsEvent.Name = "UpdateTurnDetails"
@@ -81,19 +68,16 @@ function TurnService:Initialize()
 
 	-- เมื่อเริ่มเทิร์น
 	turnSystem.onTurnStart = function(playerID)
-		print("Turn started for player " .. playerID)
-
 		-- สร้างข้อมูลสำหรับ UI
 		local player = Players:GetPlayerByUserId(playerID)
 		if player then
-			local playerName = player.Name
 			local playerManager = getPlayerManager()
 			local playerData = playerManager and playerManager:GetPlayerData(player)
 
 			-- ส่งข้อมูลเพิ่มเติมไปยังทุกคลเอนต์
 			uiRemotes:WaitForChild("UpdateTurnDetails"):FireAllClients({
 				playerId = playerID,
-				playerName = playerName,
+				playerName = player.Name,
 				turnNumber = gameManager.gameState.currentTurn or 1,
 				playerClass = playerData and playerData.class or "Unknown",
 				playerLevel = playerData and playerData.stats and playerData.stats.level or 1
@@ -103,25 +87,12 @@ function TurnService:Initialize()
 
 	-- เมื่อจบเทิร์น
 	turnSystem.onTurnEnd = function(playerID, reason)
-		print("Turn ended for player " .. playerID .. " (Reason: " .. reason .. ")")
-
 		-- อัปเดต game state
 		if gameManager.gameState.currentTurn then
 			gameManager.gameState.currentTurn = gameManager.gameState.currentTurn + 1
 		else
 			gameManager.gameState.currentTurn = 1
 		end
-	end
-
-	-- เมื่ออัปเดตเวลาเทิร์น
-	turnSystem.onTurnTimerUpdate = function(timeRemaining)
-		-- ไม่ต้องทำอะไรเพิ่ม ข้อมูลจะถูกส่งไปยังคลเอนต์โดยตรง
-	end
-
-	-- เชื่อมต่อกับ BoardSystem เพื่อจบเทิร์นเมื่อเดินเสร็จ
-	local boardSystem = getBoardSystem()
-	if boardSystem then
-		-- ไม่ต้องทำอะไรเพิ่ม BoardService จะจัดการเรื่องนี้แล้ว
 	end
 
 	-- เชื่อมต่อกับเหตุการณ์ผู้เล่นออกจากเกม
@@ -148,9 +119,7 @@ function TurnService:Initialize()
 		turnSystem:Reset()
 	end)
 
-	print("TurnService initialized successfully")
-
-	-- เพิ่มไปที่ global state เพื่อการใช้งานจากบริการอื่น
+	-- เพิ่มไปที่ global state
 	_G.TurnSystem = turnSystem
 
 	return turnSystem
