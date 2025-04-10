@@ -1,7 +1,6 @@
 -- TurnSystem.lua
 -- โมดูลจัดการระบบเทิร์นและลำดับเล่นของผู้เล่น
--- Version: 2.0.0
--- ตำแหน่งที่ถูกต้อง: ServerStorage/Modules/Systems/TurnSystem.lua
+-- Version: 2.1.0 (Optimized)
 
 local TurnSystem = {}
 TurnSystem.__index = TurnSystem
@@ -11,38 +10,28 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 -- Constants
-local TURN_TIME_LIMIT = 120 -- จำนวนวินาทีสูงสุดต่อเทิร์น
-local INACTIVITY_WARNING_TIME = 90 -- เวลาที่จะเตือนผู้เล่นว่าใกล้หมดเวลา
+local TURN_TIME_LIMIT = 120
+local INACTIVITY_WARNING_TIME = 90
 
 function TurnSystem.new()
 	local self = setmetatable({}, TurnSystem)
 
-	-- ข้อมูลเทิร์นและลำดับเล่น
-	self.turnOrder = {}           -- ลำดับของผู้เล่น (array of playerIDs)
-	self.currentTurnIndex = 0     -- ดัชนีปัจจุบันในลำดับเทิร์น
-	self.currentPlayerTurn = nil  -- playerID ที่กำลังเล่นอยู่
-	self.isTurnActive = false     -- สถานะว่ากำลังอยู่ในเทิร์นหรือไม่
-
-	-- ตัวจับเวลาสำหรับแต่ละเทิร์น
-	self.turnTimer = nil          -- ตัวจับเวลาสำหรับจำกัดเวลาในเทิร์น
-	self.turnTimeRemaining = 0    -- เวลาที่เหลือในเทิร์นปัจจุบัน
-
-	-- สถานะพิเศษ
-	self.turnStates = {}          -- สถานะพิเศษต่างๆ ของเทิร์น (combat, shop, etc.)
-	self.skipTurnPlayers = {}     -- ผู้เล่นที่ต้องข้ามเทิร์น
-
-	-- Event callbacks
-	self.onTurnStart = nil        -- เมื่อเริ่มเทิร์นใหม่
-	self.onTurnEnd = nil          -- เมื่อจบเทิร์น
-	self.onTurnTimerUpdate = nil  -- เมื่ออัปเดตเวลาเทิร์น
-
-	-- Remote Events
-	self.remotes = nil            -- จะถูกกำหนดค่าใน InitializeRemotes
+	self.turnOrder = {}
+	self.currentTurnIndex = 0
+	self.currentPlayerTurn = nil
+	self.isTurnActive = false
+	self.turnTimer = nil
+	self.turnTimeRemaining = 0
+	self.turnStates = {}
+	self.skipTurnPlayers = {}
+	self.onTurnStart = nil
+	self.onTurnEnd = nil
+	self.onTurnTimerUpdate = nil
+	self.remotes = nil
 
 	return self
 end
 
--- ฟังก์ชันตั้งค่าการสื่อสารกับ Remote Events
 function TurnSystem:InitializeRemotes(gameRemotes)
 	if not gameRemotes then
 		local remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -56,18 +45,14 @@ function TurnSystem:InitializeRemotes(gameRemotes)
 		turnState = gameRemotes:FindFirstChild("TurnState") or Instance.new("RemoteEvent", gameRemotes)
 	}
 
-	-- ตั้งชื่อ RemoteEvents ที่สร้างขึ้นใหม่
-	if self.remotes.updateTurnTimer.Name ~= "UpdateTurnTimer" then
-		self.remotes.updateTurnTimer.Name = "UpdateTurnTimer"
-	end
-	if self.remotes.turnAction.Name ~= "TurnAction" then
-		self.remotes.turnAction.Name = "TurnAction"
-	end
-	if self.remotes.turnState.Name ~= "TurnState" then
-		self.remotes.turnState.Name = "TurnState"
+	-- Name events if newly created
+	for name, event in pairs(self.remotes) do
+		if event.Name ~= "UpdateTurn" and event.Name ~= name:sub(1,1):upper() .. name:sub(2) then
+			event.Name = name:sub(1,1):upper() .. name:sub(2)
+		end
 	end
 
-	-- เชื่อมต่อกับ Remote Events
+	-- Connect to turn action event
 	self.remotes.turnAction.OnServerEvent:Connect(function(player, actionType, actionData)
 		self:HandleTurnAction(player, actionType, actionData)
 	end)
@@ -75,49 +60,37 @@ function TurnSystem:InitializeRemotes(gameRemotes)
 	return self.remotes
 end
 
--- ฟังก์ชันกำหนดลำดับเทิร์นของผู้เล่น
 function TurnSystem:SetTurnOrder(players)
-	if type(players) == "table" then
-		self.turnOrder = players
-	else
-		warn("Invalid players table provided to SetTurnOrder")
-		return false
-	end
+	if type(players) ~= "table" then return false end
 
+	self.turnOrder = players
 	self.currentTurnIndex = 0
 	self.currentPlayerTurn = nil
 	self.isTurnActive = false
 
-	print("Turn order set with " .. #self.turnOrder .. " players")
 	return true
 end
 
--- ฟังก์ชันสร้างลำดับเทิร์นจากผู้เล่นที่เข้าร่วมเกม
 function TurnSystem:CreateTurnOrderFromActivePlayers(playerManager)
 	local playerOrder = {}
 
 	if playerManager then
-		-- ใช้ PlayerManager เพื่อรับข้อมูลผู้เล่นเรียงตามเวลาเข้าร่วม
 		local sortedPlayers = playerManager:GetPlayersSortedByJoinTime()
-
 		for _, playerData in ipairs(sortedPlayers) do
 			table.insert(playerOrder, playerData.player.UserId)
 		end
 	else
-		-- หากไม่มี PlayerManager ให้ใช้รายการผู้เล่นปัจจุบัน
 		for _, player in pairs(Players:GetPlayers()) do
 			table.insert(playerOrder, player.UserId)
 		end
 	end
 
-	-- สับเปลี่ยนลำดับเพื่อความยุติธรรม
+	-- Shuffle order for fairness
 	self:ShuffleTurnOrder(playerOrder)
 
-	-- ตั้งค่าลำดับเทิร์น
 	return self:SetTurnOrder(playerOrder)
 end
 
--- ฟังก์ชันสับเปลี่ยนลำดับเทิร์น
 function TurnSystem:ShuffleTurnOrder(order)
 	local playerCount = #order
 	for i = playerCount, 2, -1 do
@@ -127,106 +100,84 @@ function TurnSystem:ShuffleTurnOrder(order)
 	return order
 end
 
--- ฟังก์ชันเริ่มระบบเทิร์น
 function TurnSystem:StartTurnSystem()
-	if #self.turnOrder == 0 then
-		warn("Cannot start turn system with empty turn order")
-		return false
-	end
-
-	print("Starting turn system with " .. #self.turnOrder .. " players")
-
-	-- เริ่มต้นเทิร์นแรก
+	if #self.turnOrder == 0 then return false end
 	self:NextTurn()
-
 	return true
 end
 
--- ฟังก์ชันเริ่มเทิร์นของผู้เล่น
 function TurnSystem:StartPlayerTurn(playerID)
-	if not playerID then
-		warn("Invalid playerID provided to StartPlayerTurn")
-		return false
-	end
+	if not playerID then return false end
 
-	-- ตรวจสอบว่าผู้เล่นยังอยู่ในเกม
+	-- Check if player is still in game
 	local player = Players:GetPlayerByUserId(playerID)
 	if not player then
-		print("Player " .. playerID .. " not found, skipping turn")
 		self:NextTurn()
 		return false
 	end
 
-	-- ตรวจสอบว่าเป็นผู้เล่นที่ต้องข้ามเทิร์นหรือไม่
+	-- Check if player should skip turn
 	if self.skipTurnPlayers[playerID] then
-		print("Player " .. player.Name .. " is set to skip turn")
 		self.skipTurnPlayers[playerID] = self.skipTurnPlayers[playerID] - 1
-
 		if self.skipTurnPlayers[playerID] <= 0 then
 			self.skipTurnPlayers[playerID] = nil
 		end
-
 		self:NextTurn()
 		return false
 	end
 
-	-- ตั้งค่าข้อมูลเทิร์นปัจจุบัน
+	-- Set current turn data
 	self.currentPlayerTurn = playerID
 	self.isTurnActive = true
 	self.turnTimeRemaining = TURN_TIME_LIMIT
 
-	-- แจ้งไปยังทุกคลเอนต์ว่าเป็นเทิร์นของใคร
+	-- Notify clients
 	self.remotes.updateTurn:FireAllClients(playerID)
-
-	-- ส่งข้อมูลสถานะเทิร์นไปยังผู้เล่นปัจจุบัน
 	self.remotes.turnState:FireClient(player, {
 		timeLimit = TURN_TIME_LIMIT,
 		isYourTurn = true
 	})
 
-	-- เริ่มตัวจับเวลาเทิร์น
+	-- Start turn timer
 	self:StartTurnTimer()
 
-	-- เรียกใช้ callback เมื่อเริ่มเทิร์น
+	-- Call turn start callback
 	if self.onTurnStart then
 		self.onTurnStart(playerID)
 	end
 
-	print("Started turn for player " .. player.Name)
 	return true
 end
 
--- ฟังก์ชันเริ่มตัวจับเวลาเทิร์น
 function TurnSystem:StartTurnTimer()
-	-- เคลียร์ตัวจับเวลาเดิม
+	-- Clear previous timer
 	if self.turnTimer then
 		self.turnTimer:Disconnect()
 		self.turnTimer = nil
 	end
 
-	-- เริ่มตัวจับเวลาใหม่
+	-- Start new timer
 	local startTime = os.time()
 
 	self.turnTimer = game:GetService("RunService").Heartbeat:Connect(function()
 		if not self.isTurnActive then return end
 
-		-- คำนวณเวลาที่เหลือ
+		-- Calculate remaining time
 		local elapsedTime = os.time() - startTime
 		self.turnTimeRemaining = math.max(0, TURN_TIME_LIMIT - elapsedTime)
 
-		-- อัปเดตเวลาทุก 1 วินาที
+		-- Update every second
 		if elapsedTime % 1 == 0 then
-			-- ส่งข้อมูลเวลาไปยังทุกคลเอนต์
+			-- Send time to all clients
 			self.remotes.updateTurnTimer:FireAllClients(self.turnTimeRemaining)
 
-			-- เรียกใช้ callback เมื่ออัปเดตเวลา
+			-- Call timer update callback
 			if self.onTurnTimerUpdate then
 				self.onTurnTimerUpdate(self.turnTimeRemaining)
 			end
 
-			-- ตรวจสอบว่าใกล้หมดเวลาหรือไม่
+			-- Warn player when time is running out
 			if self.turnTimeRemaining == INACTIVITY_WARNING_TIME then
-				-- ส่งคำเตือนไปยังผู้เล่นปัจจุบัน
 				local player = Players:GetPlayerByUserId(self.currentPlayerTurn)
 				if player then
 					self.remotes.turnState:FireClient(player, {
@@ -236,7 +187,7 @@ function TurnSystem:StartTurnTimer()
 				end
 			end
 
-			-- ตรวจสอบว่าหมดเวลาหรือไม่
+			-- End turn when time runs out
 			if self.turnTimeRemaining <= 0 then
 				self:EndPlayerTurn(self.currentPlayerTurn, "timeout")
 			end
@@ -244,32 +195,28 @@ function TurnSystem:StartTurnTimer()
 	end)
 end
 
--- ฟังก์ชันจบเทิร์นของผู้เล่น
 function TurnSystem:EndPlayerTurn(playerID, reason)
 	reason = reason or "normal"
 
-	-- ตรวจสอบว่าเป็นเทิร์นของผู้เล่นที่ระบุหรือไม่
-	if playerID ~= self.currentPlayerTurn then
-		warn("Attempted to end turn for player " .. playerID .. " but current turn is for " .. (self.currentPlayerTurn or "none"))
-		return false
-	end
+	-- Check if it's the correct player's turn
+	if playerID ~= self.currentPlayerTurn then return false end
 
-	-- ล้างตัวแปรเทิร์นปัจจุบัน
+	-- Clear current turn variables
 	local endingPlayerID = self.currentPlayerTurn
 	self.isTurnActive = false
 
-	-- หยุดตัวจับเวลา
+	-- Stop timer
 	if self.turnTimer then
 		self.turnTimer:Disconnect()
 		self.turnTimer = nil
 	end
 
-	-- เรียกใช้ callback เมื่อจบเทิร์น
+	-- Call turn end callback
 	if self.onTurnEnd then
 		self.onTurnEnd(endingPlayerID, reason)
 	end
 
-	-- แจ้งผู้เล่นว่าเทิร์นจบแล้ว
+	-- Notify player
 	local player = Players:GetPlayerByUserId(endingPlayerID)
 	if player then
 		self.remotes.turnState:FireClient(player, {
@@ -279,47 +226,37 @@ function TurnSystem:EndPlayerTurn(playerID, reason)
 		})
 	end
 
-	print("Ended turn for player " .. (player and player.Name or endingPlayerID) .. " (Reason: " .. reason .. ")")
-
-	-- ไปยังเทิร์นถัดไป
+	-- Move to next turn
 	self:NextTurn()
 
 	return true
 end
 
--- ฟังก์ชันข้ามไปยังเทิร์นถัดไป
 function TurnSystem:NextTurn()
-	if #self.turnOrder == 0 then
-		warn("Cannot proceed to next turn with empty turn order")
-		return false
-	end
+	if #self.turnOrder == 0 then return false end
 
-	-- เพิ่มดัชนีเทิร์นไปยังผู้เล่นถัดไป
+	-- Increment turn index to next player
 	self.currentTurnIndex = (self.currentTurnIndex % #self.turnOrder) + 1
 	local nextPlayerID = self.turnOrder[self.currentTurnIndex]
 
-	-- เริ่มเทิร์นของผู้เล่นถัดไป
+	-- Start next player's turn
 	self:StartPlayerTurn(nextPlayerID)
 
 	return true
 end
 
--- ฟังก์ชันตั้งค่าการข้ามเทิร์นสำหรับผู้เล่น
 function TurnSystem:SetPlayerSkipTurns(playerID, turns)
 	if not playerID then return false end
 
 	if turns and turns > 0 then
 		self.skipTurnPlayers[playerID] = turns
-		print("Player " .. playerID .. " set to skip " .. turns .. " turns")
 	else
 		self.skipTurnPlayers[playerID] = nil
-		print("Removed turn skip for player " .. playerID)
 	end
 
 	return true
 end
 
--- ฟังก์ชันตั้งค่าสถานะพิเศษของเทิร์น (เช่น กำลังต่อสู้, กำลังซื้อของ)
 function TurnSystem:SetTurnState(playerID, stateName, stateValue)
 	if not playerID or not stateName then return false end
 
@@ -329,7 +266,7 @@ function TurnSystem:SetTurnState(playerID, stateName, stateValue)
 
 	self.turnStates[playerID][stateName] = stateValue
 
-	-- แจ้งผู้เล่นเกี่ยวกับการเปลี่ยนแปลงสถานะ
+	-- Notify player
 	local player = Players:GetPlayerByUserId(playerID)
 	if player then
 		self.remotes.turnState:FireClient(player, {
@@ -341,51 +278,39 @@ function TurnSystem:SetTurnState(playerID, stateName, stateValue)
 	return true
 end
 
--- ฟังก์ชันรับค่าสถานะพิเศษของเทิร์น
 function TurnSystem:GetTurnState(playerID, stateName)
 	if not playerID or not self.turnStates[playerID] then return nil end
-
 	return stateName and self.turnStates[playerID][stateName] or self.turnStates[playerID]
 end
 
--- ฟังก์ชันรับค่า playerID ที่กำลังเล่นอยู่
 function TurnSystem:GetCurrentPlayerTurn()
 	return self.currentPlayerTurn
 end
 
--- ฟังก์ชันตรวจสอบว่าเป็นเทิร์นของผู้เล่นหรือไม่
 function TurnSystem:IsPlayerTurn(playerID)
 	return playerID == self.currentPlayerTurn
 end
 
--- ฟังก์ชันจัดการกับการกระทำในเทิร์น
 function TurnSystem:HandleTurnAction(player, actionType, actionData)
 	local playerID = player.UserId
 
-	-- ตรวจสอบว่าเป็นเทิร์นของผู้เล่นหรือไม่
-	if not self:IsPlayerTurn(playerID) then
-		warn("Player " .. player.Name .. " attempted action during another player's turn")
-		return false
-	end
+	-- Check if it's player's turn
+	if not self:IsPlayerTurn(playerID) then return false end
 
-	-- จัดการกับแต่ละประเภทของการกระทำ
+	-- Handle different action types
 	if actionType == "endTurn" then
-		-- ผู้เล่นเลือกจบเทิร์น
 		return self:EndPlayerTurn(playerID, "player_choice")
 	elseif actionType == "rollDice" then
-		-- ผู้เล่นทอยลูกเต๋า (ไม่ต้องทำอะไรเพิ่ม เพราะจะมีการจัดการในระบบอื่น)
-		return true
+		return true -- Handled by other systems
 	elseif actionType == "useItem" then
-		-- ผู้เล่นใช้ไอเทม (ต้องมีการจัดการในระบบอื่น)
-		return true
+		return true -- Handled by other systems
 	end
 
 	return false
 end
 
--- ฟังก์ชันอัปเดตลำดับเทิร์นเมื่อผู้เล่นออกจากเกม
 function TurnSystem:HandlePlayerLeaving(playerID)
-	-- ลบผู้เล่นออกจากลำดับเทิร์น
+	-- Remove player from turn order
 	for i = #self.turnOrder, 1, -1 do
 		if self.turnOrder[i] == playerID then
 			table.remove(self.turnOrder, i)
@@ -393,33 +318,28 @@ function TurnSystem:HandlePlayerLeaving(playerID)
 		end
 	end
 
-	-- ถ้าเป็นเทิร์นของผู้เล่นที่ออกไป ให้ข้ามไปยังเทิร์นถัดไป
+	-- If it was this player's turn, move to next turn
 	if playerID == self.currentPlayerTurn then
-		print("Current turn player left the game, moving to next turn")
 		self:NextTurn()
 	elseif self.currentTurnIndex > #self.turnOrder then
-		-- ปรับดัชนีเทิร์นหากผู้เล่นที่ออกไปทำให้ดัชนีเกินขอบเขต
 		self.currentTurnIndex = 1
 	end
 
-	-- ล้างข้อมูลการข้ามเทิร์น
+	-- Clear player data
 	self.skipTurnPlayers[playerID] = nil
-
-	-- ล้างข้อมูลสถานะพิเศษ
 	self.turnStates[playerID] = nil
 
 	return true
 end
 
--- ฟังก์ชันรีเซ็ตระบบเทิร์น
 function TurnSystem:Reset()
-	-- หยุดตัวจับเวลา
+	-- Stop timer
 	if self.turnTimer then
 		self.turnTimer:Disconnect()
 		self.turnTimer = nil
 	end
 
-	-- ล้างข้อมูลเทิร์น
+	-- Clear all data
 	self.turnOrder = {}
 	self.currentTurnIndex = 0
 	self.currentPlayerTurn = nil
@@ -428,7 +348,6 @@ function TurnSystem:Reset()
 	self.turnStates = {}
 	self.skipTurnPlayers = {}
 
-	print("Turn system reset")
 	return true
 end
 
