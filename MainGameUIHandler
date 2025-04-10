@@ -1,6 +1,6 @@
--- MainGameUIHandler.lua
--- จัดการ UI หลักของเกม
--- Version: 2.0.0 (Optimized)
+-- StreamlinedMainGameUIHandler.lua
+-- จัดการ UI หลักของเกมและแสดงสถานะตามคลาสที่เลือก
+-- Version: 3.0.0 (Optimized)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -14,301 +14,91 @@ if not player then
 	player = Players.LocalPlayer
 end
 
+-- โหลดข้อมูลคลาสจาก SharedModules
+local ClassData = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("ClassData"))
+
 -- Get UI elements
 local PlayerGui = player:WaitForChild("PlayerGui")
 local MainGameUI = PlayerGui:WaitForChild("MainGameUI")
 local StatusBarContainer = MainGameUI:WaitForChild("StatusBarContainer")
 
--- Helper functions
-local function createUIElement(class, properties)
-	local element = Instance.new(class)
-	for prop, value in pairs(properties) do
-		element[prop] = value
-	end
-	return element
-end
+-- สีตามคลาส
+local CLASS_COLORS = {
+	Warrior = Color3.fromRGB(255, 255, 255),      -- สีแดง
+	Knight = Color3.fromRGB(180, 60, 60),       -- สีแดงเข้ม
+	Paladin = Color3.fromRGB(220, 100, 100),    -- สีแดงสว่าง
 
-local function setupUIComponent(elementType, properties, parent)
-	local element = createUIElement(elementType, properties)
-	element.Parent = parent
-	return element
-end
+	Mage = Color3.fromRGB(70, 100, 200),        -- สีน้ำเงิน
+	Wizard = Color3.fromRGB(50, 80, 180),       -- สีน้ำเงินเข้ม
+	Archmage = Color3.fromRGB(90, 120, 220),    -- สีน้ำเงินสว่าง
 
--- Load TurnIndicator module
-local TurnIndicator = nil
-if script.Parent and script.Parent:FindFirstChild("UI") and script.Parent.UI:FindFirstChild("TurnIndicator") then
-	TurnIndicator = require(script.Parent.UI.TurnIndicator)
-end
+	Thief = Color3.fromRGB(80, 180, 80),        -- สีเขียว
+	Assassin = Color3.fromRGB(60, 160, 60),     -- สีเขียวเข้ม
+	Shadow = Color3.fromRGB(100, 200, 100),     -- สีเขียวสว่าง
 
--- Create buttons if they don't exist
-local function ensureButtonsExist()
-	local InventoryButton = MainGameUI:FindFirstChild("InventoryButton")
-	local QuestButton = MainGameUI:FindFirstChild("QuestButton")
+	Default = Color3.fromRGB(150, 150, 150)     -- สีกลาง
+}
 
-	if not InventoryButton then
-		InventoryButton = setupUIComponent("TextButton", {
-			Name = "InventoryButton",
-			Size = UDim2.new(0.1, 0, 0.05, 0),
-			Position = UDim2.new(0.05, 0, 0.15, 0),
-			BackgroundColor3 = Color3.fromRGB(50, 50, 50),
-			Text = "Inventory",
-			TextColor3 = Color3.fromRGB(255, 255, 255),
-			Font = Enum.Font.GothamBold,
-			TextSize = 14
-		}, MainGameUI)
-
-		setupUIComponent("UICorner", {CornerRadius = UDim.new(0, 6)}, InventoryButton)
-	end
-
-	if not QuestButton then
-		QuestButton = setupUIComponent("TextButton", {
-			Name = "QuestButton",
-			Size = UDim2.new(0.1, 0, 0.05, 0),
-			Position = UDim2.new(0.16, 0, 0.15, 0),
-			BackgroundColor3 = Color3.fromRGB(50, 50, 50),
-			Text = "Quests",
-			TextColor3 = Color3.fromRGB(255, 255, 255),
-			Font = Enum.Font.GothamBold,
-			TextSize = 14
-		}, MainGameUI)
-
-		setupUIComponent("UICorner", {CornerRadius = UDim.new(0, 6)}, QuestButton)
-	end
-
-	return InventoryButton, QuestButton
-end
-
--- Create or get Current Turn Indicator
-local function ensureTurnIndicatorExists()
-	local CurrentTurnIndicator = MainGameUI:FindFirstChild("CurrentTurnIndicator")
-
-	if not CurrentTurnIndicator then
-		if TurnIndicator then
-			CurrentTurnIndicator = TurnIndicator(MainGameUI)
-		else
-			CurrentTurnIndicator = setupUIComponent("Frame", {
-				Name = "CurrentTurnIndicator",
-				Size = UDim2.new(0.25, 0, 0.08, 0),
-				Position = UDim2.new(0.375, 0, 0.05, 0),
-				BackgroundColor3 = Color3.fromRGB(50, 80, 120),
-				BackgroundTransparency = 0.2
-			}, MainGameUI)
-
-			setupUIComponent("UICorner", {CornerRadius = UDim.new(0, 8)}, CurrentTurnIndicator)
-
-			setupUIComponent("TextLabel", {
-				Name = "TurnText",
-				Size = UDim2.new(1, 0, 1, 0),
-				BackgroundTransparency = 1,
-				Text = "Waiting for turn...",
-				TextColor3 = Color3.fromRGB(255, 255, 255),
-				Font = Enum.Font.GothamBold,
-				TextSize = 18
-			}, CurrentTurnIndicator)
-		end
-	end
-
-	return CurrentTurnIndicator
-end
-
--- Initialize UI elements
-local InventoryButton, QuestButton = ensureButtonsExist()
-local CurrentTurnIndicator = ensureTurnIndicatorExists()
-
--- Get or create popup UI elements
+-- Variables
+local myStatusBar = nil
+local InventoryButton = MainGameUI:FindFirstChild("InventoryButton")
+local QuestButton = MainGameUI:FindFirstChild("QuestButton")
+local EndTurnButton = MainGameUI:FindFirstChild("EndTurnButton")
+local CurrentTurnIndicator = MainGameUI:FindFirstChild("CurrentTurnIndicator")
 local PopupUI = PlayerGui:WaitForChild("PopupUI")
 local InventoryUI = PopupUI:FindFirstChild("InventoryUI")
 local QuestUI = PopupUI:FindFirstChild("QuestUI")
 
--- Create popup UIs if they don't exist
-if not InventoryUI then
-	InventoryUI = setupUIComponent("Frame", {
-		Name = "InventoryUI",
-		Size = UDim2.new(0.8, 0, 0.8, 0),
-		Position = UDim2.new(0.1, 0, 0.1, 0),
-		BackgroundColor3 = Color3.fromRGB(40, 40, 60),
-		BackgroundTransparency = 0.1,
-		Visible = false
-	}, PopupUI)
-
-	setupUIComponent("UICorner", {CornerRadius = UDim.new(0, 8)}, InventoryUI)
-
-	setupUIComponent("TextLabel", {
-		Name = "Title",
-		Size = UDim2.new(1, 0, 0.1, 0),
-		BackgroundTransparency = 1,
-		Text = "Inventory",
-		TextColor3 = Color3.fromRGB(255, 255, 255),
-		Font = Enum.Font.GothamBold,
-		TextSize = 24
-	}, InventoryUI)
-end
-
-if not QuestUI then
-	QuestUI = setupUIComponent("Frame", {
-		Name = "QuestUI",
-		Size = UDim2.new(0.8, 0, 0.8, 0),
-		Position = UDim2.new(0.1, 0, 0.1, 0),
-		BackgroundColor3 = Color3.fromRGB(40, 40, 60),
-		BackgroundTransparency = 0.1,
-		Visible = false
-	}, PopupUI)
-
-	setupUIComponent("UICorner", {CornerRadius = UDim.new(0, 8)}, QuestUI)
-
-	setupUIComponent("TextLabel", {
-		Name = "Title",
-		Size = UDim2.new(1, 0, 0.1, 0),
-		BackgroundTransparency = 1,
-		Text = "Quests",
-		TextColor3 = Color3.fromRGB(255, 255, 255),
-		Font = Enum.Font.GothamBold,
-		TextSize = 24
-	}, QuestUI)
-end
-
 -- Get remotes
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
-local uiRemotes = remotes:WaitForChild("UIRemotes")
+local uiRemotes = remotes:WaitForChild("UIRemotes") 
 local gameRemotes = remotes:WaitForChild("GameRemotes")
 
 -- Get required remotes
 local updatePlayerStatsEvent = uiRemotes:WaitForChild("UpdatePlayerStats")
 local updateTurnEvent = gameRemotes:WaitForChild("UpdateTurn")
 local endGameEvent = gameRemotes:WaitForChild("EndGame")
-
--- Create any missing required remotes
+local updateTurnDetailsEvent = uiRemotes:FindFirstChild("UpdateTurnDetails")
 local updateTurnTimerEvent = gameRemotes:FindFirstChild("UpdateTurnTimer")
 
-local updateTurnDetailsEvent = uiRemotes:FindFirstChild("UpdateTurnDetails")
-
--- Turn state variables
+-- ข้อมูลสถานะเทิร์น
 local turnTimerActive = false
 local turnTimerConnection = nil
 local turnDetailsData = nil
 local isMyTurn = false
-local myStatusBar = nil
+
+-- ข้อมูลคลาสและเลเวลของผู้เล่น
+local playerClassInfo = {
+	class = nil,
+	level = 1,
+	classLevel = 1,
+	exp = 0,
+	classExp = 0,
+	nextLevelExp = 100,
+	nextClassLevelExp = 150
+}
+
+-- Helper function for tweening
+local function createTween(object, properties, duration, style, direction)
+	local tweenInfo = TweenInfo.new(
+		duration or 0.3,
+		style or Enum.EasingStyle.Quad,
+		direction or Enum.EasingDirection.Out
+	)
+	local tween = TweenService:Create(object, tweenInfo, properties)
+	return tween
+end
 
 -- Setup player status bar
 local function setupPlayerStatusBar()
-	-- Get or create template
+	-- Get template
 	local template = StatusBarContainer:FindFirstChild("PlayerStatusBar")
-	if not template then
-		template = setupUIComponent("Frame", {
-			Name = "PlayerStatusBar",
-			Size = UDim2.new(1, 0, 0.1, 0),
-			BackgroundColor3 = Color3.fromRGB(40, 40, 60),
-			Visible = false
-		}, StatusBarContainer)
+	if not template then return nil end
 
-		-- Create UI Elements with helper function
-		setupUIComponent("TextLabel", {
-			Name = "PlayerName",
-			Size = UDim2.new(0.3, 0, 0.3, 0),
-			Position = UDim2.new(0.05, 0, 0.1, 0),
-			BackgroundTransparency = 1,
-			TextColor3 = Color3.fromRGB(255, 255, 255),
-			TextXAlignment = Enum.TextXAlignment.Left,
-			Font = Enum.Font.GothamBold,
-			TextSize = 14
-		}, template)
-
-		setupUIComponent("TextLabel", {
-			Name = "PlayerClass",
-			Size = UDim2.new(0.3, 0, 0.2, 0),
-			Position = UDim2.new(0.05, 0, 0.4, 0),
-			BackgroundTransparency = 1,
-			TextColor3 = Color3.fromRGB(200, 200, 255),
-			TextXAlignment = Enum.TextXAlignment.Left,
-			Font = Enum.Font.Gotham,
-			TextSize = 12
-		}, template)
-
-		setupUIComponent("TextLabel", {
-			Name = "PlayerLevel",
-			Size = UDim2.new(0.15, 0, 0.2, 0),
-			Position = UDim2.new(0.35, 0, 0.4, 0),
-			BackgroundTransparency = 1,
-			TextColor3 = Color3.fromRGB(200, 255, 200),
-			TextXAlignment = Enum.TextXAlignment.Left,
-			Font = Enum.Font.Gotham,
-			TextSize = 12
-		}, template)
-
-		-- Create HP bar
-		local hpBar = setupUIComponent("Frame", {
-			Name = "HPBar",
-			Size = UDim2.new(0.6, 0, 0.15, 0),
-			Position = UDim2.new(0.05, 0, 0.65, 0),
-			BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-		}, template)
-
-		setupUIComponent("Frame", {
-			Name = "HPFill",
-			Size = UDim2.new(1, 0, 1, 0),
-			BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-		}, hpBar)
-
-		setupUIComponent("TextLabel", {
-			Name = "HPText",
-			Size = UDim2.new(1, 0, 1, 0),
-			BackgroundTransparency = 1,
-			TextColor3 = Color3.fromRGB(255, 255, 255),
-			Font = Enum.Font.GothamBold,
-			TextSize = 10
-		}, hpBar)
-
-		-- Create MP bar
-		local mpBar = setupUIComponent("Frame", {
-			Name = "MPBar",
-			Size = UDim2.new(0.6, 0, 0.15, 0),
-			Position = UDim2.new(0.05, 0, 0.82, 0),
-			BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-		}, template)
-
-		setupUIComponent("Frame", {
-			Name = "MPFill",
-			Size = UDim2.new(1, 0, 1, 0),
-			BackgroundColor3 = Color3.fromRGB(50, 50, 255)
-		}, mpBar)
-
-		setupUIComponent("TextLabel", {
-			Name = "MPText",
-			Size = UDim2.new(1, 0, 1, 0),
-			BackgroundTransparency = 1,
-			TextColor3 = Color3.fromRGB(255, 255, 255),
-			Font = Enum.Font.GothamBold,
-			TextSize = 10
-		}, mpBar)
-
-		-- Create money container
-		local moneyContainer = setupUIComponent("Frame", {
-			Name = "MoneyContainer",
-			Size = UDim2.new(0.2, 0, 0.2, 0),
-			Position = UDim2.new(0.75, 0, 0.7, 0),
-			BackgroundTransparency = 1
-		}, template)
-
-		setupUIComponent("TextLabel", {
-			Name = "CoinIcon",
-			Size = UDim2.new(0.3, 0, 1, 0),
-			BackgroundTransparency = 1,
-			Text = "$",
-			TextColor3 = Color3.fromRGB(255, 215, 0),
-			Font = Enum.Font.GothamBold,
-			TextSize = 14
-		}, moneyContainer)
-
-		setupUIComponent("TextLabel", {
-			Name = "MoneyAmount",
-			Size = UDim2.new(0.7, 0, 1, 0),
-			Position = UDim2.new(0.3, 0, 0, 0),
-			BackgroundTransparency = 1,
-			Text = "100",
-			TextColor3 = Color3.fromRGB(255, 255, 255),
-			Font = Enum.Font.Gotham,
-			TextSize = 12
-		}, moneyContainer)
+	-- Check if my status bar already exists
+	local existingStatusBar = StatusBarContainer:FindFirstChild("MyPlayerStatusBar")
+	if existingStatusBar then
+		return existingStatusBar
 	end
 
 	-- Create status bar for local player
@@ -350,19 +140,23 @@ local function setupPlayerStatusBar()
 		myStatusBar.MoneyContainer.MoneyAmount.Text = "100"
 	end
 
+	-- Initialize ExpBar if it exists
+	if myStatusBar:FindFirstChild("ExpBar") and myStatusBar.ExpBar:FindFirstChild("ExpFill") then
+		myStatusBar.ExpBar.ExpFill.Size = UDim2.new(0, 0, 1, 0)
+		if myStatusBar.ExpBar:FindFirstChild("ExpText") then
+			myStatusBar.ExpBar.ExpText.Text = "EXP: 0/100"
+		end
+	end
+
 	-- Highlight player status bar
 	myStatusBar.BackgroundColor3 = Color3.fromRGB(60, 80, 100)
 
-	setupUIComponent("UIStroke", {
-		Color = Color3.fromRGB(100, 150, 200),
-		Thickness = 2
-	}, myStatusBar)
-
-	-- Remove other status bars
-	for _, child in pairs(StatusBarContainer:GetChildren()) do
-		if child.Name ~= "MyPlayerStatusBar" and child.Name ~= "PlayerStatusBar" and child:IsA("Frame") then
-			child:Destroy()
-		end
+	-- Add stroke if missing
+	if not myStatusBar:FindFirstChild("UIStroke") then
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = Color3.fromRGB(100, 150, 200)
+		stroke.Thickness = 2
+		stroke.Parent = myStatusBar
 	end
 
 	-- Hide template
@@ -381,11 +175,84 @@ local function updateMyStatusBar(stats)
 	-- Update level if provided
 	if stats.level and myStatusBar:FindFirstChild("PlayerLevel") then
 		myStatusBar.PlayerLevel.Text = "Lv." .. stats.level
+		playerClassInfo.level = stats.level
 	end
 
 	-- Update class if provided
 	if stats.class and myStatusBar:FindFirstChild("PlayerClass") then
 		myStatusBar.PlayerClass.Text = stats.class
+		playerClassInfo.class = stats.class
+
+		-- ปรับสีตามคลาส
+		local classColor = CLASS_COLORS[stats.class] or CLASS_COLORS.Default
+
+		-- ปรับสีแถบสถานะ
+		if myStatusBar:FindFirstChild("UIStroke") then
+			myStatusBar.UIStroke.Color = classColor
+		end
+
+		-- ปรับสี HP และ MP ตามคลาส
+		if myStatusBar:FindFirstChild("HPBar") and myStatusBar.HPBar:FindFirstChild("HPFill") then
+			-- ปรับสี HP ตามคลาส
+			if stats.class == "Warrior" or stats.class == "Knight" or stats.class == "Paladin" then
+				myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(220, 60, 60) -- สีแดงเข้มสำหรับนักรบ
+			elseif stats.class == "Mage" or stats.class == "Wizard" or stats.class == "Archmage" then
+				myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(180, 60, 60) -- สีแดงอ่อนสำหรับเมจ
+			elseif stats.class == "Thief" or stats.class == "Assassin" or stats.class == "Shadow" then
+				myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(200, 80, 60) -- สีแดงส้มสำหรับโจร
+			end
+		end
+
+		if myStatusBar:FindFirstChild("MPBar") and myStatusBar.MPBar:FindFirstChild("MPFill") then
+			-- ปรับสี MP ตามคลาส
+			if stats.class == "Warrior" or stats.class == "Knight" or stats.class == "Paladin" then
+				myStatusBar.MPBar.MPFill.BackgroundColor3 = Color3.fromRGB(60, 60, 180) -- สีน้ำเงินอ่อนสำหรับนักรบ
+			elseif stats.class == "Mage" or stats.class == "Wizard" or stats.class == "Archmage" then
+				myStatusBar.MPBar.MPFill.BackgroundColor3 = Color3.fromRGB(80, 80, 220) -- สีน้ำเงินสดสำหรับเมจ
+			elseif stats.class == "Thief" or stats.class == "Assassin" or stats.class == "Shadow" then
+				myStatusBar.MPBar.MPFill.BackgroundColor3 = Color3.fromRGB(60, 100, 180) -- สีน้ำเงินอมเขียวสำหรับโจร
+			end
+		end
+
+		-- แสดงการแจ้งเตือนคลาส (ใช้ notification ที่มีอยู่แล้วถ้ามี)
+		local notification = MainGameUI:FindFirstChild("ClassNotification")
+		if not notification then
+			-- หา Notification ที่มีอยู่ก่อน
+			local existingNotification = MainGameUI:FindFirstChild("NotificationSystem")
+			if existingNotification and existingNotification:IsA("Frame") then
+				notification = existingNotification:Clone()
+				notification.Name = "ClassNotification"
+				notification.Visible = true
+
+				-- ปรับแต่งการแสดงผล
+				if notification:FindFirstChild("NotificationText") then
+					notification.NotificationText.Text = "Playing as " .. stats.class
+				end
+
+				notification.Parent = MainGameUI
+				notification:TweenPosition(
+					UDim2.new(0.5, 0, 0.3, 0),
+					Enum.EasingDirection.Out,
+					Enum.EasingStyle.Back,
+					0.5,
+					true
+				)
+
+				-- ซ่อนหลังจาก 3 วินาที
+				delay(3, function()
+					notification:TweenPosition(
+						UDim2.new(0.5, 0, -0.2, 0),
+						Enum.EasingDirection.In,
+						Enum.EasingStyle.Quad,
+						0.5,
+						true,
+						function()
+							notification:Destroy()
+						end
+					)
+				end)
+			end
+		end
 	end
 
 	-- Update HP if provided
@@ -394,24 +261,25 @@ local function updateMyStatusBar(stats)
 		myStatusBar.HPBar:FindFirstChild("HPFill") then
 
 		local hpRatio = stats.hp / stats.maxHp
-		local hpTween = TweenService:Create(
+		createTween(
 			myStatusBar.HPBar.HPFill,
-			TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-			{Size = UDim2.new(hpRatio, 0, 1, 0)}
-		)
-		hpTween:Play()
+			{Size = UDim2.new(hpRatio, 0, 1, 0)},
+			0.3
+		):Play()
 
 		if myStatusBar.HPBar:FindFirstChild("HPText") then
 			myStatusBar.HPBar.HPText.Text = math.floor(stats.hp) .. "/" .. math.floor(stats.maxHp)
 		end
 
-		-- Change color based on HP ratio
-		if hpRatio < 0.3 then
-			myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-		elseif hpRatio < 0.6 then
-			myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(255, 200, 50)
-		else
-			myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+		-- Change color based on HP ratio if no class is set
+		if not playerClassInfo.class then
+			if hpRatio < 0.3 then
+				myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+			elseif hpRatio < 0.6 then
+				myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(255, 200, 50)
+			else
+				myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+			end
 		end
 	end
 
@@ -421,12 +289,11 @@ local function updateMyStatusBar(stats)
 		myStatusBar.MPBar:FindFirstChild("MPFill") then
 
 		local mpRatio = stats.mp / stats.maxMp
-		local mpTween = TweenService:Create(
+		createTween(
 			myStatusBar.MPBar.MPFill,
-			TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-			{Size = UDim2.new(mpRatio, 0, 1, 0)}
-		)
-		mpTween:Play()
+			{Size = UDim2.new(mpRatio, 0, 1, 0)},
+			0.3
+		):Play()
 
 		if myStatusBar.MPBar:FindFirstChild("MPText") then
 			myStatusBar.MPBar.MPText.Text = math.floor(stats.mp) .. "/" .. math.floor(stats.maxMp)
@@ -438,15 +305,77 @@ local function updateMyStatusBar(stats)
 		myStatusBar:FindFirstChild("MoneyContainer") and 
 		myStatusBar.MoneyContainer:FindFirstChild("MoneyAmount") then
 
+		-- สร้างแอนิเมชันเปลี่ยนแปลงเงิน
+		local currentMoney = tonumber(myStatusBar.MoneyContainer.MoneyAmount.Text) or 0
+		local newMoney = stats.money
+
+		if newMoney > currentMoney then
+			-- แอนิเมชันเมื่อได้เงินเพิ่ม
+			myStatusBar.MoneyContainer.MoneyAmount.TextColor3 = Color3.fromRGB(100, 255, 100)
+
+			local moneyUpTween = createTween(
+				myStatusBar.MoneyContainer.MoneyAmount,
+				{TextSize = 16},
+				0.3,
+				Enum.EasingStyle.Back
+			)
+
+			moneyUpTween:Play()
+			moneyUpTween.Completed:Connect(function()
+				createTween(
+					myStatusBar.MoneyContainer.MoneyAmount,
+					{TextSize = 12, TextColor3 = Color3.fromRGB(255, 255, 255)},
+					0.3
+				):Play()
+			end)
+		elseif newMoney < currentMoney then
+			-- แอนิเมชันเมื่อเสียเงิน
+			myStatusBar.MoneyContainer.MoneyAmount.TextColor3 = Color3.fromRGB(255, 100, 100)
+
+			local moneyDownTween = createTween(
+				myStatusBar.MoneyContainer.MoneyAmount,
+				{TextSize = 14},
+				0.3,
+				Enum.EasingStyle.Bounce
+			)
+
+			moneyDownTween:Play()
+			moneyDownTween.Completed:Connect(function()
+				createTween(
+					myStatusBar.MoneyContainer.MoneyAmount,
+					{TextSize = 12, TextColor3 = Color3.fromRGB(255, 255, 255)},
+					0.3
+				):Play()
+			end)
+		end
+
 		myStatusBar.MoneyContainer.MoneyAmount.Text = stats.money
+	end
+
+	-- อัปเดตค่าประสบการณ์ถ้ามี
+	if stats.exp and stats.nextLevelExp and
+		myStatusBar:FindFirstChild("ExpBar") and
+		myStatusBar.ExpBar:FindFirstChild("ExpFill") then
+
+		playerClassInfo.exp = stats.exp
+		playerClassInfo.nextLevelExp = stats.nextLevelExp
+
+		local expRatio = stats.exp / stats.nextLevelExp
+		createTween(
+			myStatusBar.ExpBar.ExpFill,
+			{Size = UDim2.new(expRatio, 0, 1, 0)},
+			0.5
+		):Play()
+
+		if myStatusBar.ExpBar:FindFirstChild("ExpText") then
+			myStatusBar.ExpBar.ExpText.Text = "EXP: " .. math.floor(stats.exp) .. "/" .. math.floor(stats.nextLevelExp)
+		end
 	end
 end
 
 -- Update turn indicator function
 local function updateTurnIndicator(turnDetails)
-	if not CurrentTurnIndicator then
-		CurrentTurnIndicator = ensureTurnIndicatorExists()
-	end
+	if not CurrentTurnIndicator then return end
 
 	local currentPlayerName = turnDetails.playerName or "Unknown"
 	local turnNumber = turnDetails.turnNumber or 1
@@ -484,10 +413,13 @@ local function updateTurnIndicator(turnDetails)
 	if isMyTurn then
 		-- Highlight status bar
 		if myStatusBar then
-			myStatusBar.BackgroundColor3 = Color3.fromRGB(70, 120, 200)
+			-- ใช้สีของคลาสในการไฮไลท์
+			local highlightColor = CLASS_COLORS[playerClassInfo.class] or Color3.fromRGB(70, 120, 200)
+
+			myStatusBar.BackgroundColor3 = highlightColor:Lerp(Color3.fromRGB(255, 255, 255), 0.7) -- ผสมกับสีขาวเพื่อให้สว่างขึ้น
 
 			if myStatusBar:FindFirstChild("UIStroke") then
-				myStatusBar.UIStroke.Color = Color3.fromRGB(120, 200, 255)
+				myStatusBar.UIStroke.Color = highlightColor
 				myStatusBar.UIStroke.Thickness = 3
 			end
 		end
@@ -496,24 +428,26 @@ local function updateTurnIndicator(turnDetails)
 		local originalPosition = CurrentTurnIndicator.Position
 		local originalSize = CurrentTurnIndicator.Size
 
-		local expandTween = TweenService:Create(
+		local expandTween = createTween(
 			CurrentTurnIndicator,
-			TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
 			{
 				Size = UDim2.new(originalSize.X.Scale + 0.02, 0, originalSize.Y.Scale + 0.02, 0),
 				Position = UDim2.new(originalPosition.X.Scale - 0.01, 0, originalPosition.Y.Scale - 0.01, 0),
 				BackgroundColor3 = Color3.fromRGB(60, 140, 200)
-			}
+			},
+			0.5,
+			Enum.EasingStyle.Back
 		)
 
-		local contractTween = TweenService:Create(
+		local contractTween = createTween(
 			CurrentTurnIndicator,
-			TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
 			{
 				Size = originalSize,
 				Position = originalPosition,
 				BackgroundColor3 = Color3.fromRGB(50, 100, 150)
-			}
+			},
+			0.5,
+			Enum.EasingStyle.Back
 		)
 
 		expandTween:Play()
@@ -521,63 +455,50 @@ local function updateTurnIndicator(turnDetails)
 			contractTween:Play()
 		end)
 
-		-- Show "Your Turn" notification
-		local notification = setupUIComponent("Frame", {
-			Name = "YourTurnNotification",
-			Size = UDim2.new(0.3, 0, 0.1, 0),
-			Position = UDim2.new(0.35, 0, 1.1, 0),
-			BackgroundColor3 = Color3.fromRGB(50, 120, 200),
-			BackgroundTransparency = 0.2,
-			BorderSizePixel = 0,
-			ZIndex = 10
-		}, MainGameUI)
+		-- ใช้ระบบแจ้งเตือนที่มีอยู่แล้ว
+		local notification = MainGameUI:FindFirstChild("NotificationSystem")
+		if notification then
+			local newNotification = notification:Clone()
+			newNotification.Name = "YourTurnNotification"
+			newNotification.Visible = true
 
-		setupUIComponent("UICorner", {
-			CornerRadius = UDim.new(0, 8)
-		}, notification)
+			-- ปรับแต่งการแสดงผล
+			if newNotification:FindFirstChild("NotificationText") then
+				newNotification.NotificationText.Text = "It's your turn!"
+			end
 
-		setupUIComponent("UIStroke", {
-			Color = Color3.fromRGB(120, 200, 255),
-			Thickness = 2
-		}, notification)
-
-		setupUIComponent("TextLabel", {
-			Size = UDim2.new(1, 0, 1, 0),
-			BackgroundTransparency = 1,
-			Text = "It's your turn!",
-			TextColor3 = Color3.fromRGB(255, 255, 255),
-			TextSize = 24,
-			Font = Enum.Font.GothamBold,
-			ZIndex = 11
-		}, notification)
-
-		-- Animate notification
-		local notifTween = TweenService:Create(
-			notification,
-			TweenInfo.new(0.7, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
-			{Position = UDim2.new(0.35, 0, 0.7, 0)}
-		)
-		notifTween:Play()
-
-		-- Hide notification after delay
-		delay(2, function()
-			local hideTween = TweenService:Create(
-				notification,
-				TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
-				{Position = UDim2.new(0.35, 0, 1.1, 0), BackgroundTransparency = 1}
+			newNotification.Parent = MainGameUI
+			newNotification:TweenPosition(
+				UDim2.new(0.5, 0, 0.7, 0),
+				Enum.EasingDirection.Out,
+				Enum.EasingStyle.Back,
+				0.7,
+				true
 			)
-			hideTween:Play()
-			hideTween.Completed:Connect(function()
-				notification:Destroy()
+
+			-- ซ่อนหลังจาก 2 วินาที
+			delay(2, function()
+				newNotification:TweenPosition(
+					UDim2.new(0.5, 0, 1.1, 0),
+					Enum.EasingDirection.In,
+					Enum.EasingStyle.Quad,
+					0.5,
+					true,
+					function()
+						newNotification:Destroy()
+					end
+				)
 			end)
-		end)
+		end
 	else
 		-- Reset highlights if not player's turn
 		if myStatusBar then
-			myStatusBar.BackgroundColor3 = Color3.fromRGB(60, 80, 100)
+			-- ใช้สีของคลาสเป็นพื้นฐานแต่ทำให้เข้มขึ้น
+			local baseColor = CLASS_COLORS[playerClassInfo.class] or Color3.fromRGB(60, 80, 100)
+			myStatusBar.BackgroundColor3 = baseColor:Lerp(Color3.fromRGB(40, 40, 60), 0.7) -- ผสมกับสีเข้มเพื่อให้มืดลง
 
 			if myStatusBar:FindFirstChild("UIStroke") then
-				myStatusBar.UIStroke.Color = Color3.fromRGB(100, 150, 200)
+				myStatusBar.UIStroke.Color = baseColor
 				myStatusBar.UIStroke.Thickness = 2
 			end
 		end
@@ -610,25 +531,15 @@ local function updateTurnTimer(timeRemaining)
 	local fillRatio = timeRemaining / maxTime
 
 	-- Animate fill bar
-	local fillTween = TweenService:Create(
+	createTween(
 		timerFill,
-		TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-		{Size = UDim2.new(fillRatio, 0, 1, 0)}
-	)
-	fillTween:Play()
+		{Size = UDim2.new(fillRatio, 0, 1, 0)},
+		0.3
+	):Play()
 
 	-- Change color based on time remaining
 	if timeRemaining <= 10 then
 		timerFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-
-		if timeRemaining <= 5 then
-			local flashTween = TweenService:Create(
-				timerFrame,
-				TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true),
-				{BackgroundColor3 = Color3.fromRGB(200, 50, 50)}
-			)
-			flashTween:Play()
-		end
 	elseif timeRemaining <= 30 then
 		timerFill.BackgroundColor3 = Color3.fromRGB(255, 150, 50)
 	else
@@ -636,102 +547,161 @@ local function updateTurnTimer(timeRemaining)
 	end
 end
 
--- Create End Turn button
+-- Setup End Turn button
 local function setupEndTurnButton()
-	local endTurnButton = MainGameUI:FindFirstChild("EndTurnButton")
+	if not EndTurnButton then return nil end
 
-	if not endTurnButton then
-		endTurnButton = setupUIComponent("TextButton", {
-			Name = "EndTurnButton",
-			Size = UDim2.new(0.12, 0, 0.05, 0),
-			Position = UDim2.new(0.84, 0, 0.05, 0),
-			BackgroundColor3 = Color3.fromRGB(80, 80, 100),
-			Text = "End Turn",
-			TextColor3 = Color3.fromRGB(255, 255, 255),
-			Font = Enum.Font.GothamBold,
-			TextSize = 14,
-			AutoButtonColor = true,
-			Visible = false
-		}, MainGameUI)
+	-- Connect button click if not already connected
+	if not EndTurnButton:GetAttribute("Connected") then
+		EndTurnButton.MouseButton1Click:Connect(function()
+			if isMyTurn then
+				-- Send end turn command to server
+				local turnActionEvent = gameRemotes:WaitForChild("TurnAction")
+				turnActionEvent:FireServer("endTurn")
 
-		setupUIComponent("UICorner", {
-			CornerRadius = UDim.new(0, 6)
-		}, endTurnButton)
+				-- Hide button
+				EndTurnButton.Visible = false
+			end
+		end)
 
-		setupUIComponent("UIStroke", {
-			Color = Color3.fromRGB(150, 150, 200),
-			Thickness = 1.5
-		}, endTurnButton)
+		EndTurnButton:SetAttribute("Connected", true)
 	end
-
-	-- Connect button click
-	endTurnButton.InputBegan:Connect(function(input)
-		if (input.UserInputType == Enum.UserInputType.MouseButton1 or 
-			input.UserInputType == Enum.UserInputType.Touch) and isMyTurn then
-
-			-- Send end turn command to server
-			local turnActionEvent = gameRemotes:WaitForChild("TurnAction")
-			turnActionEvent:FireServer("endTurn")
-
-			-- Hide button
-			endTurnButton.Visible = false
-		end
-	end)
 
 	-- Update button visibility based on turn
 	RunService.Heartbeat:Connect(function()
-		endTurnButton.Visible = isMyTurn
+		EndTurnButton.Visible = isMyTurn
 
 		if isMyTurn then
-			endTurnButton.BackgroundColor3 = Color3.fromRGB(60, 120, 180)
-			endTurnButton.UIStroke.Color = Color3.fromRGB(120, 200, 255)
+			-- ใช้สีของคลาสสำหรับปุ่ม end turn
+			local classColor = CLASS_COLORS[playerClassInfo.class] or Color3.fromRGB(60, 120, 180)
+			EndTurnButton.BackgroundColor3 = classColor
+			if EndTurnButton:FindFirstChild("UIStroke") then
+				EndTurnButton.UIStroke.Color = classColor:Lerp(Color3.fromRGB(255, 255, 255), 0.5)
+			end
 		end
 	end)
 
-	return endTurnButton
+	return EndTurnButton
 end
 
 -- Setup button handlers
 local function setupButtonHandlers()
-	if InventoryButton then
-		InventoryButton.InputBegan:Connect(function(input)
-			if input.UserInputType == Enum.UserInputType.MouseButton1 or
-				input.UserInputType == Enum.UserInputType.Touch then
-				if InventoryUI then
-					-- Toggle inventory UI
-					InventoryUI.Visible = not InventoryUI.Visible
+	if InventoryButton and not InventoryButton:GetAttribute("Connected") then
+		InventoryButton.MouseButton1Click:Connect(function()
+			if InventoryUI then
+				-- Toggle inventory UI
+				InventoryUI.Visible = not InventoryUI.Visible
 
-					-- Hide other popups
-					if InventoryUI.Visible and QuestUI then
-						QuestUI.Visible = false
-					end
-
-					-- Visual feedback
-					InventoryButton.BackgroundColor3 = InventoryUI.Visible and 
-						Color3.fromRGB(80, 120, 80) or Color3.fromRGB(50, 50, 50)
+				-- Hide other popups
+				if InventoryUI.Visible and QuestUI then
+					QuestUI.Visible = false
 				end
+
+				-- Visual feedback
+				InventoryButton.BackgroundColor3 = InventoryUI.Visible and 
+					Color3.fromRGB(80, 120, 80) or Color3.fromRGB(50, 50, 50)
 			end
 		end)
+		InventoryButton:SetAttribute("Connected", true)
 	end
 
-	if QuestButton then
-		QuestButton.InputBegan:Connect(function(input)
-			if input.UserInputType == Enum.UserInputType.MouseButton1 or
-				input.UserInputType == Enum.UserInputType.Touch then
-				if QuestUI then
-					-- Toggle quest UI
-					QuestUI.Visible = not QuestUI.Visible
+	if QuestButton and not QuestButton:GetAttribute("Connected") then
+		QuestButton.MouseButton1Click:Connect(function()
+			if QuestUI then
+				-- Toggle quest UI
+				QuestUI.Visible = not QuestUI.Visible
 
-					-- Hide other popups
-					if QuestUI.Visible and InventoryUI then
-						InventoryUI.Visible = false
-					end
+				-- Hide other popups
+				if QuestUI.Visible and InventoryUI then
+					InventoryUI.Visible = false
+				end
 
-					-- Visual feedback
-					QuestButton.BackgroundColor3 = QuestUI.Visible and 
-						Color3.fromRGB(80, 120, 80) or Color3.fromRGB(50, 50, 50)
+				-- Visual feedback
+				QuestButton.BackgroundColor3 = QuestUI.Visible and 
+					Color3.fromRGB(80, 120, 80) or Color3.fromRGB(50, 50, 50)
+			end
+		end)
+		QuestButton:SetAttribute("Connected", true)
+	end
+
+	-- ตรวจสอบปุ่มปิดใน PopupUI
+	if InventoryUI and InventoryUI:FindFirstChild("CloseButton") and not InventoryUI.CloseButton:GetAttribute("Connected") then
+		InventoryUI.CloseButton.MouseButton1Click:Connect(function()
+			InventoryUI.Visible = false
+			if InventoryButton then
+				InventoryButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+			end
+		end)
+		InventoryUI.CloseButton:SetAttribute("Connected", true)
+	end
+
+	if QuestUI and QuestUI:FindFirstChild("CloseButton") and not QuestUI.CloseButton:GetAttribute("Connected") then
+		QuestUI.CloseButton.MouseButton1Click:Connect(function()
+			QuestUI.Visible = false
+			if QuestButton then
+				QuestButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+			end
+		end)
+		QuestUI.CloseButton:SetAttribute("Connected", true)
+	end
+end
+
+-- แสดงการแจ้งเตือนการเลเวลอัพ (ใช้ระบบที่มีอยู่แล้ว)
+local function showLevelUpNotification(newLevel, statIncreases)
+	-- เช็คว่ามีระบบแจ้งเตือนอยู่แล้วหรือไม่
+	local notification = MainGameUI:FindFirstChild("NotificationSystem")
+	if notification then
+		local levelUpNotif = notification:Clone()
+		levelUpNotif.Name = "LevelUpNotification"
+		levelUpNotif.Visible = true
+
+		-- ปรับแต่งการแสดงผลให้เข้ากับการเลเวลอัพ
+		if levelUpNotif:FindFirstChild("NotificationText") then
+			local statText = "LEVEL UP! You reached level " .. newLevel .. "!\n"
+
+			-- แสดงสถิติที่เพิ่มขึ้น
+			for stat, increase in pairs(statIncreases) do
+				if stat == "MaxHP" then
+					statText = statText .. "HP +" .. increase .. " "
+				elseif stat == "MaxMP" then
+					statText = statText .. "MP +" .. increase .. " "
+				elseif stat == "ATK" then
+					statText = statText .. "ATK +" .. increase .. " "
+				elseif stat == "DEF" then
+					statText = statText .. "DEF +" .. increase .. " "
 				end
 			end
+
+			levelUpNotif.NotificationText.Text = statText
+			levelUpNotif.NotificationText.TextSize = 20
+		end
+
+		-- เปลี่ยนสีพื้นหลังให้ดูเด่นขึ้น
+		levelUpNotif.BackgroundColor3 = Color3.fromRGB(80, 120, 200)
+
+		levelUpNotif.Parent = MainGameUI
+
+		-- แสดงการแจ้งเตือน
+		levelUpNotif:TweenPosition(
+			UDim2.new(0.5, 0, 0.4, 0),
+			Enum.EasingDirection.Out,
+			Enum.EasingStyle.Back,
+			0.8,
+			true
+		)
+
+		-- ซ่อนการแจ้งเตือนหลังจาก 5 วินาที
+		delay(5, function()
+			levelUpNotif:TweenPosition(
+				UDim2.new(0.5, 0, -0.3, 0),
+				Enum.EasingDirection.In,
+				Enum.EasingStyle.Back,
+				0.6,
+				true,
+				function()
+					levelUpNotif:Destroy()
+				end
+			)
 		end)
 	end
 end
@@ -765,46 +735,166 @@ updateTurnEvent.OnClientEvent:Connect(function(currentPlayerId)
 	updateTurnIndicator(turnDetails)
 end)
 
-updateTurnDetailsEvent.OnClientEvent:Connect(function(turnDetails)
-	updateTurnIndicator(turnDetails)
+-- เชื่อมต่อกับการอัปเดตค่าประสบการณ์
+local updateExpEvent = uiRemotes:FindFirstChild("UpdateExperience")
+if updateExpEvent then
+	updateExpEvent.OnClientEvent:Connect(function(expData)
+		if not myStatusBar then return end
+
+		if myStatusBar:FindFirstChild("ExpBar") and myStatusBar.ExpBar:FindFirstChild("ExpFill") then
+			-- อัปเดตข้อมูลประสบการณ์
+			playerClassInfo.exp = expData.exp
+			playerClassInfo.nextLevelExp = expData.nextLevelExp
+			playerClassInfo.classExp = expData.classExp
+			playerClassInfo.nextClassLevelExp = expData.nextClassLevelExp
+
+			-- อัปเดตแถบประสบการณ์
+			local expRatio = expData.exp / expData.nextLevelExp
+			createTween(
+				myStatusBar.ExpBar.ExpFill,
+				{Size = UDim2.new(expRatio, 0, 1, 0)},
+				0.5
+			):Play()
+
+			if myStatusBar.ExpBar:FindFirstChild("ExpText") then
+				myStatusBar.ExpBar.ExpText.Text = "EXP: " .. math.floor(expData.exp) .. "/" .. math.floor(expData.nextLevelExp)
+			end
+		end
+	end)
+end
+
+-- เชื่อมต่อกับการเลเวลอัพ
+local levelUpEvent = uiRemotes:WaitForChild("LevelUp")
+levelUpEvent.OnClientEvent:Connect(function(newLevel, statIncreases)
+	-- อัปเดตเลเวล
+	playerClassInfo.level = newLevel
+
+	-- แสดงการแจ้งเตือนการเลเวลอัพ
+	showLevelUpNotification(newLevel, statIncreases)
+
+	-- อัปเดตข้อความเลเวลในสถานะบาร์
+	if myStatusBar and myStatusBar:FindFirstChild("PlayerLevel") then
+		myStatusBar.PlayerLevel.Text = "Lv." .. newLevel
+	end
 end)
 
-updateTurnTimerEvent.OnClientEvent:Connect(function(timeRemaining)
-	updateTurnTimer(timeRemaining)
+-- เชื่อมต่อกับการเลเวลอัพของคลาส
+local classLevelUpEvent = uiRemotes:WaitForChild("ClassLevelUp")
+classLevelUpEvent.OnClientEvent:Connect(function(newClassLevel, statIncreases, nextClass)
+	-- อัปเดตเลเวลคลาส
+	playerClassInfo.classLevel = newClassLevel
+
+	-- แสดงการแจ้งเตือนเลเวลคลาสอัพ
+	local notification = MainGameUI:FindFirstChild("NotificationSystem")
+	if notification then
+		local classLevelUpNotif = notification:Clone()
+		classLevelUpNotif.Name = "ClassLevelUpNotification"
+		classLevelUpNotif.Visible = true
+
+		-- ปรับแต่งการแสดงผล
+		if classLevelUpNotif:FindFirstChild("NotificationText") then
+			local message = "CLASS LEVEL UP! " .. playerClassInfo.class .. " reached level " .. newClassLevel
+
+			if nextClass then
+				message = message .. "\nUpgrade to " .. nextClass .. " is now available!"
+			end
+
+			classLevelUpNotif.NotificationText.Text = message
+		end
+
+		-- ปรับสีตามคลาส
+		local classColor = CLASS_COLORS[playerClassInfo.class] or Color3.fromRGB(80, 120, 200)
+		classLevelUpNotif.BackgroundColor3 = classColor
+
+		classLevelUpNotif.Parent = MainGameUI
+
+		-- แสดงการแจ้งเตือน
+		classLevelUpNotif:TweenPosition(
+			UDim2.new(0.5, 0, 0.4, 0),
+			Enum.EasingDirection.Out,
+			Enum.EasingStyle.Back,
+			0.8,
+			true
+		)
+
+		-- ซ่อนหลังจาก 5 วินาที
+		delay(5, function()
+			classLevelUpNotif:TweenPosition(
+				UDim2.new(0.5, 0, -0.3, 0),
+				Enum.EasingDirection.In,
+				Enum.EasingStyle.Back,
+				0.6,
+				true,
+				function()
+					classLevelUpNotif:Destroy()
+				end
+			)
+		end)
+	end
 end)
+
+if updateTurnDetailsEvent then
+	updateTurnDetailsEvent.OnClientEvent:Connect(function(turnDetails)
+		updateTurnIndicator(turnDetails)
+	end)
+end
+
+if updateTurnTimerEvent then
+	updateTurnTimerEvent.OnClientEvent:Connect(function(timeRemaining)
+		updateTurnTimer(timeRemaining)
+	end)
+end
 
 endGameEvent.OnClientEvent:Connect(function(reason)
 	-- Show game over UI
 	local GameOverScreen = PlayerGui:WaitForChild("GameOverScreen")
-	GameOverScreen.Enabled = true
+	if GameOverScreen then
+		GameOverScreen.Enabled = true
 
-	-- Hide main game UI
-	MainGameUI.Enabled = false
-	PopupUI.Enabled = false
+		-- Hide main game UI
+		MainGameUI.Enabled = false
+		if PopupUI then
+			PopupUI.Enabled = false
+		end
 
-	-- Display reason
-	local Background = GameOverScreen:FindFirstChild("Background")
-	if Background then
-		local WinnerAnnouncement = Background:FindFirstChild("WinnerAnnouncement")
-		if WinnerAnnouncement then
-			WinnerAnnouncement.Text = reason
+		-- Display reason in game over screen
+		local Background = GameOverScreen:FindFirstChild("Background")
+		if Background then
+			local WinnerAnnouncement = Background:FindFirstChild("WinnerAnnouncement")
+			if WinnerAnnouncement then
+				WinnerAnnouncement.Text = reason
+			end
 		end
 	end
 end)
 
 -- Initialize UI
 MainGameUI.Enabled = false -- Will be enabled by ClassSelectionHandler or server
+
 if PopupUI then
 	PopupUI.Enabled = true -- Container is visible, but individual UIs are hidden
-end
-if InventoryUI then
-	InventoryUI.Visible = false
-end
-if QuestUI then
-	QuestUI.Visible = false
+
+	if InventoryUI then
+		InventoryUI.Visible = false
+	end
+
+	if QuestUI then
+		QuestUI.Visible = false
+	end
 end
 
 -- Setup initial UI
 myStatusBar = setupPlayerStatusBar()
 setupButtonHandlers()
 setupEndTurnButton()
+
+-- เพิ่มการรับเหตุการณ์เมื่อ MainGameUI เปิดใช้งาน
+MainGameUI:GetPropertyChangedSignal("Enabled"):Connect(function()
+	if MainGameUI.Enabled then
+		-- ปั้บแล้วค่อย animation in
+		-- ให้แน่ใจว่าสถานะบาร์ถูกสร้างขึ้นมาแล้ว
+		if not myStatusBar then
+			myStatusBar = setupPlayerStatusBar()
+		end
+	end
+end)
