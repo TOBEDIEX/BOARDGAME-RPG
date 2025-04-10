@@ -1,6 +1,6 @@
 -- BoardController.lua (Client-Side)
--- จัดการการเคลื่อนที่ของตัวละครบนกระดาน, แสดง UI เลือกเส้นทาง, และล็อกการควบคุมระหว่างเคลื่อนที่
--- Version: 2.4.1 (Fixed Control Unlock Timing)
+-- จัดการการเคลื่อนที่, UI เลือกทาง, UI แสดงช่องปัจจุบัน, และล็อกการควบคุม
+-- Version: 2.4.2 (Added Current Tile UI)
 
 local BoardController = {}
 BoardController.__index = BoardController
@@ -24,11 +24,12 @@ local STEP_TIMEOUT = 5.0
 local DELAY_BETWEEN_STEPS = 0.1
 local EFFECT_DURATION = 1.5
 local SOUND_VOLUME = 0.6
-local MOVEMENT_COMPLETE_DELAY = 0.5 -- เวลารอหลังจากเดินถึงจุดหมายแล้ว
+local MOVEMENT_COMPLETE_DELAY = 0.5
 
 -- UI References
 local DiceRollUI, PathSelectionContainer, RemainingStepsText
 local ForwardButton, LeftButton, RightButton
+local CurrentTileText -- <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< เพิ่มตัวแปรสำหรับ UI ใหม่
 
 function BoardController.new()
 	local self = setmetatable({}, BoardController)
@@ -38,42 +39,49 @@ function BoardController.new()
 	self.remotes = self:GetRemoteEvents()
 	self.uiConnections = {}
 	self.activeMovementCoroutines = {}
-	self.pendingMovementConfirmations = {} -- เก็บข้อมูลการเคลื่อนที่ที่รอการยืนยัน
-	self.isDebugMode = false -- ตั้งค่าเริ่มต้นเป็น false
+	self.pendingMovementConfirmations = {}
+	self.isDebugMode = false
 
 	self:InitializeUIReferences()
 	self:ConnectEvents()
+	self:UpdateCurrentTileUI(nil) -- <<<<<<<<<<<<<<<<<<<<<<<<<<<<<< ซ่อน UI ตอนเริ่ม
 
 	return self
 end
 
 function BoardController:InitializeUIReferences()
 	local PlayerGui = player:WaitForChild("PlayerGui")
-	if not PlayerGui then return end -- Added check for PlayerGui
+	if not PlayerGui then return end
 	local PopupUI = PlayerGui:WaitForChild("PopupUI")
-	if not PopupUI then return end -- Added check for PopupUI
+	if not PopupUI then return end
 	DiceRollUI = PopupUI:WaitForChild("DiceRollUI")
 
 	if not DiceRollUI then
 		warn("[BoardController] DiceRollUI not found!")
-		return
+		-- ไม่ควร return ที่นี่ อาจจะยังต้องการ UI อื่นๆ
 	end
 
-	PathSelectionContainer = DiceRollUI:FindFirstChild("PathSelectionContainer")
+	-- หา UI elements เดิม
+	PathSelectionContainer = DiceRollUI and DiceRollUI:FindFirstChild("PathSelectionContainer")
 	if not PathSelectionContainer then
 		warn("[BoardController] PathSelectionContainer not found!")
-		return
+	else
+		RemainingStepsText = PathSelectionContainer:FindFirstChild("RemainingStepsText")
+		ForwardButton = PathSelectionContainer:FindFirstChild("ForwardButton")
+		LeftButton = PathSelectionContainer:FindFirstChild("LeftButton")
+		RightButton = PathSelectionContainer:FindFirstChild("RightButton")
+		if not RemainingStepsText or not ForwardButton or not LeftButton or not RightButton then
+			warn("[BoardController] One or more path selection UI elements are missing inside PathSelectionContainer!")
+		end
 	end
 
-	RemainingStepsText = PathSelectionContainer:FindFirstChild("RemainingStepsText")
-	ForwardButton = PathSelectionContainer:FindFirstChild("ForwardButton")
-	LeftButton = PathSelectionContainer:FindFirstChild("LeftButton")
-	RightButton = PathSelectionContainer:FindFirstChild("RightButton")
-
-	-- ตรวจสอบว่า UI elements อื่นๆ มีอยู่จริง
-	if not RemainingStepsText or not ForwardButton or not LeftButton or not RightButton then
-		warn("[BoardController] One or more path selection UI elements are missing!")
+	-- <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< หา UI แสดงช่องปัจจุบัน
+	CurrentTileText = PopupUI:FindFirstChild("CurrentTileText")
+	if not CurrentTileText then
+		warn("[BoardController] CurrentTileText UI element not found in PopupUI!")
 	end
+	-- <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< จบส่วนหา UI
+
 end
 
 function BoardController:GetRemoteEvents()
@@ -92,87 +100,66 @@ function BoardController:GetRemoteEvents()
 end
 
 function BoardController:ConnectEvents()
-	-- ตรวจสอบว่า MovementVisualizationComplete มีและตั้งชื่อให้ถูกต้อง
 	if self.remotes.movementVisualizationComplete.Name ~= "MovementVisualizationComplete" then
 		self.remotes.movementVisualizationComplete.Name = "MovementVisualizationComplete"
 	end
 
-	-- Movement path event
 	self.remotes.startPlayerMovementPath.OnClientEvent:Connect(function(playerId, movementData)
-		-- เพิ่มการตรวจสอบประเภทข้อมูลให้ละเอียดขึ้น
 		if type(movementData) ~= "table" or type(movementData.path) ~= "table" or #movementData.path == 0 then
 			warn("[BoardController] Received invalid movement data for playerId:", playerId)
 			return
 		end
-		-- ตรวจสอบ availableDirections (ถ้ามี)
 		if movementData.directions and type(movementData.directions) ~= "table" then
-			warn("[BoardController] Received invalid directions data for playerId:", playerId)
-			movementData.directions = nil -- ตั้งเป็น nil ถ้าข้อมูลไม่ถูกต้อง
+			movementData.directions = nil
 		end
-		-- ตรวจสอบ requiresConfirmation (ถ้ามี)
 		if movementData.requiresConfirmation ~= nil and type(movementData.requiresConfirmation) ~= "boolean" then
-			warn("[BoardController] Received invalid requiresConfirmation data for playerId:", playerId)
-			movementData.requiresConfirmation = false -- ตั้งเป็น false ถ้าข้อมูลไม่ถูกต้อง
+			movementData.requiresConfirmation = false
 		end
-
 		self:StartMoveAlongPath(playerId, movementData.path, movementData.directions, movementData.requiresConfirmation)
 	end)
 
-	-- Tile effect event
 	self.remotes.tileTriggerEvent.OnClientEvent:Connect(function(playerId, tileId, tileType)
 		self:ShowTileEffect(playerId, tileId, tileType)
 	end)
 end
 
 function BoardController:StartMoveAlongPath(playerId, path, availableDirections, requiresConfirmation)
-	-- Cancel previous movement coroutine if exists
 	if self.activeMovementCoroutines[playerId] then
 		if self.isDebugMode then print("[BoardController] Cancelling existing movement coroutine for playerId:", playerId) end
-		-- ไม่ควร close coroutine ของผู้เล่นอื่น แต่ถ้าเป็นของผู้เล่นปัจจุบัน ควร close
 		if playerId == player.UserId then
-			coroutine.close(self.activeMovementCoroutines[playerId])
+			-- ใช้ task.spawn เพื่อป้องกัน yield ถ้า coroutine.close ใช้เวลานาน
+			task.spawn(coroutine.close, self.activeMovementCoroutines[playerId])
 		end
 		self.activeMovementCoroutines[playerId] = nil
 	end
 
-	-- *** ล็อกการควบคุมทันทีถ้าเป็นผู้เล่นปัจจุบัน ***
 	if playerId == player.UserId then
 		self:DisableControls()
 	end
 
-	-- บันทึกข้อมูลการเคลื่อนที่ที่ต้องยืนยัน
 	if requiresConfirmation then
-		self.pendingMovementConfirmations[playerId] = {
-			path = path,
-			finalTileId = path[#path]
-		}
+		self.pendingMovementConfirmations[playerId] = { path = path, finalTileId = path[#path] }
 		if self.isDebugMode then print("[BoardController] Movement requires confirmation for playerId:", playerId, "Final Tile:", path[#path]) end
 	else
 		self.pendingMovementConfirmations[playerId] = nil
 	end
 
-	-- Create and start new coroutine
 	local co = coroutine.create(function()
 		self:MovePlayerAlongPath(playerId, path, availableDirections, requiresConfirmation)
 	end)
-
 	self.activeMovementCoroutines[playerId] = co
 	local success, err = coroutine.resume(co)
 
 	if not success then
 		warn("[BoardController] Coroutine failed for playerId:", playerId, "Error:", err)
-		-- *** สำคัญ: ตรวจสอบว่า coroutine ที่ล้มเหลวเป็นอันเดียวกับที่เก็บไว้ก่อนจะลบ ***
 		if self.activeMovementCoroutines[playerId] == co then
 			self.activeMovementCoroutines[playerId] = nil
 		end
-
-		-- *** ปลดล็อกการควบคุมถ้า Coroutine ล้มเหลวและเป็นผู้เล่นปัจจุบัน ***
 		if playerId == player.UserId then
-			self:EnableControls() -- เรียก EnableControls หลังจากเคลียร์ active coroutine แล้ว
+			self:EnableControls()
+			-- อัปเดต UI เป็นช่องเป้าหมาย แม้ว่าจะไปไม่ถึง (หรือจะแสดงเป็น ? ก็ได้)
+			self:UpdateCurrentTileUI(path[#path]) -- <<<<<<<<<<<<<<<<<<<<<<<<<<<<<< อัปเดต UI กรณี Coroutine ล้มเหลว
 		end
-
-		-- ยืนยันการเคลื่อนที่ไปยังเซิร์ฟเวอร์แม้ว่าจะเกิดข้อผิดพลาด (เพื่อป้องกันเกมค้าง)
-		-- ควรทำหลังจาก EnableControls แล้ว
 		if requiresConfirmation and playerId == player.UserId then
 			warn("[BoardController] Confirming movement on coroutine failure for playerId:", playerId)
 			self:ConfirmMovementCompletion(playerId, path[#path])
@@ -181,14 +168,13 @@ function BoardController:StartMoveAlongPath(playerId, path, availableDirections,
 end
 
 function BoardController:MovePlayerAlongPath(playerId, path, availableDirections, requiresConfirmation)
-	local currentCoroutine = coroutine.running() -- เก็บ coroutine ปัจจุบัน
+	local currentCoroutine = coroutine.running()
 
-	-- Get player and character
 	local targetPlayer = Players:GetPlayerByUserId(playerId)
 	if not targetPlayer then
 		warn("[BoardController] Player not found:", playerId)
 		if self.activeMovementCoroutines[playerId] == currentCoroutine then self.activeMovementCoroutines[playerId] = nil end
-		if playerId == player.UserId then self:EnableControls() end
+		if playerId == player.UserId then self:EnableControls(); self:UpdateCurrentTileUI(path[#path]) end -- อัปเดต UI
 		if requiresConfirmation and playerId == player.UserId then self:ConfirmMovementCompletion(playerId, path[#path]) end
 		return
 	end
@@ -197,7 +183,7 @@ function BoardController:MovePlayerAlongPath(playerId, path, availableDirections
 	if not character then
 		warn("[BoardController] Character not found for player:", playerId)
 		if self.activeMovementCoroutines[playerId] == currentCoroutine then self.activeMovementCoroutines[playerId] = nil end
-		if playerId == player.UserId then self:EnableControls() end
+		if playerId == player.UserId then self:EnableControls(); self:UpdateCurrentTileUI(path[#path]) end -- อัปเดต UI
 		if requiresConfirmation and playerId == player.UserId then self:ConfirmMovementCompletion(playerId, path[#path]) end
 		return
 	end
@@ -207,7 +193,7 @@ function BoardController:MovePlayerAlongPath(playerId, path, availableDirections
 	if not humanoid or not rootPart then
 		warn("[BoardController] Humanoid or RootPart not found for player:", playerId)
 		if self.activeMovementCoroutines[playerId] == currentCoroutine then self.activeMovementCoroutines[playerId] = nil end
-		if playerId == player.UserId then self:EnableControls() end
+		if playerId == player.UserId then self:EnableControls(); self:UpdateCurrentTileUI(path[#path]) end -- อัปเดต UI
 		if requiresConfirmation and playerId == player.UserId then self:ConfirmMovementCompletion(playerId, path[#path]) end
 		return
 	end
@@ -216,13 +202,11 @@ function BoardController:MovePlayerAlongPath(playerId, path, availableDirections
 	humanoid.WalkSpeed = 16
 
 	local movementSuccess = true
+	local lastReachedTileIndex = 1 -- เริ่มที่ช่องแรกใน path
 	for i = 2, #path do
-		-- Check if coroutine was cancelled externally or replaced
 		if self.activeMovementCoroutines[playerId] ~= currentCoroutine or coroutine.status(currentCoroutine) == "dead" then
 			if self.isDebugMode then print("[BoardController] Movement coroutine cancelled or replaced for playerId:", playerId) end
 			movementSuccess = false
-			-- ไม่ต้อง clear activeMovementCoroutines ที่นี่ เพราะอันใหม่ (ถ้ามี) จะจัดการเอง
-			-- แต่ต้องแน่ใจว่า Controls ถูก Enable ถ้าจำเป็น (ทำตอนท้าย)
 			break
 		end
 
@@ -232,9 +216,7 @@ function BoardController:MovePlayerAlongPath(playerId, path, availableDirections
 		if targetPosition then
 			if self.isDebugMode then print(string.format("[BoardController] Moving playerId %d to Tile %s at %s", playerId, tostring(nextTileId), tostring(targetPosition))) end
 			humanoid:MoveTo(targetPosition)
-			local success, result = pcall(function()
-				return humanoid.MoveToFinished:Wait(STEP_TIMEOUT)
-			end)
+			local success, result = pcall(function() return humanoid.MoveToFinished:Wait(STEP_TIMEOUT) end)
 
 			if not success then
 				warn("[BoardController] MoveToFinished Wait errored for playerId:", playerId, "Error:", result)
@@ -244,8 +226,10 @@ function BoardController:MovePlayerAlongPath(playerId, path, availableDirections
 			elseif not result then
 				warn("[BoardController] MoveTo timed out for playerId:", playerId, "Teleporting to target.")
 				rootPart.CFrame = CFrame.new(targetPosition + Vector3.new(0, 3, 0))
+				lastReachedTileIndex = i -- ถือว่าไปถึงช่องนี้แม้จะ timeout
+			else
+				lastReachedTileIndex = i -- อัปเดตช่องล่าสุดที่ไปถึงสำเร็จ
 			end
-
 			task.wait(DELAY_BETWEEN_STEPS)
 		else
 			warn("[BoardController] Target position not found for Tile ID:", nextTileId, "for playerId:", playerId)
@@ -254,114 +238,112 @@ function BoardController:MovePlayerAlongPath(playerId, path, availableDirections
 		end
 	end
 
-	-- \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\ --
-	-- Clean up and handle UI / Controls - START
-	-- \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\ --
+	-- \\ Clean up and handle UI / Controls - START \\ --
+	local finalTileId = path[lastReachedTileIndex] -- ใช้ช่องสุดท้ายที่ไปถึงจริง ๆ
 
-	-- ตรวจสอบว่า coroutine นี้ยังเป็น coroutine ที่ active อยู่หรือไม่ ก่อนจะทำอะไรต่อไป
 	if self.activeMovementCoroutines[playerId] ~= currentCoroutine then
 		if self.isDebugMode then print("[BoardController] Coroutine for playerId", playerId, "was already cancelled or replaced before cleanup.") end
-		-- ถ้า coroutine ถูกแทนที่ไปแล้ว ไม่ควรทำ cleanup หรือ enable controls จาก coroutine เก่านี้
-		-- แต่ถ้าเป็น local player และ controls ยัง disable อยู่ อาจจะต้อง enable เป็น safeguard? (ทำตอนท้ายสุด)
 	else
-		-- ถ้า coroutine นี้ยัง active อยู่ ให้ดำเนินการ cleanup
 		if movementSuccess then
-			if self.isDebugMode then print("[BoardController] Movement successful for playerId:", playerId) end
-			task.wait(MOVEMENT_COMPLETE_DELAY) -- รอเล็กน้อยหลังถึงจุดหมาย
+			if self.isDebugMode then print("[BoardController] Movement successful for playerId:", playerId, "Reached Tile:", finalTileId) end
+			task.wait(MOVEMENT_COMPLETE_DELAY)
 
-			-- ตรวจสอบอีกครั้งเผื่อ coroutine ถูกยกเลิก/แทนที่ *ระหว่าง* รอ MOVEMENT_COMPLETE_DELAY
 			if self.activeMovementCoroutines[playerId] ~= currentCoroutine then
 				if self.isDebugMode then print("[BoardController] Coroutine changed during MOVEMENT_COMPLETE_DELAY for playerId:", playerId) end
 			elseif playerId == player.UserId then
 				if availableDirections and #availableDirections > 0 then
 					if self.isDebugMode then print("[BoardController] Showing path selection for playerId:", playerId) end
+					self:UpdateCurrentTileUI(finalTileId) -- <<<<<<<<<<<<<<<<<<<<<<<<<<<<<< อัปเดต UI ก่อนแสดงทางเลือก
 					self:ShowPathSelectionUI(availableDirections)
-					-- การควบคุมยังคงถูกล็อก, activeMovementCoroutines ยังไม่ถูกเคลียร์ (รอ ChooseDirection)
 				else
 					if self.isDebugMode then print("[BoardController] Movement finished, no path selection. Clearing coroutine ref and enabling controls for playerId:", playerId) end
-					-- *** เคลียร์ coroutine reference ก่อนเรียก EnableControls ***
 					self.activeMovementCoroutines[playerId] = nil
-					self:EnableControls() -- ปลดล็อกการควบคุม
-
-					-- ยืนยันการเคลื่อนที่ (ถ้าจำเป็น) หลังจากปลดล็อก
+					self:EnableControls()
+					self:UpdateCurrentTileUI(finalTileId) -- <<<<<<<<<<<<<<<<<<<<<<<<<<<<<< อัปเดต UI เมื่อเดินเสร็จ
 					if requiresConfirmation then
-						self:ConfirmMovementCompletion(playerId, path[#path])
+						self:ConfirmMovementCompletion(playerId, finalTileId) -- ใช้ finalTileId ที่ไปถึงจริง
 					end
 				end
 			else
-				-- สำหรับผู้เล่นอื่น เคลียร์ coroutine reference เมื่อเดินเสร็จ
 				if self.isDebugMode then print("[BoardController] Movement finished for remote player:", playerId, ". Clearing coroutine ref.") end
 				self.activeMovementCoroutines[playerId] = nil
-				-- ไม่ต้องทำอะไรกับ UI หรือ Controls ของ local player
 			end
 		else
-			warn("[BoardController] Movement failed or interrupted for playerId:", playerId)
-			-- *** เคลียร์ coroutine reference ก่อนเรียก EnableControls ***
+			warn("[BoardController] Movement failed or interrupted for playerId:", playerId, "Last reached Tile:", finalTileId)
 			self.activeMovementCoroutines[playerId] = nil
 			if playerId == player.UserId then
 				if self.isDebugMode then print("[BoardController] Movement failed. Enabling controls for playerId:", playerId) end
-				self:EnableControls() -- ปลดล็อกการควบคุม
+				self:EnableControls()
+				self:UpdateCurrentTileUI(finalTileId) -- <<<<<<<<<<<<<<<<<<<<<<<<<<<<<< อัปเดต UI เป็นช่องสุดท้ายที่ไปถึง
 			end
-			-- ยืนยันการเคลื่อนที่แม้ว่าจะไม่สำเร็จ (ถ้าจำเป็น) หลังจากปลดล็อก
 			if requiresConfirmation and playerId == player.UserId then
-				self:ConfirmMovementCompletion(playerId, path[#path])
+				-- ส่ง Tile สุดท้ายที่ไปถึงจริง ๆ ไปยืนยัน
+				self:ConfirmMovementCompletion(playerId, finalTileId)
 			end
 		end
 	end
 
-	-- Safeguard: ถ้าเป็น local player, controls ถูก disable, และ *ไม่มี* coroutine active -> enable controls
-	-- ทำหลังจาก logic ปกติทั้งหมด
 	if playerId == player.UserId and self.controlsDisabled and not self.activeMovementCoroutines[playerId] then
 		warn("[BoardController] Enabling controls as a final safeguard for playerId:", playerId)
 		self:EnableControls()
+		-- อาจจะอัปเดต UI อีกครั้งเพื่อความแน่ใจ ถ้า finalTileId มีค่า
+		if finalTileId then self:UpdateCurrentTileUI(finalTileId) end
 	end
-	-- \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\ --
-	-- Clean up and handle UI / Controls - END
-	-- \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\ --
+	-- \\ Clean up and handle UI / Controls - END \\ --
 end
-
 
 -- ฟังก์ชันใหม่สำหรับการยืนยันการเคลื่อนที่เสร็จสมบูรณ์ไปยังเซิร์ฟเวอร์
 function BoardController:ConfirmMovementCompletion(playerId, finalTileId)
 	if playerId ~= player.UserId then return end
 
-	-- ตรวจสอบว่ามีข้อมูลรอการยืนยันหรือไม่ ก่อนที่จะพยายามเข้าถึง finalTileId
 	local pendingData = self.pendingMovementConfirmations[playerId]
 	if not pendingData then
 		if self.isDebugMode then print("[BoardController] No pending confirmation to send for playerId:", playerId, "Tile:", finalTileId) end
+		-- แม้ไม่มี pending อาจจะยังคงต้องอัปเดต UI ถ้า finalTileId มีค่า
+		if finalTileId then self:UpdateCurrentTileUI(finalTileId) end -- <<<<<<<<<<<<<<<<<<<<<< อัปเดต UI ที่นี่ด้วย
 		return
 	end
 
-	-- ตรวจสอบว่า finalTileId ตรงกับที่รอหรือไม่
 	if pendingData.finalTileId ~= finalTileId then
 		warn("[BoardController] Mismatched finalTileId for confirmation. Expected:", pendingData.finalTileId, "Got:", finalTileId, ". Sending confirmation for the received tile anyway.")
 	end
 
-	-- ลบข้อมูลการเคลื่อนที่ที่รอการยืนยัน
 	self.pendingMovementConfirmations[playerId] = nil
-
-	-- ส่งการยืนยันไปยังเซิร์ฟเวอร์
 	self.remotes.movementVisualizationComplete:FireServer(finalTileId)
+	self:UpdateCurrentTileUI(finalTileId) -- <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< อัปเดต UI เมื่อส่งยืนยัน
 
 	if self.isDebugMode then
 		print("[BoardController] Sent MovementVisualizationComplete - Player:", playerId, "Tile:", finalTileId)
 	end
 end
 
+-- <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< ฟังก์ชันใหม่สำหรับอัปเดต UI ช่องปัจจุบัน
+function BoardController:UpdateCurrentTileUI(tileId)
+	if not CurrentTileText then return end -- ถ้าไม่มี UI ก็ไม่ต้องทำอะไร
+
+	if tileId then
+		CurrentTileText.Text = "Tile: " .. tostring(tileId)
+		CurrentTileText.Visible = true -- แสดง UI
+		if self.isDebugMode then print("[BoardController] Updated CurrentTileText to:", tileId) end
+	else
+		CurrentTileText.Text = "Tile: -" -- ข้อความเริ่มต้น/เมื่อไม่รู้ตำแหน่ง
+		CurrentTileText.Visible = false -- ซ่อน UI
+		if self.isDebugMode then print("[BoardController] Hid CurrentTileText.") end
+	end
+end
+-- <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< จบฟังก์ชันใหม่
+
 function BoardController:ShowPathSelectionUI(availableDirections)
+	-- ตรวจสอบ UI หลักก่อน
 	if not PathSelectionContainer or not RemainingStepsText or not ForwardButton or not LeftButton or not RightButton then
 		warn("[BoardController] Cannot show Path Selection UI - Elements missing.")
-		-- *** ถ้า UI แสดงไม่ได้ ต้องเคลียร์ coroutine ref และปลดล็อก Controls ทันที ***
 		if self.activeMovementCoroutines[player.UserId] then
-			if self.isDebugMode then print("[BoardController] Clearing coroutine ref due to missing Path UI.") end
 			self.activeMovementCoroutines[player.UserId] = nil
 		end
 		self:EnableControls()
-		-- อาจจะต้องแจ้ง Server ว่าเลือกทางไม่ได้?
 		return
 	end
 
-	-- Clear previous connections
 	for _, connection in pairs(self.uiConnections) do
 		if connection.Connected then connection:Disconnect() end
 	end
@@ -392,7 +374,6 @@ function BoardController:ShowPathSelectionUI(availableDirections)
 					self:ChooseDirection(directionEnum)
 				else
 					warn("[BoardController] PathSelectionContainer was already hidden when button activated.")
-					-- ถ้า UI ถูกซ่อนไปแล้ว อาจจะต้อง enable controls เป็น safeguard
 					if self.activeMovementCoroutines[player.UserId] then self.activeMovementCoroutines[player.UserId] = nil end
 					self:EnableControls()
 				end
@@ -404,14 +385,11 @@ function BoardController:ShowPathSelectionUI(availableDirections)
 	if buttonVisibleCount == 0 then
 		warn("[BoardController] No valid direction buttons to show in Path Selection UI.")
 		PathSelectionContainer.Visible = false
-		-- *** เคลียร์ coroutine ref และปลดล็อก Controls ถ้าไม่มีทางให้เลือก ***
 		if self.activeMovementCoroutines[player.UserId] then
-			if self.isDebugMode then print("[BoardController] Clearing coroutine ref due to no path options.") end
 			self.activeMovementCoroutines[player.UserId] = nil
 		end
 		self:EnableControls()
 	end
-	-- การควบคุมยังคงถูกล็อกอยู่ ณ จุดนี้, activeMovementCoroutines ยังไม่ถูกเคลียร์
 end
 
 function BoardController:ChooseDirection(direction)
@@ -424,21 +402,19 @@ function BoardController:ChooseDirection(direction)
 	end
 	self.uiConnections = {}
 
-	-- *** เคลียร์ coroutine reference ก่อนเรียก EnableControls ***
 	if self.activeMovementCoroutines[player.UserId] then
 		if self.isDebugMode then print("[BoardController] Clearing coroutine ref after choosing direction:", direction) end
 		self.activeMovementCoroutines[player.UserId] = nil
 	else
-		warn("[BoardController] No active coroutine found when choosing direction. Controls might already be enabled.")
+		warn("[BoardController] No active coroutine found when choosing direction.")
 	end
 
-	-- *** ปลดล็อกการควบคุมหลังจากเลือกเส้นทางแล้ว ***
 	self:EnableControls()
 
-	-- ยืนยันการเคลื่อนที่ก่อนหน้าหากมี (ทำหลังจาก EnableControls)
 	local pendingConfirmation = self.pendingMovementConfirmations[player.UserId]
 	if pendingConfirmation then
 		if self.isDebugMode then print("[BoardController] Confirming previous movement before firing ChoosePath. Tile:", pendingConfirmation.finalTileId) end
+		-- การเรียก ConfirmMovementCompletion จะอัปเดต UI ช่องปัจจุบันให้ด้วย
 		self:ConfirmMovementCompletion(player.UserId, pendingConfirmation.finalTileId)
 	end
 
@@ -449,7 +425,6 @@ end
 function BoardController:DisableControls()
 	if self.controlsDisabled then return end
 	if self.isDebugMode then print("[BoardController] Disabling controls for local player.") end
-	-- ตรวจสอบว่า Controls object ยังใช้งานได้
 	if Controls and typeof(Controls.Disable) == "function" then
 		local success, err = pcall(function() Controls:Disable() end)
 		if not success then warn("[BoardController] Error disabling controls:", err) end
@@ -460,18 +435,14 @@ function BoardController:DisableControls()
 end
 
 function BoardController:EnableControls()
-	-- *** เพิ่มการตรวจสอบ: อย่าเปิดใช้งาน Controls ถ้ายังมี Coroutine การเคลื่อนที่ทำงานอยู่สำหรับผู้เล่นปัจจุบัน ***
 	if self.activeMovementCoroutines[player.UserId] then
 		if self.isDebugMode then print("[BoardController] EnableControls called, but movement coroutine is still active. Skipping.") end
 		return
 	end
 	if not self.controlsDisabled then
-		-- ถ้า Controls ไม่ได้ถูก disable ไว้ ก็ไม่จำเป็นต้อง enable
-		-- if self.isDebugMode then print("[BoardController] EnableControls called, but controls were not disabled. Skipping.") end
 		return
 	end
 	if self.isDebugMode then print("[BoardController] Enabling controls for local player.") end
-	-- ตรวจสอบว่า Controls object ยังใช้งานได้
 	if Controls and typeof(Controls.Enable) == "function" then
 		local success, err = pcall(function() Controls:Enable() end)
 		if not success then warn("[BoardController] Error enabling controls:", err) end
@@ -481,26 +452,16 @@ function BoardController:EnableControls()
 	self.controlsDisabled = false
 end
 
-
 function BoardController:GetTilePosition(tileId)
 	if self.tilePositions[tileId] then
 		return self.tilePositions[tileId]
 	end
-
 	local tilesFolder = Workspace:FindFirstChild("BoardTiles")
-	if not tilesFolder then
-		warn("[BoardController] BoardTiles folder not found in Workspace!")
-		return nil
-	end
-
+	if not tilesFolder then warn("[BoardController] BoardTiles folder not found!") return nil end
 	local tileName1 = "Tile" .. tostring(tileId)
 	local tileName2 = tostring(tileId)
 	local tilePart = tilesFolder:FindFirstChild(tileName1) or tilesFolder:FindFirstChild(tileName2)
-
-	if not tilePart or not tilePart:IsA("BasePart") then
-		return nil
-	end
-
+	if not tilePart or not tilePart:IsA("BasePart") then return nil end
 	self.tilePositions[tileId] = tilePart.Position
 	return tilePart.Position
 end
@@ -508,7 +469,6 @@ end
 function BoardController:ShowTileEffect(playerId, tileId, tileType)
 	local tilePosition = self:GetTilePosition(tileId)
 	if not tilePosition then return end
-
 	local lowerTileType = string.lower(tostring(tileType or ""))
 	local color = Color3.fromRGB(200, 200, 200)
 	if lowerTileType == "shop" then color = Color3.fromRGB(255, 215, 0)
@@ -519,16 +479,14 @@ function BoardController:ShowTileEffect(playerId, tileId, tileType)
 	elseif lowerTileType == "bank" then color = Color3.fromRGB(0, 0, 255)
 	elseif lowerTileType == "castle" then color = Color3.fromRGB(128, 0, 128)
 	end
-
 	self:CreateParticleEffect(tilePosition, color, tileType and tileType:upper() or "UNKNOWN")
-	self:PlayTileSound(lowerTileType, playerId, tileId) -- ส่ง tileId ไปด้วย
+	self:PlayTileSound(lowerTileType, playerId, tileId)
 end
 
 function BoardController:CreateParticleEffect(position, color, effectType)
 	local effectContainer = Instance.new("Model", Workspace.CurrentCamera)
 	effectContainer.Name = "TileEffect_" .. effectType .. "_" .. math.random(1000)
 	Debris:AddItem(effectContainer, EFFECT_DURATION + 0.5)
-
 	local effectPart = Instance.new("Part")
 	effectPart.Anchored = true
 	effectPart.CanCollide = false
@@ -540,7 +498,6 @@ function BoardController:CreateParticleEffect(position, color, effectType)
 	effectPart.Shape = Enum.PartType.Cylinder
 	effectPart.Orientation = Vector3.new(0, 0, 90)
 	effectPart.Parent = effectContainer
-
 	local emitter = Instance.new("ParticleEmitter", effectPart)
 	emitter.Color = ColorSequence.new(color)
 	emitter.LightEmission = 0.5
@@ -551,26 +508,12 @@ function BoardController:CreateParticleEffect(position, color, effectType)
 	emitter.Speed = NumberRange.new(2, 5)
 	emitter.SpreadAngle = Vector2.new(360, 360)
 	emitter.Enabled = true
-
-	local tween = TweenService:Create(
-		effectPart,
-		TweenInfo.new(EFFECT_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-		{
-			Orientation = effectPart.Orientation + Vector3.new(0, 360, 0),
-			Transparency = 1,
-			Size = effectPart.Size * 0.1
-		}
-	)
+	local tween = TweenService:Create(effectPart, TweenInfo.new(EFFECT_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Orientation = effectPart.Orientation + Vector3.new(0, 360, 0), Transparency = 1, Size = effectPart.Size * 0.1 })
 	tween:Play()
-
-	tween.Completed:Connect(function()
-		if emitter and emitter.Parent then
-			emitter.Enabled = false
-		end
-	end)
+	tween.Completed:Connect(function() if emitter and emitter.Parent then emitter.Enabled = false end end)
 end
 
-function BoardController:PlayTileSound(tileType, playerId, tileId) -- รับ tileId มาด้วย
+function BoardController:PlayTileSound(tileType, playerId, tileId)
 	local soundId
 	if tileType == "shop" then soundId = "rbxassetid://4067980844" -- Placeholder ID
 	elseif tileType == "battle" then soundId = "rbxassetid://4067980844" -- Placeholder ID
@@ -578,44 +521,23 @@ function BoardController:PlayTileSound(tileType, playerId, tileId) -- รับ 
 	elseif tileType == "money" then soundId = "rbxassetid://4067980844" -- Placeholder ID
 	else soundId = "rbxassetid://4067980844" -- Default sound Placeholder ID
 	end
-
 	if soundId then
 		local sound = Instance.new("Sound")
 		sound.SoundId = soundId
 		sound.Volume = SOUND_VOLUME
-
 		local soundParent
-		local targetPlayerInstance = Players:GetPlayerByUserId(playerId) -- Get player instance
-		if targetPlayerInstance then
-			local character = targetPlayerInstance.Character
-			soundParent = character and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart"))
-		end
-
+		local targetPlayerInstance = Players:GetPlayerByUserId(playerId)
+		if targetPlayerInstance then local character = targetPlayerInstance.Character; soundParent = character and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")) end
 		if not soundParent then
-			local tilePos = self:GetTilePosition(tileId) -- ใช้ tileId ที่รับมา
+			local tilePos = self:GetTilePosition(tileId)
 			if tilePos then
-				local soundPart = Instance.new("Part", Workspace.CurrentCamera)
-				soundPart.Anchored = true
-				soundPart.CanCollide = false
-				soundPart.Transparency = 1
-				soundPart.Position = tilePos
-				soundPart.Size = Vector3.one
-				soundPart.Name = "TempSoundPart"
-				sound.Parent = soundPart
-				-- ใช้ TimeLength หรือค่า default ถ้า TimeLength เป็น 0 หรือไม่พร้อมใช้งาน
-				local soundDuration = (sound.TimeLength > 0 and sound.TimeLength) or 2
-				Debris:AddItem(soundPart, soundDuration + 0.5)
-			else
-				warn("[BoardController] Cannot play sound at tile position because tile position not found for ID:", tileId)
-				sound:Destroy()
-				return
-			end
+				local soundPart = Instance.new("Part", Workspace.CurrentCamera); soundPart.Anchored = true; soundPart.CanCollide = false; soundPart.Transparency = 1; soundPart.Position = tilePos; soundPart.Size = Vector3.one; soundPart.Name = "TempSoundPart"; sound.Parent = soundPart
+				local soundDuration = (sound.TimeLength > 0 and sound.TimeLength) or 2; Debris:AddItem(soundPart, soundDuration + 0.5)
+			else warn("[BoardController] Cannot play sound at tile position for ID:", tileId); sound:Destroy(); return end
 		else
 			sound.Parent = soundParent
-			local soundDuration = (sound.TimeLength > 0 and sound.TimeLength) or 2
-			Debris:AddItem(sound, soundDuration + 0.5)
+			local soundDuration = (sound.TimeLength > 0 and sound.TimeLength) or 2; Debris:AddItem(sound, soundDuration + 0.5)
 		end
-
 		sound:Play()
 	end
 end
