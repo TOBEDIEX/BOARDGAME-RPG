@@ -1,6 +1,6 @@
--- GameManager.lua
--- โมดูลหลักที่ควบคุมลอจิกของเกมทั้งหมด
--- Version: 2.1.0 (Optimized)
+-- FixedGameManager.lua
+-- โมดูลหลักที่ควบคุมลอจิกของเกมทั้งหมด (แก้ไขปัญหาเวลาเริ่มต้น)
+-- Version: 2.2.0 (Fixed)
 
 local GameManager = {}
 GameManager.__index = GameManager
@@ -13,7 +13,7 @@ local RunService = game:GetService("RunService")
 -- Constants
 local MIN_PLAYERS = 2
 local MAX_PLAYERS = 4
-local CLASS_SELECTION_TIME = 30 -- วินาที
+local CLASS_SELECTION_TIME = 60 -- แก้ไขเป็น 60 วินาที
 
 -- ฟังก์ชันรับ Remote Events
 local function getRemotes()
@@ -50,7 +50,7 @@ function GameManager.new()
 		isGameEnded = false,
 		currentTurn = 0,
 		gameTime = 0,
-		selectionTimeLeft = CLASS_SELECTION_TIME
+		selectionTimeLeft = CLASS_SELECTION_TIME -- ใช้ค่าคงที่ที่กำหนดไว้
 	}
 
 	-- Player tracking
@@ -80,7 +80,8 @@ end
 function GameManager:Initialize()
 	-- ตรวจสอบ PlayerManager และ ClassSystem
 	if not self.playerManager or not self.classSystem then
-		error("PlayerManager and ClassSystem must be set before initializing GameManager")
+		warn("PlayerManager and ClassSystem must be set before initializing GameManager")
+		return
 	end
 
 	-- เชื่อมต่อเหตุการณ์ผู้เล่น
@@ -99,6 +100,8 @@ function GameManager:Initialize()
 
 	-- เริ่มตรวจสอบจำนวนผู้เล่น
 	self:StartPlayerCheck()
+
+	print("GameManager initialized with timer: " .. self.gameState.selectionTimeLeft)
 end
 
 function GameManager:StartPlayerCheck()
@@ -231,6 +234,11 @@ function GameManager:StartClassSelectionTimeout()
 
 	-- เริ่มเก็บเวลา
 	self.timers.classSelectionTimestamp = tick()
+
+	print("Starting class selection timer: " .. self.gameState.selectionTimeLeft)
+
+	-- ส่งเวลาเริ่มต้นให้ client ทันที
+	self.remotes.ui.updateClassSelectionTimer:FireAllClients(self.gameState.selectionTimeLeft)
 
 	-- เริ่มจับเวลา
 	self.timers.classSelection = RunService.Heartbeat:Connect(function()
