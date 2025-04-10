@@ -1,6 +1,6 @@
 -- GameManager.lua
 -- โมดูลหลักที่ควบคุมลอจิกของเกมทั้งหมด
--- Version: 2.0.1 (แก้ไขปัญหาตัวจับเวลา)
+-- Version: 2.1.0 (Optimized)
 
 local GameManager = {}
 GameManager.__index = GameManager
@@ -8,15 +8,14 @@ GameManager.__index = GameManager
 -- Services
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
-local ServerStorage = game:GetService("ServerStorage")
 local RunService = game:GetService("RunService")
 
 -- Constants
 local MIN_PLAYERS = 2
 local MAX_PLAYERS = 4
-local CLASS_SELECTION_TIME = 30 -- seconds
+local CLASS_SELECTION_TIME = 30 -- วินาที
 
--- Get the remote events
+-- ฟังก์ชันรับ Remote Events
 local function getRemotes()
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
 	local gameRemotes = remotes:WaitForChild("GameRemotes")
@@ -40,20 +39,6 @@ local function getRemotes()
 	}
 end
 
--- ฟังก์ชันส่ง Debug Log
-local function log(message, level)
-	level = level or "info"
-
-	local prefix = "[GameManager] "
-	if level == "warn" then
-		warn(prefix..message)
-	elseif level == "error" then
-		error(prefix..message)
-	else
-		print(prefix..message)
-	end
-end
-
 function GameManager.new()
 	local self = setmetatable({}, GameManager)
 
@@ -63,12 +48,12 @@ function GameManager.new()
 		isClassSelection = false,
 		isGameStarted = false,
 		isGameEnded = false,
-		currentTurn = 0,    -- ตัวนับจำนวนเทิร์น
-		gameTime = 0,       -- เวลาที่ใช้ไปในเกม (วินาที)
-		selectionTimeLeft = CLASS_SELECTION_TIME  -- เวลาที่เหลือในการเลือกคลาส
+		currentTurn = 0,
+		gameTime = 0,
+		selectionTimeLeft = CLASS_SELECTION_TIME
 	}
 
-	-- Player tracking (these will be set by Init.server.lua)
+	-- Player tracking
 	self.playerManager = nil
 	self.classSystem = nil
 	self.boardSystem = nil
@@ -78,30 +63,27 @@ function GameManager.new()
 	self.playersReady = {}
 	self.playersSelectedClass = {}
 
-	-- ตัวแปรสำหรับการติดตามเวลา
+	-- ตัวแปรจับเวลา
 	self.timers = {
 		playerCheck = nil,
 		classSelection = nil,
-		playerCheckTimestamp = 0,  -- เพิ่มตัวแปรเก็บเวลาล่าสุดที่ตรวจสอบ
-		classSelectionTimestamp = 0  -- เพิ่มตัวแปรเก็บเวลาล่าสุดที่อัปเดตเวลาเลือกคลาส
+		playerCheckTimestamp = 0,
+		classSelectionTimestamp = 0
 	}
 
 	-- Get remote events
 	self.remotes = getRemotes()
 
-	log("สร้าง GameManager เรียบร้อย")
 	return self
 end
 
 function GameManager:Initialize()
-	log("กำลังเริ่มต้น GameManager...")
-
-	-- Check if PlayerManager and ClassSystem are set
+	-- ตรวจสอบ PlayerManager และ ClassSystem
 	if not self.playerManager or not self.classSystem then
 		error("PlayerManager and ClassSystem must be set before initializing GameManager")
 	end
 
-	-- Set up player events
+	-- เชื่อมต่อเหตุการณ์ผู้เล่น
 	Players.PlayerAdded:Connect(function(player)
 		self:OnPlayerAdded(player)
 	end)
@@ -110,22 +92,17 @@ function GameManager:Initialize()
 		self:OnPlayerRemoving(player)
 	end)
 
-	-- Initialize existing players
+	-- เริ่มต้นผู้เล่นที่มีอยู่
 	for _, player in pairs(Players:GetPlayers()) do
 		self:OnPlayerAdded(player)
 	end
 
-	-- Start checking for player count
+	-- เริ่มตรวจสอบจำนวนผู้เล่น
 	self:StartPlayerCheck()
-
-	log("GameManager เริ่มต้นเรียบร้อย")
 end
 
--- แก้ไขฟังก์ชันตรวจสอบจำนวนผู้เล่น ให้ใช้เวลาจริงแทน wait()
 function GameManager:StartPlayerCheck()
-	log("เริ่มตรวจสอบจำนวนผู้เล่น...")
-
-	-- ล้างตัวจับเวลาเดิมถ้ามี
+	-- ล้างตัวจับเวลาเดิม
 	if self.timers.playerCheck then
 		self.timers.playerCheck:Disconnect()
 		self.timers.playerCheck = nil
@@ -134,48 +111,36 @@ function GameManager:StartPlayerCheck()
 	-- เริ่มเก็บเวลาที่เริ่มตรวจสอบ
 	self.timers.playerCheckTimestamp = tick()
 
-	-- ตรวจสอบจำนวนผู้เล่นทุกๆ 1 วินาที โดยเช็คเวลาที่ผ่านไปจริง
+	-- ตรวจสอบจำนวนผู้เล่นทุกๆ 1 วินาที
 	self.timers.playerCheck = RunService.Heartbeat:Connect(function()
-		-- คำนวณเวลาที่ผ่านไปตั้งแต่การตรวจสอบครั้งล่าสุด
+		-- คำนวณเวลาที่ผ่านไป
 		local currentTime = tick()
 		local elapsedTime = currentTime - self.timers.playerCheckTimestamp
+		if elapsedTime < 1 then return end
 
-		-- ถ้าผ่านไปยังไม่ถึง 1 วินาที ให้รอ
-		if elapsedTime < 1 then
-			return
-		end
-
-		-- อัปเดตเวลาล่าสุดที่ตรวจสอบ
+		-- อัปเดตเวลา
 		self.timers.playerCheckTimestamp = currentTime
 
 		-- ไม่ตรวจสอบถ้าเกมจบแล้ว
-		if self.gameState.isGameEnded then
-			return
-		end
+		if self.gameState.isGameEnded then return end
 
 		local playerCount = self.playerManager:GetPlayerCount()
 		local readyCount = self:CountReadyPlayers()
 
-		-- ส่งข้อมูลผู้เล่นที่พร้อมไปยังทุกคน ไม่บ่อยเกินไป
+		-- ส่งข้อมูลผู้เล่นที่พร้อม
 		self.remotes.ui.updatePlayersReady:FireAllClients(readyCount, playerCount)
 
-		-- Debug log เมื่อมีการเปลี่ยนแปลงเท่านั้น (ลดการสแปม log)
-		log("ส่งข้อมูลผู้เล่นที่พร้อม: " .. readyCount .. "/" .. playerCount)
-
-		-- If game hasn't started yet, check if we have enough players
+		-- ตรวจสอบเงื่อนไขการเริ่มเกม
 		if not self.gameState.isGameStarted then
 			if playerCount >= MIN_PLAYERS then
-				-- If all assets are loaded and we have enough players, proceed to class selection
 				if self.gameState.isLoading then
-					local allReady = self:AreAllPlayersReady()
-
-					if allReady and playerCount > 0 then
+					if self:AreAllPlayersReady() and playerCount > 0 then
 						self:FinishLoading()
 					end
 				end
 			end
 		else
-			-- If game has started, check if we still have enough players
+			-- ตรวจสอบผู้เล่นที่เหลือ
 			if playerCount < MIN_PLAYERS then
 				self:EndGame("ผู้เล่นไม่เพียงพอสำหรับเล่นต่อ (ต้องมีอย่างน้อย " .. MIN_PLAYERS .. " คน)")
 			end
@@ -183,306 +148,206 @@ function GameManager:StartPlayerCheck()
 	end)
 end
 
--- นับจำนวนผู้เล่นที่พร้อม
 function GameManager:CountReadyPlayers()
 	local readyCount = 0
 	for _, isReady in pairs(self.playersReady) do
-		if isReady then
-			readyCount = readyCount + 1
-		end
+		if isReady then readyCount = readyCount + 1 end
 	end
 	return readyCount
 end
 
--- ตรวจสอบว่าผู้เล่นทั้งหมดพร้อมหรือยัง
 function GameManager:AreAllPlayersReady()
-	local allReady = true
-	for userId, isReady in pairs(self.playersReady) do
-		if not isReady then
-			allReady = false
-			break
-		end
+	for _, isReady in pairs(self.playersReady) do
+		if not isReady then return false end
 	end
-	return allReady
+	return true
 end
 
--- ตรวจสอบว่าผู้เล่นทั้งหมดเลือกคลาสหรือยัง
 function GameManager:HaveAllPlayersSelectedClass()
-	local allSelected = true
 	for _, player in pairs(Players:GetPlayers()) do
 		if not self.playersSelectedClass[player.UserId] then
-			allSelected = false
-			break
+			return false
 		end
 	end
-	return allSelected
+	return true
 end
 
 function GameManager:OnPlayerAdded(player)
-	log("ผู้เล่นเข้าร่วม: " .. player.Name)
-
-	-- Register player with PlayerManager
+	-- ลงทะเบียนผู้เล่น
 	self.playerManager:RegisterPlayer(player)
 
-	-- Initialize player ready status
+	-- ตั้งค่าสถานะความพร้อม
 	self.playersReady[player.UserId] = false
 
-	-- Tell the client to show loading screen at 0% progress
+	-- แสดงหน้าโหลด
 	self.remotes.ui.updateLoading:FireClient(player, 0)
 
-	-- แจ้งจำนวนผู้เล่นใหม่ให้ทุกคนทราบทันที
+	-- แจ้งจำนวนผู้เล่นใหม่
 	local playerCount = self.playerManager:GetPlayerCount()
 	local readyCount = self:CountReadyPlayers()
 	self.remotes.ui.updatePlayersReady:FireAllClients(readyCount, playerCount)
-
-	log("จำนวนผู้เล่นขณะนี้: " .. playerCount .. " (พร้อมแล้ว: " .. readyCount .. ")")
 end
 
 function GameManager:OnPlayerReady(player)
-	log("ผู้เล่นพร้อมแล้ว: " .. player.Name)
-
-	-- Mark player as ready
+	-- ตั้งค่าผู้เล่นว่าพร้อมแล้ว
 	self.playersReady[player.UserId] = true
 
 	-- นับจำนวนผู้เล่นที่พร้อม
 	local readyCount = self:CountReadyPlayers()
 	local playerCount = self.playerManager:GetPlayerCount()
 
-	-- Update loading progress for all players (percentage based)
+	-- อัปเดตหน้าโหลด
 	local progress = readyCount / playerCount
 	self.remotes.ui.updateLoading:FireAllClients(progress)
-
-	-- อัปเดตจำนวนผู้เล่นที่พร้อม
 	self.remotes.ui.updatePlayersReady:FireAllClients(readyCount, playerCount)
 
-	log("ผู้เล่นพร้อมแล้ว " .. readyCount .. "/" .. playerCount)
-
-	-- If we have enough players and all are ready, proceed to class selection
+	-- ตรวจสอบเงื่อนไขการเปลี่ยนหน้า
 	if self:AreAllPlayersReady() and playerCount >= MIN_PLAYERS and self.gameState.isLoading then
 		self:FinishLoading()
 	end
 end
 
 function GameManager:FinishLoading()
-	log("การโหลดเสร็จสิ้น กำลังเปลี่ยนไปที่การเลือกคลาส...")
-
-	-- Transition from loading to class selection
+	-- เปลี่ยนจากโหลดเป็นเลือกคลาส
 	self.gameState.isLoading = false
 	self.gameState.isClassSelection = true
 
-	-- Show class selection UI to all players
+	-- แสดงหน้าเลือกคลาส
 	self.remotes.ui.showClassSelection:FireAllClients()
 
-	-- Start class selection timeout
+	-- เริ่มนับเวลาเลือกคลาส
 	self:StartClassSelectionTimeout()
 end
 
--- แก้ไขฟังก์ชันจับเวลาการเลือกคลาส ให้ใช้เวลาจริงแทน wait()
 function GameManager:StartClassSelectionTimeout()
-	log("เริ่มต้นการจับเวลาเลือกคลาส...")
-
-	-- รีเซ็ตเวลาเหลือ
+	-- รีเซ็ตเวลา
 	self.gameState.selectionTimeLeft = CLASS_SELECTION_TIME
 
-	-- ล้างตัวจับเวลาเดิมถ้ามี
+	-- ล้างตัวจับเวลาเดิม
 	if self.timers.classSelection then
 		self.timers.classSelection:Disconnect()
 		self.timers.classSelection = nil
 	end
 
-	-- เริ่มเก็บเวลาที่เริ่มจับเวลา
+	-- เริ่มเก็บเวลา
 	self.timers.classSelectionTimestamp = tick()
 
-	-- เริ่มจับเวลาสำหรับการเลือกคลาส
+	-- เริ่มจับเวลา
 	self.timers.classSelection = RunService.Heartbeat:Connect(function()
-		-- คำนวณเวลาที่ผ่านไปตั้งแต่การอัปเดตครั้งล่าสุด
+		-- คำนวณเวลาที่ผ่านไป
 		local currentTime = tick()
 		local elapsedTime = currentTime - self.timers.classSelectionTimestamp
+		if elapsedTime < 1 then return end
 
-		-- ถ้าผ่านไปยังไม่ถึง 1 วินาที ให้รอ
-		if elapsedTime < 1 then
-			return
-		end
-
-		-- อัปเดตเวลาล่าสุดที่มีการตรวจสอบ
+		-- อัปเดตเวลา
 		self.timers.classSelectionTimestamp = currentTime
 
 		-- ไม่จับเวลาถ้าไม่ได้อยู่ในช่วงเลือกคลาส
-		if not self.gameState.isClassSelection then
-			return
-		end
+		if not self.gameState.isClassSelection then return end
 
-		-- ลดเวลาลง
+		-- ลดเวลา
 		self.gameState.selectionTimeLeft = self.gameState.selectionTimeLeft - 1
 		local timeLeft = self.gameState.selectionTimeLeft
+		if timeLeft < 0 then timeLeft = 0 end
 
-		-- ป้องกันไม่ให้เวลาติดลบ
-		if timeLeft < 0 then
-			timeLeft = 0
-			self.gameState.selectionTimeLeft = 0
-		end
-
-		-- Update timer UI for all players
+		-- อัปเดตเวลาให้ทุกคน
 		self.remotes.ui.updateClassSelectionTimer:FireAllClients(timeLeft)
 
-		-- แสดง log เฉพาะเมื่อเวลาเหลือ 10, 5, 3, 2, 1 วินาที
-		if timeLeft <= 10 and (timeLeft == 10 or timeLeft <= 5) then
-			log("เวลาเลือกคลาสเหลือ " .. timeLeft .. " วินาที")
-		end
-
-		-- Check if all players have selected classes
-		local allSelected = self:HaveAllPlayersSelectedClass()
-
-		-- If all players have selected, proceed to game
-		if allSelected then
-			log("ทุกคนเลือกคลาสแล้ว เตรียมเริ่มเกม...")
+		-- ตรวจสอบการเลือกคลาส
+		if self:HaveAllPlayersSelectedClass() then
 			self.timers.classSelection:Disconnect()
 			self.timers.classSelection = nil
-
-			-- รอให้อนิเมชันการเลือกเสร็จสิ้นก่อน
 			wait(1.5)
 			self:StartGame()
 			return
 		end
 
-		-- จัดการเมื่อเวลาหมด
+		-- หมดเวลา
 		if timeLeft <= 0 then
-			log("หมดเวลาเลือกคลาส กำลังสุ่มคลาสให้กับผู้เล่นที่ยังไม่ได้เลือก...")
-
-			-- ยกเลิกการจับเวลา
 			self.timers.classSelection:Disconnect()
 			self.timers.classSelection = nil
 
-			-- Assign random classes to those who haven't selected
+			-- สุ่มคลาสให้ผู้ที่ยังไม่เลือก
 			for _, player in pairs(Players:GetPlayers()) do
 				if not self.playersSelectedClass[player.UserId] then
-					-- Assign random class
 					local randomClass = self.classSystem:GetRandomClass()
 					self:OnPlayerSelectedClass(player, randomClass)
-
-					-- Notify player of random assignment
 					self.remotes.ui.notifyRandomClass:FireClient(player, randomClass)
-					log("สุ่มคลาส " .. randomClass .. " ให้กับ " .. player.Name)
 				end
 			end
 
-			-- Start the game
-			wait(3) -- Give players a moment to see final selections
+			wait(3)
 			self:StartGame()
 		end
 	end)
 end
 
 function GameManager:OnPlayerSelectedClass(player, selectedClass)
-	log("ผู้เล่น " .. player.Name .. " เลือกคลาส: " .. selectedClass)
-
-	-- Record player's class selection
+	-- บันทึกการเลือกคลาส
 	self.playersSelectedClass[player.UserId] = selectedClass
 
-	-- Assign class to player through ClassSystem
+	-- กำหนดคลาส
 	self.classSystem:AssignClassToPlayer(player, selectedClass)
 
-	-- Update UI for all players
+	-- อัปเดต UI
 	self.remotes.ui.updateClassSelection:FireAllClients(player.UserId, selectedClass)
 
-	-- แสดงจำนวนผู้เล่นที่เลือกคลาสแล้ว
-	local selectedCount = 0
-	local totalPlayers = #Players:GetPlayers()
-	for _, class in pairs(self.playersSelectedClass) do
-		if class then
-			selectedCount = selectedCount + 1
-		end
-	end
-	log("ผู้เล่นเลือกคลาสแล้ว " .. selectedCount .. "/" .. totalPlayers)
-
-	-- Check if all players have selected classes
+	-- ตรวจสอบการเลือกคลาสครบ
 	if self:HaveAllPlayersSelectedClass() and self.gameState.isClassSelection then
-		log("ทุกคนเลือกคลาสแล้ว เตรียมเริ่มเกม...")
-
-		-- ยกเลิกการจับเวลา
 		if self.timers.classSelection then
 			self.timers.classSelection:Disconnect()
 			self.timers.classSelection = nil
 		end
 
-		wait(2) -- Give players a moment to see final selections
+		wait(2)
 		self:StartGame()
 	end
 end
 
 function GameManager:StartGame()
 	local playerCount = self.playerManager:GetPlayerCount()
-	log("กำลังเริ่มเกมกับผู้เล่น " .. playerCount .. " คน")
 
-	-- ตรวจสอบว่ามีผู้เล่นครบตามจำนวนขั้นต่ำ
-	if playerCount < MIN_PLAYERS then
-		log("ไม่สามารถเริ่มเกมได้ ผู้เล่นไม่ครบ " .. MIN_PLAYERS .. " คน", "warn")
-		return
-	end
+	-- ตรวจสอบจำนวนผู้เล่น
+	if playerCount < MIN_PLAYERS then return end
 
-	-- Transition to game started state
+	-- เปลี่ยนสถานะเกม
 	self.gameState.isClassSelection = false
 	self.gameState.isGameStarted = true
 
-	-- Show main game UI to all players
+	-- แสดง UI เกมหลัก
 	self.remotes.ui.showMainGameUI:FireAllClients()
-
-	-- Fire start game event
 	self.remotes.game.startGame:FireAllClients()
 
-	-- Initialize player positions on the board
+	-- ตั้งค่าตำแหน่งเริ่มต้น
 	self:InitializePlayerPositions()
 
-	-- ถ้ามีระบบเทิร์น ให้เริ่มระบบเทิร์น
+	-- เริ่มระบบเทิร์น
 	if self.turnSystem then
-		-- สร้างลำดับเทิร์นจากผู้เล่นที่มีอยู่
 		self.turnSystem:CreateTurnOrderFromActivePlayers(self.playerManager)
-
-		-- เริ่มระบบเทิร์น
 		self.turnSystem:StartTurnSystem()
-
-		-- ตั้งค่าจำนวนเทิร์นเริ่มต้น
 		self.gameState.currentTurn = 1
-
-		log("เริ่มระบบเทิร์นเรียบร้อย")
-	else
-		log("ไม่พบระบบเทิร์น เกมจะดำเนินต่อไปโดยไม่มีการจัดการเทิร์น", "warn")
 	end
 
 	-- เริ่มจับเวลาเกม
 	self:StartGameTimer()
-
-	log("เริ่มเกมเรียบร้อยแล้ว")
 end
 
--- ฟังก์ชันตั้งค่าตำแหน่งเริ่มต้นของผู้เล่น
 function GameManager:InitializePlayerPositions()
-	-- ตรวจสอบว่ามีระบบกระดานหรือไม่
-	if not self.boardSystem then
-		log("ไม่พบระบบกระดาน ไม่สามารถกำหนดตำแหน่งเริ่มต้นของผู้เล่นได้", "warn")
-		return false
-	end
+	if not self.boardSystem then return false end
 
-	log("กำลังตั้งค่าตำแหน่งเริ่มต้นของผู้เล่น...")
-
-	-- ตั้งค่าตำแหน่งเริ่มต้นสำหรับทุกคน
+	-- ตั้งตำแหน่งเริ่มต้น
 	for _, player in pairs(Players:GetPlayers()) do
-		-- ตั้งค่าตำแหน่งเริ่มต้นที่ช่อง 1
 		self.boardSystem:SetPlayerPosition(player.UserId, 1, 1)
 
-		-- อัปเดตตำแหน่งผู้เล่นไปยังทุกคน
+		-- แจ้งตำแหน่งให้ทุกคน
 		local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
 		boardRemotes:WaitForChild("UpdatePlayerPosition"):FireAllClients(player.UserId, 1)
-
-		log("ตั้งค่าตำแหน่งเริ่มต้นของ " .. player.Name .. " ที่ช่อง 1")
 	end
 
 	return true
 end
 
--- ปรับปรุงฟังก์ชันเริ่มตัวจับเวลาเกม
 function GameManager:StartGameTimer()
-	-- เริ่มจับเวลาเกมโดยใช้ตัวจับเวลาที่แม่นยำกว่าเดิม
 	local lastUpdateTime = tick()
 
 	spawn(function()
@@ -490,31 +355,25 @@ function GameManager:StartGameTimer()
 			local currentTime = tick()
 			local elapsed = currentTime - lastUpdateTime
 
-			-- อัปเดตทุก 1 วินาที
 			if elapsed >= 1 then
 				lastUpdateTime = currentTime
 				self.gameState.gameTime = self.gameState.gameTime + 1
 
-				-- อัปเดตทุก 60 วินาที (1 นาที)
 				if self.gameState.gameTime % 60 == 0 then
 					local minutes = math.floor(self.gameState.gameTime / 60)
-					log("เวลาเล่นเกม: " .. minutes .. " นาที")
 				end
 			end
 
-			wait(0.2) -- ตรวจสอบทุกๆ 0.2 วินาที เพื่อให้แม่นยำมากขึ้น
+			wait(0.2)
 		end
 	end)
-
-	log("เริ่มจับเวลาเกม")
 end
 
--- ฟังก์ชันตรวจสอบการชนะ
 function GameManager:CheckWinCondition()
-	-- ตรวจสอบจำนวนผู้เล่นที่เหลือ
+	-- ตรวจสอบจำนวนผู้เล่น
 	local activePlayers = self.playerManager:GetPlayerCount()
 	if activePlayers <= 1 then
-		-- หาผู้เล่นสุดท้ายที่เหลือ
+		-- หาผู้เล่นคนสุดท้าย
 		local lastPlayer = nil
 		for _, player in pairs(Players:GetPlayers()) do
 			lastPlayer = player
@@ -527,7 +386,7 @@ function GameManager:CheckWinCondition()
 		end
 	end
 
-	-- ตัวอย่างเงื่อนไขการชนะ: ถ้าเกมเล่นครบ 30 เทิร์น ให้หาผู้ชนะจากผู้ที่มีเงินมากที่สุด
+	-- ตรวจสอบจำนวนเทิร์น
 	if self.gameState.currentTurn >= 30 then
 		local richestPlayer = nil
 		local highestMoney = 0
@@ -550,38 +409,30 @@ function GameManager:CheckWinCondition()
 end
 
 function GameManager:OnPlayerRemoving(player)
-	log("ผู้เล่นกำลังออก: " .. player.Name)
-
-	-- Unregister player
+	-- ลบข้อมูลผู้เล่น
 	self.playerManager:UnregisterPlayer(player)
-
-	-- Clean up player data
 	self.playersReady[player.UserId] = nil
 	self.playersSelectedClass[player.UserId] = nil
 
-	-- ตรวจสอบและอัปเดตจำนวนผู้เล่น
+	-- อัปเดตจำนวนผู้เล่น
 	local playerCount = self.playerManager:GetPlayerCount()
 	local readyCount = self:CountReadyPlayers()
 	self.remotes.ui.updatePlayersReady:FireAllClients(readyCount, playerCount)
 
-	log("จำนวนผู้เล่นคงเหลือ: " .. playerCount)
-
-	-- If game has started and not enough players, end the game
+	-- ตรวจสอบจำนวนผู้เล่นที่เหลือ
 	if self.gameState.isGameStarted and playerCount < MIN_PLAYERS then
 		self:EndGame("ผู้เล่นไม่เพียงพอ (เหลือเพียง " .. playerCount .. " คน)")
 	end
 
-	-- ตรวจสอบเงื่อนไขการชนะ (กรณีเหลือผู้เล่นคนเดียว)
+	-- ตรวจสอบเงื่อนไขชนะ
 	self:CheckWinCondition()
 end
 
 function GameManager:EndGame(reason)
-	log("เกมจบลง: " .. reason)
-
-	-- Set game state to ended
+	-- ตั้งค่าสถานะเกม
 	self.gameState.isGameEnded = true
 
-	-- ยกเลิกการจับเวลาทั้งหมด
+	-- ยกเลิกการจับเวลา
 	if self.timers.playerCheck then
 		self.timers.playerCheck:Disconnect()
 		self.timers.playerCheck = nil
@@ -597,18 +448,15 @@ function GameManager:EndGame(reason)
 		self.turnSystem:Reset()
 	end
 
-	-- Notify all clients that the game has ended
+	-- แจ้งทุกคนว่าเกมจบ
 	self.remotes.game.endGame:FireAllClients(reason)
 
-	-- แสดงสถิติเกม
+	-- แสดงสถิติ
 	self:ShowGameStats(reason)
-
-	log("การจัดการเกมจบเรียบร้อย")
 end
 
--- ฟังก์ชันแสดงสถิติเกม
 function GameManager:ShowGameStats(reason)
-	-- สร้างข้อมูลสถิติเกม
+	-- สร้างข้อมูลสถิติ
 	local gameStats = {
 		reason = reason,
 		totalTurns = self.gameState.currentTurn,
@@ -616,7 +464,7 @@ function GameManager:ShowGameStats(reason)
 		playerStats = {}
 	}
 
-	-- รวบรวมสถิติของผู้เล่น
+	-- รวบรวมสถิติผู้เล่น
 	for _, player in pairs(Players:GetPlayers()) do
 		local playerData = self.playerManager:GetPlayerData(player)
 		if playerData then
@@ -630,12 +478,12 @@ function GameManager:ShowGameStats(reason)
 		end
 	end
 
-	-- เรียงลำดับผู้เล่นตามเงิน
+	-- เรียงลำดับตามเงิน
 	table.sort(gameStats.playerStats, function(a, b)
 		return (a.money or 0) > (b.money or 0)
 	end)
 
-	-- ส่งสถิติไปยังทุกคลเอนต์
+	-- ส่งสถิติ
 	local statsEvent = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("GameRemotes"):FindFirstChild("GameStats")
 	if not statsEvent then
 		statsEvent = Instance.new("RemoteEvent")
@@ -644,13 +492,9 @@ function GameManager:ShowGameStats(reason)
 	end
 
 	statsEvent:FireAllClients(gameStats)
-	log("ส่งสถิติเกมไปยังผู้เล่นทั้งหมด")
 end
 
--- ฟังก์ชันรีเซ็ตเกม (สำหรับเริ่มใหม่)
 function GameManager:ResetGame()
-	log("กำลังรีเซ็ตเกม...")
-
 	-- รีเซ็ต Game State
 	self.gameState = {
 		isLoading = true,
@@ -662,7 +506,7 @@ function GameManager:ResetGame()
 		selectionTimeLeft = CLASS_SELECTION_TIME
 	}
 
-	-- ล้างข้อมูลการพร้อมและการเลือกคลาส
+	-- ล้างข้อมูล
 	self.playersReady = {}
 	self.playersSelectedClass = {}
 
@@ -677,22 +521,15 @@ function GameManager:ResetGame()
 		self.timers.classSelection = nil
 	end
 
-	-- รีเซ็ตผู้เล่นที่มีอยู่
+	-- รีเซ็ตผู้เล่น
 	for _, player in pairs(Players:GetPlayers()) do
-		-- ลงทะเบียนผู้เล่นใหม่
 		self.playerManager:RegisterPlayer(player)
-
-		-- กำหนดค่าเริ่มต้น
 		self.playersReady[player.UserId] = false
-
-		-- แสดงหน้าโหลดเกม
 		self.remotes.ui.updateLoading:FireClient(player, 0)
 	end
 
-	-- เริ่มตรวจสอบจำนวนผู้เล่นอีกครั้ง
+	-- เริ่มตรวจสอบใหม่
 	self:StartPlayerCheck()
-
-	log("รีเซ็ตเกมเรียบร้อย")
 end
 
 return GameManager
