@@ -1,6 +1,6 @@
 -- TurnSystem.lua
 -- โมดูลจัดการระบบเทิร์นและลำดับเล่นของผู้เล่น
--- Version: 2.1.0 (Optimized)
+-- Version: 2.2.0 (Fixed Movement Coordination)
 
 local TurnSystem = {}
 TurnSystem.__index = TurnSystem
@@ -10,8 +10,9 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 -- Constants
-local TURN_TIME_LIMIT = 120
-local INACTIVITY_WARNING_TIME = 90
+local TURN_TIME_LIMIT = 60
+local INACTIVITY_WARNING_TIME = 15
+local MOVEMENT_SAFETY_DELAY = 1.5 -- เวลารอเผื่อเพื่อให้แน่ใจว่าการเคลื่อนที่เสร็จสมบูรณ์
 
 function TurnSystem.new()
 	local self = setmetatable({}, TurnSystem)
@@ -24,10 +25,12 @@ function TurnSystem.new()
 	self.turnTimeRemaining = 0
 	self.turnStates = {}
 	self.skipTurnPlayers = {}
+	self.pendingEndTurn = {}
 	self.onTurnStart = nil
 	self.onTurnEnd = nil
 	self.onTurnTimerUpdate = nil
 	self.remotes = nil
+	self.debugMode = false
 
 	return self
 end
@@ -131,6 +134,9 @@ function TurnSystem:StartPlayerTurn(playerID)
 	self.isTurnActive = true
 	self.turnTimeRemaining = TURN_TIME_LIMIT
 
+	-- ล้างสถานะการจบเทิร์นที่รอดำเนินการ
+	self.pendingEndTurn[playerID] = nil
+
 	-- Notify clients
 	self.remotes.updateTurn:FireAllClients(playerID)
 	self.remotes.turnState:FireClient(player, {
@@ -198,8 +204,56 @@ end
 function TurnSystem:EndPlayerTurn(playerID, reason)
 	reason = reason or "normal"
 
+	-- ถ้ามีการรอจบเทิร์นอยู่แล้ว ไม่ต้องทำซ้ำ
+	if self.pendingEndTurn[playerID] then
+		if self.debugMode then
+			print("[TurnSystem] Turn end already pending for player", playerID)
+		end
+		return false
+	end
+
 	-- Check if it's the correct player's turn
 	if playerID ~= self.currentPlayerTurn then return false end
+
+	-- ตรวจสอบการรอการจบเทิร์นด้วยเหตุผลของการเคลื่อนที่
+	if reason == "move_complete" or reason == "move_timeout" then
+		-- เพิ่มเวลารอเผื่อสำหรับการเคลื่อนที่
+		self.pendingEndTurn[playerID] = {
+			reason = reason,
+			timestamp = os.time()
+		}
+
+		-- ล่าช้าการจบเทิร์นเพื่อให้แน่ใจว่าอนิเมชันเสร็จสมบูรณ์
+		task.spawn(function()
+			task.wait(MOVEMENT_SAFETY_DELAY)
+
+			-- ตรวจสอบว่ายังเป็นเทิร์นปัจจุบันหรือไม่
+			if self.currentPlayerTurn == playerID and self.pendingEndTurn[playerID] then
+				-- ล้างข้อมูลการรอ
+				local endingReason = self.pendingEndTurn[playerID].reason
+				self.pendingEndTurn[playerID] = nil
+
+				-- ดำเนินการจบเทิร์นจริงๆ
+				self:ExecuteEndTurn(playerID, endingReason)
+			end
+		end)
+
+		return true
+	else
+		-- สำหรับเหตุผลอื่นๆ ที่ไม่เกี่ยวกับการเคลื่อนที่ สามารถจบเทิร์นได้ทันที
+		return self:ExecuteEndTurn(playerID, reason)
+	end
+end
+
+-- แยกฟังก์ชันการจบเทิร์นจริงๆ ออกมาเพื่อให้มีความยืดหยุ่นในการใช้งาน
+function TurnSystem:ExecuteEndTurn(playerID, reason)
+	-- ตรวจสอบอีกครั้งว่าเป็นเทิร์นของผู้เล่นที่ถูกต้อง
+	if playerID ~= self.currentPlayerTurn then 
+		if self.debugMode then
+			print("[TurnSystem] ExecuteEndTurn called for wrong player:", playerID, "current turn:", self.currentPlayerTurn)
+		end
+		return false 
+	end
 
 	-- Clear current turn variables
 	local endingPlayerID = self.currentPlayerTurn
@@ -224,6 +278,10 @@ function TurnSystem:EndPlayerTurn(playerID, reason)
 			turnEnded = true,
 			reason = reason
 		})
+	end
+
+	if self.debugMode then
+		print("[TurnSystem] Turn ended for player", endingPlayerID, "reason:", reason)
 	end
 
 	-- Move to next turn
@@ -328,6 +386,7 @@ function TurnSystem:HandlePlayerLeaving(playerID)
 	-- Clear player data
 	self.skipTurnPlayers[playerID] = nil
 	self.turnStates[playerID] = nil
+	self.pendingEndTurn[playerID] = nil
 
 	return true
 end
@@ -347,8 +406,15 @@ function TurnSystem:Reset()
 	self.turnTimeRemaining = 0
 	self.turnStates = {}
 	self.skipTurnPlayers = {}
+	self.pendingEndTurn = {}
 
 	return true
+end
+
+-- เพิ่มโหมด Debug เพื่อช่วยในการแก้ไขปัญหา
+function TurnSystem:EnableDebugMode(enabled)
+	self.debugMode = enabled or false
+	return self.debugMode
 end
 
 return TurnSystem
