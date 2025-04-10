@@ -1,0 +1,153 @@
+-- PlayerManager.lua
+-- โมดูลจัดการข้อมูลผู้เล่นทั้งหมดในเกม
+-- Version: 1.0.0
+
+local PlayerManager = {}
+PlayerManager.__index = PlayerManager
+
+-- Services
+local Players = game:GetService("Players")
+
+function PlayerManager.new(gameManager)
+	local self = setmetatable({}, PlayerManager)
+
+	-- Reference to game manager
+	self.gameManager = gameManager
+
+	-- Player data storage
+	self.players = {}
+	self.playerCount = 0
+
+	return self
+end
+
+function PlayerManager:RegisterPlayer(player)
+	-- Create player data structure
+	self.players[player.UserId] = {
+		player = player,
+		isConnected = true,
+		joinTime = os.time(),
+		class = nil,
+		stats = {
+			level = 1,
+			hp = 100,
+			maxHp = 100,
+			mp = 50,
+			maxMp = 50,
+			attack = 10,
+			defense = 10,
+			magic = 10,
+			money = 100
+		},
+		inventory = {
+			items = {},
+			weapons = {},
+			armor = {},
+			shields = {}
+		},
+		position = nil, -- Will store board position once game starts
+		isAlive = true
+	}
+
+	-- Increment player count
+	self.playerCount = self.playerCount + 1
+
+	print("Player registered: " .. player.Name .. " (Total: " .. self.playerCount .. ")")
+	return self.players[player.UserId]
+end
+
+function PlayerManager:UnregisterPlayer(player)
+	-- Remove player data
+	if self.players[player.UserId] then
+		self.players[player.UserId] = nil
+		self.playerCount = self.playerCount - 1
+		print("Player unregistered: " .. player.Name .. " (Total: " .. self.playerCount .. ")")
+	end
+end
+
+function PlayerManager:GetPlayerCount()
+	return self.playerCount
+end
+
+function PlayerManager:GetAllPlayers()
+	local result = {}
+	for _, playerData in pairs(self.players) do
+		table.insert(result, playerData.player)
+	end
+	return result
+end
+
+function PlayerManager:GetPlayerData(player)
+	if typeof(player) == "Instance" and player:IsA("Player") then
+		return self.players[player.UserId]
+	elseif type(player) == "number" then
+		return self.players[player]
+	end
+	return nil
+end
+
+function PlayerManager:SetPlayerClass(player, class)
+	local playerData = self:GetPlayerData(player)
+	if playerData then
+		playerData.class = class
+
+		-- Apply initial class stats
+		if class == "Warrior" then
+			playerData.stats.attack = playerData.stats.attack + 5
+			playerData.stats.defense = playerData.stats.defense + 3
+			playerData.stats.maxHp = playerData.stats.maxHp + 20
+			playerData.stats.hp = playerData.stats.maxHp
+		elseif class == "Mage" then
+			playerData.stats.magic = playerData.stats.magic + 8
+			playerData.stats.maxMp = playerData.stats.maxMp + 30
+			playerData.stats.mp = playerData.stats.maxMp
+		elseif class == "Thief" then
+			playerData.stats.attack = playerData.stats.attack + 3
+			playerData.stats.defense = playerData.stats.defense + 2
+			playerData.stats.money = playerData.stats.money + 50
+		end
+
+		print("Player " .. player.Name .. " assigned class: " .. class)
+		return true
+	end
+
+	return false
+end
+
+function PlayerManager:UpdatePlayerStats(player, statUpdates)
+	local playerData = self:GetPlayerData(player)
+	if playerData then
+		-- Update each stat
+		for stat, value in pairs(statUpdates) do
+			if playerData.stats[stat] ~= nil then
+				playerData.stats[stat] = value
+			end
+		end
+
+		-- Make sure HP and MP don't exceed maximums
+		playerData.stats.hp = math.min(playerData.stats.hp, playerData.stats.maxHp)
+		playerData.stats.mp = math.min(playerData.stats.mp, playerData.stats.maxMp)
+
+		return true
+	end
+
+	return false
+end
+
+function PlayerManager:GetPlayersSortedByJoinTime()
+	local sortedPlayers = {}
+
+	-- Collect players
+	for userId, playerData in pairs(self.players) do
+		table.insert(sortedPlayers, playerData)
+	end
+
+	-- Sort by join time
+	table.sort(sortedPlayers, function(a, b)
+		return a.joinTime < b.joinTime
+	end)
+
+	return sortedPlayers
+end
+
+return PlayerManager
