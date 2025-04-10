@@ -1,0 +1,892 @@
+-- MainGameUIHandler.lua
+-- จัดการ UI หลักของเกม
+-- Version: 1.4.0
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+
+-- Get local player (with safety checks)
+local player = Players.LocalPlayer
+if not player then
+	-- Wait for LocalPlayer if it's not available yet
+	Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+	player = Players.LocalPlayer
+end
+
+-- Get UI elements
+local PlayerGui = player:WaitForChild("PlayerGui")
+local MainGameUI = PlayerGui:WaitForChild("MainGameUI")
+local StatusBarContainer = MainGameUI:WaitForChild("StatusBarContainer")
+
+-- Check if TurnIndicator module exists, if not, load it from script
+local TurnIndicator = nil
+if script.Parent and script.Parent:FindFirstChild("UI") and script.Parent.UI:FindFirstChild("TurnIndicator") then
+	TurnIndicator = require(script.Parent.UI.TurnIndicator)
+end
+
+-- Check buttons and create them if they don't exist
+local function ensureButtonsExist()
+	local InventoryButton = MainGameUI:FindFirstChild("InventoryButton")
+	local QuestButton = MainGameUI:FindFirstChild("QuestButton")
+
+	if not InventoryButton then
+		InventoryButton = Instance.new("TextButton")
+		InventoryButton.Name = "InventoryButton"
+		InventoryButton.Size = UDim2.new(0.1, 0, 0.05, 0)
+		InventoryButton.Position = UDim2.new(0.05, 0, 0.15, 0)
+		InventoryButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+		InventoryButton.Text = "Inventory"
+		InventoryButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+		InventoryButton.Font = Enum.Font.GothamBold
+		InventoryButton.TextSize = 14
+		InventoryButton.Parent = MainGameUI
+
+		-- Create UICorner
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 6)
+		corner.Parent = InventoryButton
+	end
+
+	if not QuestButton then
+		QuestButton = Instance.new("TextButton")
+		QuestButton.Name = "QuestButton"
+		QuestButton.Size = UDim2.new(0.1, 0, 0.05, 0)
+		QuestButton.Position = UDim2.new(0.16, 0, 0.15, 0)
+		QuestButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+		QuestButton.Text = "Quests"
+		QuestButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+		QuestButton.Font = Enum.Font.GothamBold
+		QuestButton.TextSize = 14
+		QuestButton.Parent = MainGameUI
+
+		-- Create UICorner
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 6)
+		corner.Parent = QuestButton
+	end
+
+	return InventoryButton, QuestButton
+end
+
+-- Create or get Current Turn Indicator
+local function ensureTurnIndicatorExists()
+	local CurrentTurnIndicator = MainGameUI:FindFirstChild("CurrentTurnIndicator")
+
+	if not CurrentTurnIndicator then
+		if TurnIndicator then
+			-- Use the module if available
+			CurrentTurnIndicator = TurnIndicator(MainGameUI)
+		else
+			-- Create a simple version if module not available
+			CurrentTurnIndicator = Instance.new("Frame")
+			CurrentTurnIndicator.Name = "CurrentTurnIndicator"
+			CurrentTurnIndicator.Size = UDim2.new(0.25, 0, 0.08, 0)
+			CurrentTurnIndicator.Position = UDim2.new(0.375, 0, 0.05, 0)
+			CurrentTurnIndicator.BackgroundColor3 = Color3.fromRGB(50, 80, 120)
+			CurrentTurnIndicator.BackgroundTransparency = 0.2
+			CurrentTurnIndicator.Parent = MainGameUI
+
+			-- Create UICorner
+			local corner = Instance.new("UICorner")
+			corner.CornerRadius = UDim.new(0, 8)
+			corner.Parent = CurrentTurnIndicator
+
+			-- Create text
+			local turnText = Instance.new("TextLabel")
+			turnText.Name = "TurnText"
+			turnText.Size = UDim2.new(1, 0, 1, 0)
+			turnText.BackgroundTransparency = 1
+			turnText.Text = "Waiting for turn..."
+			turnText.TextColor3 = Color3.fromRGB(255, 255, 255)
+			turnText.Font = Enum.Font.GothamBold
+			turnText.TextSize = 18
+			turnText.Parent = CurrentTurnIndicator
+		end
+	end
+
+	return CurrentTurnIndicator
+end
+
+-- Get all UI elements with safety checks
+local InventoryButton, QuestButton = ensureButtonsExist()
+local CurrentTurnIndicator = ensureTurnIndicatorExists()
+
+-- Get popup UI elements
+local PopupUI = PlayerGui:WaitForChild("PopupUI")
+local InventoryUI = PopupUI:FindFirstChild("InventoryUI")
+local QuestUI = PopupUI:FindFirstChild("QuestUI")
+
+-- Check if required UI elements were found, create them if not
+if not InventoryUI then
+	InventoryUI = Instance.new("Frame")
+	InventoryUI.Name = "InventoryUI"
+	InventoryUI.Size = UDim2.new(0.8, 0, 0.8, 0)
+	InventoryUI.Position = UDim2.new(0.1, 0, 0.1, 0)
+	InventoryUI.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+	InventoryUI.BackgroundTransparency = 0.1
+	InventoryUI.Visible = false
+	InventoryUI.Parent = PopupUI
+
+	-- Create UICorner
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = InventoryUI
+
+	-- Create title
+	local title = Instance.new("TextLabel")
+	title.Name = "Title"
+	title.Size = UDim2.new(1, 0, 0.1, 0)
+	title.BackgroundTransparency = 1
+	title.Text = "Inventory"
+	title.TextColor3 = Color3.fromRGB(255, 255, 255)
+	title.Font = Enum.Font.GothamBold
+	title.TextSize = 24
+	title.Parent = InventoryUI
+end
+
+if not QuestUI then
+	QuestUI = Instance.new("Frame")
+	QuestUI.Name = "QuestUI"
+	QuestUI.Size = UDim2.new(0.8, 0, 0.8, 0)
+	QuestUI.Position = UDim2.new(0.1, 0, 0.1, 0)
+	QuestUI.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+	QuestUI.BackgroundTransparency = 0.1
+	QuestUI.Visible = false
+	QuestUI.Parent = PopupUI
+
+	-- Create UICorner
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = QuestUI
+
+	-- Create title
+	local title = Instance.new("TextLabel")
+	title.Name = "Title"
+	title.Size = UDim2.new(1, 0, 0.1, 0)
+	title.BackgroundTransparency = 1
+	title.Text = "Quests"
+	title.TextColor3 = Color3.fromRGB(255, 255, 255)
+	title.Font = Enum.Font.GothamBold
+	title.TextSize = 24
+	title.Parent = QuestUI
+end
+
+-- Get remotes
+local remotes = ReplicatedStorage:WaitForChild("Remotes")
+local uiRemotes = remotes:WaitForChild("UIRemotes")
+local gameRemotes = remotes:WaitForChild("GameRemotes")
+
+-- Make sure all required remotes exist
+local updatePlayerStatsEvent = uiRemotes:WaitForChild("UpdatePlayerStats")
+local updateTurnEvent = gameRemotes:WaitForChild("UpdateTurn")
+local endGameEvent = gameRemotes:WaitForChild("EndGame")
+
+-- Additional remotes for turn system
+local updateTurnTimerEvent = gameRemotes:FindFirstChild("UpdateTurnTimer")
+if not updateTurnTimerEvent then
+	updateTurnTimerEvent = Instance.new("RemoteEvent")
+	updateTurnTimerEvent.Name = "UpdateTurnTimer"
+	updateTurnTimerEvent.Parent = gameRemotes
+end
+
+local updateTurnDetailsEvent = uiRemotes:FindFirstChild("UpdateTurnDetails")
+if not updateTurnDetailsEvent then
+	updateTurnDetailsEvent = Instance.new("RemoteEvent")
+	updateTurnDetailsEvent.Name = "UpdateTurnDetails"
+	updateTurnDetailsEvent.Parent = uiRemotes
+end
+
+-- Variables for turn UI
+local turnTimerActive = false
+local turnTimerConnection = nil
+local turnDetailsData = nil
+local isMyTurn = false
+local myStatusBar = nil
+
+-- Functions to manage UI
+local function setupPlayerStatusBar()
+	print("Setting up player status bar")
+
+	-- Just use the template - should be invisible
+	local template = StatusBarContainer:FindFirstChild("PlayerStatusBar")
+	if not template then
+		-- Create template if it doesn't exist
+		template = Instance.new("Frame")
+		template.Name = "PlayerStatusBar"
+		template.Size = UDim2.new(1, 0, 0.1, 0)
+		template.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+		template.Visible = false
+		template.Parent = StatusBarContainer
+
+		-- Create name label
+		local nameLabel = Instance.new("TextLabel")
+		nameLabel.Name = "PlayerName"
+		nameLabel.Size = UDim2.new(0.3, 0, 0.3, 0)
+		nameLabel.Position = UDim2.new(0.05, 0, 0.1, 0)
+		nameLabel.BackgroundTransparency = 1
+		nameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+		nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+		nameLabel.Font = Enum.Font.GothamBold
+		nameLabel.TextSize = 14
+		nameLabel.Parent = template
+
+		-- Create class label
+		local classLabel = Instance.new("TextLabel")
+		classLabel.Name = "PlayerClass"
+		classLabel.Size = UDim2.new(0.3, 0, 0.2, 0)
+		classLabel.Position = UDim2.new(0.05, 0, 0.4, 0)
+		classLabel.BackgroundTransparency = 1
+		classLabel.TextColor3 = Color3.fromRGB(200, 200, 255)
+		classLabel.TextXAlignment = Enum.TextXAlignment.Left
+		classLabel.Font = Enum.Font.Gotham
+		classLabel.TextSize = 12
+		classLabel.Parent = template
+
+		-- Create level label
+		local levelLabel = Instance.new("TextLabel")
+		levelLabel.Name = "PlayerLevel"
+		levelLabel.Size = UDim2.new(0.15, 0, 0.2, 0)
+		levelLabel.Position = UDim2.new(0.35, 0, 0.4, 0)
+		levelLabel.BackgroundTransparency = 1
+		levelLabel.TextColor3 = Color3.fromRGB(200, 255, 200)
+		levelLabel.TextXAlignment = Enum.TextXAlignment.Left
+		levelLabel.Font = Enum.Font.Gotham
+		levelLabel.TextSize = 12
+		levelLabel.Parent = template
+
+		-- Create HP bar container
+		local hpBar = Instance.new("Frame")
+		hpBar.Name = "HPBar"
+		hpBar.Size = UDim2.new(0.6, 0, 0.15, 0)
+		hpBar.Position = UDim2.new(0.05, 0, 0.65, 0)
+		hpBar.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+		hpBar.Parent = template
+
+		-- Create HP fill
+		local hpFill = Instance.new("Frame")
+		hpFill.Name = "HPFill"
+		hpFill.Size = UDim2.new(1, 0, 1, 0)
+		hpFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+		hpFill.Parent = hpBar
+
+		-- Create HP text
+		local hpText = Instance.new("TextLabel")
+		hpText.Name = "HPText"
+		hpText.Size = UDim2.new(1, 0, 1, 0)
+		hpText.BackgroundTransparency = 1
+		hpText.TextColor3 = Color3.fromRGB(255, 255, 255)
+		hpText.Font = Enum.Font.GothamBold
+		hpText.TextSize = 10
+		hpText.Parent = hpBar
+
+		-- Create MP bar container
+		local mpBar = Instance.new("Frame")
+		mpBar.Name = "MPBar"
+		mpBar.Size = UDim2.new(0.6, 0, 0.15, 0)
+		mpBar.Position = UDim2.new(0.05, 0, 0.82, 0)
+		mpBar.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+		mpBar.Parent = template
+
+		-- Create MP fill
+		local mpFill = Instance.new("Frame")
+		mpFill.Name = "MPFill"
+		mpFill.Size = UDim2.new(1, 0, 1, 0)
+		mpFill.BackgroundColor3 = Color3.fromRGB(50, 50, 255)
+		mpFill.Parent = mpBar
+
+		-- Create MP text
+		local mpText = Instance.new("TextLabel")
+		mpText.Name = "MPText"
+		mpText.Size = UDim2.new(1, 0, 1, 0)
+		mpText.BackgroundTransparency = 1
+		mpText.TextColor3 = Color3.fromRGB(255, 255, 255)
+		mpText.Font = Enum.Font.GothamBold
+		mpText.TextSize = 10
+		mpText.Parent = mpBar
+
+		-- Create money container
+		local moneyContainer = Instance.new("Frame")
+		moneyContainer.Name = "MoneyContainer"
+		moneyContainer.Size = UDim2.new(0.2, 0, 0.2, 0)
+		moneyContainer.Position = UDim2.new(0.75, 0, 0.7, 0)
+		moneyContainer.BackgroundTransparency = 1
+		moneyContainer.Parent = template
+
+		-- Create coin icon
+		local coinIcon = Instance.new("TextLabel")
+		coinIcon.Name = "CoinIcon"
+		coinIcon.Size = UDim2.new(0.3, 0, 1, 0)
+		coinIcon.BackgroundTransparency = 1
+		coinIcon.Text = "$"
+		coinIcon.TextColor3 = Color3.fromRGB(255, 215, 0)
+		coinIcon.Font = Enum.Font.GothamBold
+		coinIcon.TextSize = 14
+		coinIcon.Parent = moneyContainer
+
+		-- Create money amount
+		local moneyAmount = Instance.new("TextLabel")
+		moneyAmount.Name = "MoneyAmount"
+		moneyAmount.Size = UDim2.new(0.7, 0, 1, 0)
+		moneyAmount.Position = UDim2.new(0.3, 0, 0, 0)
+		moneyAmount.BackgroundTransparency = 1
+		moneyAmount.Text = "100"
+		moneyAmount.TextColor3 = Color3.fromRGB(255, 255, 255)
+		moneyAmount.Font = Enum.Font.Gotham
+		moneyAmount.TextSize = 12
+		moneyAmount.Parent = moneyContainer
+	end
+
+	-- Create our own status bar for the local player
+	local myStatusBar = template:Clone()
+	myStatusBar.Name = "MyPlayerStatusBar"
+	myStatusBar.Visible = true
+	myStatusBar.Parent = StatusBarContainer
+
+	-- Set initial values
+	if myStatusBar:FindFirstChild("PlayerName") then
+		myStatusBar.PlayerName.Text = player.Name
+	end
+
+	if myStatusBar:FindFirstChild("PlayerClass") then
+		myStatusBar.PlayerClass.Text = "Unknown" -- Will be updated later
+	end
+
+	if myStatusBar:FindFirstChild("PlayerLevel") then
+		myStatusBar.PlayerLevel.Text = "Lv.1"
+	end
+
+	-- Initialize HP and MP bars
+	if myStatusBar:FindFirstChild("HPBar") and myStatusBar.HPBar:FindFirstChild("HPFill") then
+		myStatusBar.HPBar.HPFill.Size = UDim2.new(1, 0, 1, 0)
+
+		if myStatusBar.HPBar:FindFirstChild("HPText") then
+			myStatusBar.HPBar.HPText.Text = "100/100"
+		end
+	end
+
+	if myStatusBar:FindFirstChild("MPBar") and myStatusBar.MPBar:FindFirstChild("MPFill") then
+		myStatusBar.MPBar.MPFill.Size = UDim2.new(1, 0, 1, 0)
+
+		if myStatusBar.MPBar:FindFirstChild("MPText") then
+			myStatusBar.MPBar.MPText.Text = "50/50"
+		end
+	end
+
+	-- Initialize money
+	if myStatusBar:FindFirstChild("MoneyContainer") and myStatusBar.MoneyContainer:FindFirstChild("MoneyAmount") then
+		myStatusBar.MoneyContainer.MoneyAmount.Text = "100"
+	end
+
+	-- Highlight my status bar with a different color
+	myStatusBar.BackgroundColor3 = Color3.fromRGB(60, 80, 100)
+
+	-- Create UIStroke
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(100, 150, 200)
+	stroke.Thickness = 2
+	stroke.Parent = myStatusBar
+
+	-- Remove any other visible status bars
+	for _, child in pairs(StatusBarContainer:GetChildren()) do
+		if child.Name ~= "MyPlayerStatusBar" and child.Name ~= "PlayerStatusBar" and child:IsA("Frame") then
+			child:Destroy()
+		end
+	end
+
+	-- Hide the template
+	template.Visible = false
+
+	return myStatusBar
+end
+
+-- Update our player status when stats change
+local function updateMyStatusBar(stats)
+	if not myStatusBar then
+		myStatusBar = setupPlayerStatusBar()
+		if not myStatusBar then return end
+	end
+
+	-- Update level if provided
+	if stats.level and myStatusBar:FindFirstChild("PlayerLevel") then
+		myStatusBar.PlayerLevel.Text = "Lv." .. stats.level
+	end
+
+	-- Update class if provided
+	if stats.class and myStatusBar:FindFirstChild("PlayerClass") then
+		myStatusBar.PlayerClass.Text = stats.class
+	end
+
+	-- Update HP if provided
+	if stats.hp and stats.maxHp and 
+		myStatusBar:FindFirstChild("HPBar") and 
+		myStatusBar.HPBar:FindFirstChild("HPFill") then
+
+		local hpRatio = stats.hp / stats.maxHp
+		local hpTween = TweenService:Create(
+			myStatusBar.HPBar.HPFill,
+			TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{Size = UDim2.new(hpRatio, 0, 1, 0)}
+		)
+		hpTween:Play()
+
+		if myStatusBar.HPBar:FindFirstChild("HPText") then
+			myStatusBar.HPBar.HPText.Text = math.floor(stats.hp) .. "/" .. math.floor(stats.maxHp)
+		end
+
+		-- Change color based on HP ratio
+		if hpRatio < 0.3 then
+			myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50) -- Red when low HP
+		elseif hpRatio < 0.6 then
+			myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(255, 200, 50) -- Yellow when medium HP
+		else
+			myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(50, 200, 50) -- Green when high HP
+		end
+	end
+
+	-- Update MP if provided
+	if stats.mp and stats.maxMp and 
+		myStatusBar:FindFirstChild("MPBar") and 
+		myStatusBar.MPBar:FindFirstChild("MPFill") then
+
+		local mpRatio = stats.mp / stats.maxMp
+		local mpTween = TweenService:Create(
+			myStatusBar.MPBar.MPFill,
+			TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{Size = UDim2.new(mpRatio, 0, 1, 0)}
+		)
+		mpTween:Play()
+
+		if myStatusBar.MPBar:FindFirstChild("MPText") then
+			myStatusBar.MPBar.MPText.Text = math.floor(stats.mp) .. "/" .. math.floor(stats.maxMp)
+		end
+	end
+
+	-- Update money if provided
+	if stats.money and 
+		myStatusBar:FindFirstChild("MoneyContainer") and 
+		myStatusBar.MoneyContainer:FindFirstChild("MoneyAmount") then
+
+		myStatusBar.MoneyContainer.MoneyAmount.Text = stats.money
+	end
+
+	-- Update key items if provided
+	if stats.keyItems and myStatusBar:FindFirstChild("KeyItemsContainer") then
+		-- Clear existing items
+		for _, child in pairs(myStatusBar.KeyItemsContainer:GetChildren()) do
+			if child:IsA("ImageLabel") and child.Name ~= "ItemIcon" then
+				child:Destroy()
+			end
+		end
+
+		-- Add new items
+		local template = myStatusBar.KeyItemsContainer:FindFirstChild("ItemIcon")
+		if template then
+			for i, item in ipairs(stats.keyItems) do
+				local itemIcon = template:Clone()
+				itemIcon.Name = "KeyItem_" .. i
+				itemIcon.Visible = true
+				-- Set icon image based on item ID
+				-- itemIcon.Image = "rbxassetid://" .. getIconForItem(item)
+				itemIcon.Parent = myStatusBar.KeyItemsContainer
+			end
+		end
+	end
+end
+
+-- Function to update turn indicator
+local function updateTurnIndicator(turnDetails)
+	if not CurrentTurnIndicator then
+		CurrentTurnIndicator = ensureTurnIndicatorExists()
+	end
+
+	local currentPlayerName = turnDetails.playerName or "Unknown"
+	local turnNumber = turnDetails.turnNumber or 1
+	local playerClass = turnDetails.playerClass or "Unknown"
+	local playerLevel = turnDetails.playerLevel or 1
+	local currentPlayerId = turnDetails.playerId
+
+	-- Update turn text
+	if CurrentTurnIndicator:FindFirstChild("TurnText") then
+		CurrentTurnIndicator.TurnText.Text = currentPlayerName .. "'s Turn (Turn " .. turnNumber .. ")"
+	end
+
+	-- Update additional info if available
+	if CurrentTurnIndicator:FindFirstChild("PlayerClassLabel") then
+		CurrentTurnIndicator.PlayerClassLabel.Text = "Class: " .. playerClass
+	end
+
+	if CurrentTurnIndicator:FindFirstChild("PlayerLevelLabel") then
+		CurrentTurnIndicator.PlayerLevelLabel.Text = "Lv." .. playerLevel
+	end
+
+	-- Setup timer if available
+	if CurrentTurnIndicator:FindFirstChild("TurnTimerFrame") and 
+		CurrentTurnIndicator.TurnTimerFrame:FindFirstChild("TimerFill") and
+		CurrentTurnIndicator.TurnTimerFrame:FindFirstChild("TimerText") then
+
+		-- Reset timer UI
+		if turnTimerConnection then
+			turnTimerConnection:Disconnect()
+			turnTimerConnection = nil
+		end
+
+		-- Show timer frame
+		CurrentTurnIndicator.TurnTimerFrame.Visible = true
+	end
+
+	-- Set turn status
+	isMyTurn = (currentPlayerId == player.UserId)
+
+	-- Highlight if it's our turn
+	if isMyTurn then
+		-- Highlight our status bar
+		if myStatusBar then
+			myStatusBar.BackgroundColor3 = Color3.fromRGB(70, 120, 200) -- Brighter blue
+
+			if myStatusBar:FindFirstChild("UIStroke") then
+				myStatusBar.UIStroke.Color = Color3.fromRGB(120, 200, 255)
+				myStatusBar.UIStroke.Thickness = 3
+			end
+		end
+
+		-- Animate turn indicator for attention
+		local originalPosition = CurrentTurnIndicator.Position
+		local originalSize = CurrentTurnIndicator.Size
+
+		-- Slight pulse animation
+		local expandTween = TweenService:Create(
+			CurrentTurnIndicator,
+			TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+			{Size = UDim2.new(originalSize.X.Scale + 0.02, 0, originalSize.Y.Scale + 0.02, 0),
+				Position = UDim2.new(originalPosition.X.Scale - 0.01, 0, originalPosition.Y.Scale - 0.01, 0),
+				BackgroundColor3 = Color3.fromRGB(60, 140, 200)}
+		)
+
+		local contractTween = TweenService:Create(
+			CurrentTurnIndicator,
+			TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+			{Size = originalSize,
+				Position = originalPosition,
+				BackgroundColor3 = Color3.fromRGB(50, 100, 150)}
+		)
+
+		expandTween:Play()
+		expandTween.Completed:Connect(function()
+			contractTween:Play()
+		end)
+
+		-- Show "Your Turn" notification
+		local notification = Instance.new("Frame")
+		notification.Name = "YourTurnNotification"
+		notification.Size = UDim2.new(0.3, 0, 0.1, 0)
+		notification.Position = UDim2.new(0.35, 0, 1.1, 0) -- Start offscreen
+		notification.BackgroundColor3 = Color3.fromRGB(50, 120, 200)
+		notification.BackgroundTransparency = 0.2
+		notification.BorderSizePixel = 0
+		notification.ZIndex = 10
+		notification.Parent = MainGameUI
+
+		-- Create UICorner
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 8)
+		corner.Parent = notification
+
+		-- Create UIStroke
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = Color3.fromRGB(120, 200, 255)
+		stroke.Thickness = 2
+		stroke.Parent = notification
+
+		-- Create message
+		local messageText = Instance.new("TextLabel")
+		messageText.Size = UDim2.new(1, 0, 1, 0)
+		messageText.BackgroundTransparency = 1
+		messageText.Text = "It's your turn!"
+		messageText.TextColor3 = Color3.fromRGB(255, 255, 255)
+		messageText.TextSize = 24
+		messageText.Font = Enum.Font.GothamBold
+		messageText.ZIndex = 11
+		messageText.Parent = notification
+
+		-- Animate notification
+		local notifTween = TweenService:Create(
+			notification,
+			TweenInfo.new(0.7, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+			{Position = UDim2.new(0.35, 0, 0.7, 0)}
+		)
+		notifTween:Play()
+
+		-- Hide notification after 2 seconds
+		delay(2, function()
+			local hideTween = TweenService:Create(
+				notification,
+				TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+				{Position = UDim2.new(0.35, 0, 1.1, 0), BackgroundTransparency = 1}
+			)
+			hideTween:Play()
+
+			hideTween.Completed:Connect(function()
+				notification:Destroy()
+			end)
+		end)
+	else
+		-- Not our turn - reset highlight
+		if myStatusBar then
+			myStatusBar.BackgroundColor3 = Color3.fromRGB(60, 80, 100)
+
+			if myStatusBar:FindFirstChild("UIStroke") then
+				myStatusBar.UIStroke.Color = Color3.fromRGB(100, 150, 200)
+				myStatusBar.UIStroke.Thickness = 2
+			end
+		end
+
+		-- Adjust turn indicator color
+		CurrentTurnIndicator.BackgroundColor3 = Color3.fromRGB(80, 80, 100)
+	end
+
+	-- Store latest turn data
+	turnDetailsData = turnDetails
+end
+
+-- Function to update turn timer
+local function updateTurnTimer(timeRemaining)
+	if not CurrentTurnIndicator or 
+		not CurrentTurnIndicator:FindFirstChild("TurnTimerFrame") or
+		not CurrentTurnIndicator.TurnTimerFrame:FindFirstChild("TimerFill") or
+		not CurrentTurnIndicator.TurnTimerFrame:FindFirstChild("TimerText") then
+		return
+	end
+
+	local timerFrame = CurrentTurnIndicator.TurnTimerFrame
+	local timerFill = timerFrame.TimerFill
+	local timerText = timerFrame.TimerText
+
+	-- Update timer text
+	timerText.Text = tostring(timeRemaining) .. "s"
+
+	-- Calculate fill ratio (assuming max time is 120 seconds)
+	local maxTime = 120
+	local fillRatio = timeRemaining / maxTime
+
+	-- Animate fill bar
+	local fillTween = TweenService:Create(
+		timerFill,
+		TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{Size = UDim2.new(fillRatio, 0, 1, 0)}
+	)
+	fillTween:Play()
+
+	-- Change color based on time remaining
+	if timeRemaining <= 10 then
+		-- Very low time - red
+		timerFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+
+		-- Flash when time is very low
+		if timeRemaining <= 5 then
+			local flashTween = TweenService:Create(
+				timerFrame,
+				TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true),
+				{BackgroundColor3 = Color3.fromRGB(200, 50, 50)}
+			)
+			flashTween:Play()
+		end
+	elseif timeRemaining <= 30 then
+		-- Low time - orange
+		timerFill.BackgroundColor3 = Color3.fromRGB(255, 150, 50)
+	else
+		-- Normal time - green
+		timerFill.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+	end
+end
+
+-- Function to create End Turn button
+local function setupEndTurnButton()
+	-- Check if button already exists
+	local endTurnButton = MainGameUI:FindFirstChild("EndTurnButton")
+
+	if not endTurnButton then
+		-- Create button
+		endTurnButton = Instance.new("TextButton")
+		endTurnButton.Name = "EndTurnButton"
+		endTurnButton.Size = UDim2.new(0.12, 0, 0.05, 0)
+		endTurnButton.Position = UDim2.new(0.84, 0, 0.05, 0)
+		endTurnButton.BackgroundColor3 = Color3.fromRGB(80, 80, 100)
+		endTurnButton.Text = "End Turn"
+		endTurnButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+		endTurnButton.Font = Enum.Font.GothamBold
+		endTurnButton.TextSize = 14
+		endTurnButton.AutoButtonColor = true
+		endTurnButton.Visible = false
+		endTurnButton.Parent = MainGameUI
+
+		-- Create UICorner
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 6)
+		corner.Parent = endTurnButton
+
+		-- Create UIStroke
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = Color3.fromRGB(150, 150, 200)
+		stroke.Thickness = 1.5
+		stroke.Parent = endTurnButton
+	end
+
+	-- Connect to button click
+	endTurnButton.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or 
+			input.UserInputType == Enum.UserInputType.Touch then
+			if isMyTurn then
+				-- Send end turn command to server
+				local turnActionEvent = gameRemotes:WaitForChild("TurnAction")
+				turnActionEvent:FireServer("endTurn")
+
+				-- Hide button
+				endTurnButton.Visible = false
+			end
+		end
+	end)
+
+	-- Update button visibility based on turn
+	RunService.Heartbeat:Connect(function()
+		if isMyTurn then
+			endTurnButton.Visible = true
+
+			-- Update button color
+			endTurnButton.BackgroundColor3 = Color3.fromRGB(60, 120, 180)
+			endTurnButton.UIStroke.Color = Color3.fromRGB(120, 200, 255)
+		else
+			endTurnButton.Visible = false
+		end
+	end)
+
+	return endTurnButton
+end
+
+-- Button click handlers
+local function setupButtonHandlers()
+	if InventoryButton then
+		InventoryButton.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or
+				input.UserInputType == Enum.UserInputType.Touch then
+				if InventoryUI then
+					-- Toggle inventory UI
+					InventoryUI.Visible = not InventoryUI.Visible
+
+					-- Hide other popups if inventory is shown
+					if InventoryUI.Visible and QuestUI then
+						QuestUI.Visible = false
+					end
+
+					-- Visual feedback
+					InventoryButton.BackgroundColor3 = InventoryUI.Visible and 
+						Color3.fromRGB(80, 120, 80) or Color3.fromRGB(50, 50, 50)
+				end
+			end
+		end)
+	end
+
+	if QuestButton then
+		QuestButton.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or
+				input.UserInputType == Enum.UserInputType.Touch then
+				if QuestUI then
+					-- Toggle quest UI
+					QuestUI.Visible = not QuestUI.Visible
+
+					-- Hide other popups if quest UI is shown
+					if QuestUI.Visible and InventoryUI then
+						InventoryUI.Visible = false
+					end
+
+					-- Visual feedback
+					QuestButton.BackgroundColor3 = QuestUI.Visible and 
+						Color3.fromRGB(80, 120, 80) or Color3.fromRGB(50, 50, 50)
+				end
+			end
+		end)
+	end
+end
+
+-- Connect remote events
+updatePlayerStatsEvent.OnClientEvent:Connect(function(playerId, stats)
+	-- Only update if it's our player
+	if playerId == player.UserId then
+		print("Received my player stats update")
+		updateMyStatusBar(stats)
+	end
+end)
+
+updateTurnEvent.OnClientEvent:Connect(function(currentPlayerId)
+	-- Create minimal turnDetailsData if UpdateTurnDetails hasn't fired yet
+	local turnDetails = {
+		playerId = currentPlayerId,
+		playerName = "Unknown",
+		turnNumber = 1,
+		playerClass = "Unknown",
+		playerLevel = 1
+	}
+
+	-- Find player name
+	for _, plr in pairs(Players:GetPlayers()) do
+		if plr.UserId == currentPlayerId then
+			turnDetails.playerName = plr.Name
+			break
+		end
+	end
+
+	print("Received turn update: " .. turnDetails.playerName .. "'s turn")
+	updateTurnIndicator(turnDetails)
+end)
+
+updateTurnDetailsEvent.OnClientEvent:Connect(function(turnDetails)
+	-- Received full turn details
+	print("Received turn details for " .. turnDetails.playerName)
+	updateTurnIndicator(turnDetails)
+end)
+
+updateTurnTimerEvent.OnClientEvent:Connect(function(timeRemaining)
+	-- Update turn timer
+	updateTurnTimer(timeRemaining)
+end)
+
+endGameEvent.OnClientEvent:Connect(function(reason)
+	print("Game ended: " .. reason)
+
+	-- Show game over UI
+	local GameOverScreen = PlayerGui:WaitForChild("GameOverScreen")
+	GameOverScreen.Enabled = true
+
+	-- Hide main game UI
+	MainGameUI.Enabled = false
+	PopupUI.Enabled = false
+
+	-- Display reason
+	local Background = GameOverScreen:FindFirstChild("Background")
+	if Background then
+		local WinnerAnnouncement = Background:FindFirstChild("WinnerAnnouncement")
+		if WinnerAnnouncement then
+			WinnerAnnouncement.Text = reason
+		end
+	end
+end)
+
+-- Initialize UI
+MainGameUI.Enabled = false -- Will be enabled by ClassSelectionHandler or server
+if PopupUI then
+	PopupUI.Enabled = true -- Container is visible, but individual UIs are hidden
+end
+if InventoryUI then
+	InventoryUI.Visible = false
+end
+if QuestUI then
+	QuestUI.Visible = false
+end
+
+-- Setup initial UI
+myStatusBar = setupPlayerStatusBar()
+setupButtonHandlers()
+setupEndTurnButton()
+
+print("MainGameUIHandler initialized successfully")
