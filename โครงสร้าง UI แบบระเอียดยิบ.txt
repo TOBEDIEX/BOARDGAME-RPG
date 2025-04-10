@@ -553,3 +553,24 @@ ScreenGui (ชื่อ "ItemCardGui")
             │   └── UICorner
             └── TextButton (ชื่อ "KeepButton")
                 └── UICorner
+
+── ScreenGui ("MedievalMoneyRandomizer")
+    └── Frame ("MainFrame")
+        ├── UICorner
+        ├── ImageLabel ("Shadow")
+        ├── Frame ("GoldenBorder")
+        │   ├── UICorner
+        │   └── UIStroke
+        ├── Frame ("Header")
+        │   ├── TextLabel ("Title") 
+        │   ├── ImageLabel ("LeftCrown")
+        │   ├── TextLabel ("Subtitle")
+        │   └── ImageLabel ("RightCrown")
+        ├── Frame ("CoinDisplay")
+        │   ├── UICorner
+        │   ├── UIStroke
+        │   ├── TextLabel ("DisplayLabel")
+        │   │   └── UICorner
+        │   ├── TextLabel ("CoinAmount")
+        │   │   └── UIScale ("BounceAnimation")
+        │   ├── ImageLabel ("CoinIcon")
