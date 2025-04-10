@@ -1,0 +1,442 @@
+-- BoardSystem.lua (ปรับปรุงเป็นระบบเดินอัตโนมัติ)
+-- โมดูลหลักสำหรับระบบกระดานและการเคลื่อนที่ของตัวละคร
+-- วางที่: ServerStorage/Modules/BoardSystem.lua
+
+local BoardSystem = {}
+BoardSystem.__index = BoardSystem
+
+-- Services
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local ServerStorage = game:GetService("ServerStorage")
+
+-- โหลดโมดูลที่เกี่ยวข้อง
+local DirectionalPathfinder = require(script.Parent:WaitForChild("DirectionalPathfinder"))
+
+-- Constants for board directions
+local DIRECTIONS = DirectionalPathfinder.DIRECTIONS
+
+-- Constructor
+function BoardSystem.new()
+	local self = setmetatable({}, BoardSystem)
+
+	-- Board data structure
+	self.tiles = {}              -- ข้อมูลของช่องทั้งหมด {tileId = {type, position, properties}}
+	self.connections = {}        -- การเชื่อมต่อระหว่างช่อง {tileId = {connectedId1 = true, connectedId2 = true}}
+	self.playerPositions = {}    -- ตำแหน่งปัจจุบันของผู้เล่น {playerId = tileId}
+	self.playerLastTile = {}     -- ช่องก่อนหน้าของผู้เล่น {playerId = tileId}
+
+	-- ข้อมูลการเดิน
+	self.playerRemainingSteps = {}  -- จำนวนก้าวที่เหลือของผู้เล่น {playerId = steps}
+	self.playerMovementState = {}   -- สถานะการเคลื่อนที่ของผู้เล่น {playerId = "moving"|"waiting"|"selecting"}
+	self.playerAutoPath = {}        -- เส้นทางอัตโนมัติของผู้เล่น {playerId = {tileId1, tileId2, ...}}
+
+	-- ตำแหน่งช่องในโลก
+	self.tilePositions = {}         -- ตำแหน่ง Vector3 ของแต่ละช่อง {tileId = Vector3}
+
+	-- Spawn points
+	self.entitySpawnPoints = {}     -- จุดเกิดของ NPC/monster {type = {tileId1, tileId2}}
+
+	-- ฟังก์ชันที่จะถูกเรียกเมื่อมีเหตุการณ์ต่างๆ
+	self.onPlayerMoved = nil           -- เมื่อผู้เล่นเคลื่อนที่ไปยังช่องใหม่
+	self.onPlayerPathComplete = nil    -- เมื่อผู้เล่นเดินทางครบทุกก้าว
+	self.onTileEffect = nil            -- เมื่อควรเริ่มเอฟเฟคของช่อง
+
+	return self
+end
+
+-- โหลดข้อมูลแผนที่
+function BoardSystem:LoadMap(mapData)
+	if not mapData or type(mapData) ~= "table" then
+		warn("ข้อมูลแผนที่ไม่ถูกต้องใน BoardSystem:LoadMap")
+		return false
+	end
+
+	-- รีเซ็ตข้อมูลปัจจุบัน
+	self.tiles = {}
+	self.connections = {}
+	self.tilePositions = {}
+
+	-- โหลดข้อมูลช่อง
+	for id, tile in pairs(mapData.tiles or {}) do
+		self.tiles[id] = {
+			id = id,
+			type = tile.type or "normal",
+			properties = tile.properties or {},
+			position = tile.position
+		}
+
+		-- เก็บตำแหน่งช่องในโลก
+		if tile.position then
+			self.tilePositions[id] = tile.position
+		end
+	end
+
+	-- โหลดข้อมูลการเชื่อมต่อ
+	for id, connections in pairs(mapData.connections or {}) do
+		self.connections[id] = connections
+	end
+
+	-- โหลดข้อมูลจุดเกิด
+	self.entitySpawnPoints = mapData.entitySpawnPoints or {}
+
+	print("โหลดแผนที่เรียบร้อย มี " .. self:CountTiles() .. " ช่อง")
+	return true
+end
+
+-- นับจำนวนช่องในแผนที่
+function BoardSystem:CountTiles()
+	local count = 0
+	for _ in pairs(self.tiles) do
+		count = count + 1
+	end
+	return count
+end
+
+-- ตั้งค่าตำแหน่งผู้เล่นบนกระดาน
+function BoardSystem:SetPlayerPosition(playerId, tileId, lastTileId)
+	if not playerId or not tileId then
+		warn("ค่าที่ส่งเข้า SetPlayerPosition ไม่ถูกต้อง")
+		return false
+	end
+
+	-- เก็บตำแหน่งก่อนหน้า
+	self.playerLastTile[playerId] = lastTileId or self.playerPositions[playerId]
+
+	-- ตั้งค่าตำแหน่งใหม่
+	self.playerPositions[playerId] = tileId
+
+	-- เรียกใช้ callback ถ้ามีการตั้งค่าไว้
+	if self.onPlayerMoved then
+		self.onPlayerMoved(playerId, self.playerLastTile[playerId], tileId)
+	end
+
+	return true
+end
+
+-- รับตำแหน่งช่องปัจจุบันของผู้เล่น
+function BoardSystem:GetPlayerTile(playerId)
+	return self.playerPositions[playerId]
+end
+
+-- รับตำแหน่งในโลกของช่อง
+function BoardSystem:GetTilePosition(tileId)
+	return self.tilePositions[tileId]
+end
+
+-- รับข้อมูลช่องที่ระบุ
+function BoardSystem:GetTileInfo(tileId)
+	return self.tiles[tileId]
+end
+
+-- รับช่องทั้งหมดที่มีประเภทตรงกับที่ระบุ
+function BoardSystem:GetTilesByType(tileType)
+	local result = {}
+
+	for id, tile in pairs(self.tiles) do
+		if tile.type == tileType then
+			table.insert(result, id)
+		end
+	end
+
+	return result
+end
+
+-- รับทิศทางที่สามารถไปได้จากช่องปัจจุบัน
+function BoardSystem:GetAvailableDirections(tileId, prevTileId)
+	-- ใช้ DirectionalPathfinder ในการคำนวณทิศทาง
+	local pathOptions = DirectionalPathfinder.getPathOptions(
+		prevTileId, tileId, self.connections, self.tilePositions)
+
+	-- กรณีไม่พบตัวเลือก
+	if #pathOptions == 0 then
+		warn("ไม่พบทิศทางที่สามารถไปได้จากช่อง " .. tileId)
+	end
+
+	return pathOptions
+end
+
+-- รับช่องถัดไปตามทิศทางที่เลือก
+function BoardSystem:GetNextTileFromDirection(tileId, direction, prevTileId)
+	local availableDirections = self:GetAvailableDirections(tileId, prevTileId)
+
+	for _, dirInfo in ipairs(availableDirections) do
+		if dirInfo.direction == direction then
+			return dirInfo.tileId
+		end
+	end
+
+	return nil
+end
+
+-- รับผู้เล่นทั้งหมดบนช่องที่ระบุ
+function BoardSystem:GetPlayersOnTile(tileId)
+	local players = {}
+
+	for playerId, playerTileId in pairs(self.playerPositions) do
+		if playerTileId == tileId then
+			table.insert(players, playerId)
+		end
+	end
+
+	return players
+end
+
+-- ฟังก์ชันใหม่ - สร้างเส้นทางอัตโนมัติ
+function BoardSystem:GenerateAutoPath(playerId, startTileId, prevTileId, stepsRemaining)
+	local currentTileId = startTileId
+	local currentPrevTileId = prevTileId
+	local path = {}
+	local remainingSteps = stepsRemaining
+
+	-- เพิ่มจุดเริ่มต้นลงในเส้นทาง
+	table.insert(path, currentTileId)
+
+	while remainingSteps > 0 do
+		-- รับทิศทางที่สามารถไปได้
+		local availableDirections = self:GetAvailableDirections(currentTileId, currentPrevTileId)
+
+		-- ถ้าไม่มีทางไป (ทางตัน)
+		if #availableDirections == 0 then
+			break
+		end
+
+		-- เดินอัตโนมัติเฉพาะเมื่อมีทางเดียว
+		if #availableDirections == 1 then
+			local nextTileId = availableDirections[1].tileId
+
+			-- ตรวจสอบว่าไม่ใช่ช่องก่อนหน้า (ป้องกันการวนกลับ)
+			if nextTileId ~= currentPrevTileId then
+				-- เพิ่มช่องถัดไปลงในเส้นทาง
+				table.insert(path, nextTileId)
+
+				-- อัปเดตตำแหน่งปัจจุบันและก่อนหน้า
+				currentPrevTileId = currentTileId
+				currentTileId = nextTileId
+
+				-- ลดจำนวนก้าวที่เหลือ
+				remainingSteps = remainingSteps - 1
+			else
+				-- พบช่องก่อนหน้า ถือว่าเป็นทางแยก
+				break
+			end
+		else
+			-- มีหลายทาง ต้องให้ผู้เล่นเลือก
+			break
+		end
+	end
+
+	return {
+		path = path,
+		autoComplete = remainingSteps == 0,
+		endTileId = path[#path],
+		stepsRemaining = remainingSteps,
+		endPrevTileId = path[#path-1] or currentPrevTileId,
+		availableDirections = remainingSteps > 0 and self:GetAvailableDirections(path[#path], path[#path-1] or currentPrevTileId) or {}
+	}
+end
+
+-- ประมวลผลการเคลื่อนที่ของผู้เล่นตามผลลูกเต๋า (เวอร์ชันใหม่ - อัตโนมัติ)
+function BoardSystem:ProcessPlayerMove(playerId, diceResult)
+	local currentTileId = self.playerPositions[playerId]
+	local prevTileId = self.playerLastTile[playerId]
+
+	if not currentTileId then
+		warn("ผู้เล่น " .. playerId .. " ไม่มีช่องปัจจุบัน")
+		return false
+	end
+
+	print("ผู้เล่น " .. playerId .. " ทอยได้ " .. diceResult .. " กำลังสร้างเส้นทางอัตโนมัติ")
+
+	-- เก็บจำนวนก้าวที่เหลือ
+	self.playerRemainingSteps = self.playerRemainingSteps or {}
+	self.playerRemainingSteps[playerId] = diceResult
+
+	-- สร้างเส้นทางอัตโนมัติ
+	local pathInfo = self:GenerateAutoPath(playerId, currentTileId, prevTileId, diceResult)
+
+	-- บันทึกเส้นทางไว้เพื่ออ้างอิง
+	self.playerAutoPath[playerId] = pathInfo.path
+
+	print("สร้างเส้นทางยาว " .. #pathInfo.path .. " ช่อง ยังเหลืออีก " .. pathInfo.stepsRemaining .. " ก้าว")
+
+	-- ตั้งค่าสถานะการเคลื่อนที่
+	if pathInfo.autoComplete then
+		-- สามารถเดินได้ครบโดยอัตโนมัติ
+		self.playerMovementState[playerId] = "auto_complete"
+
+		-- เคลื่อนย้ายผู้เล่นไปยังช่องสุดท้ายทันที (สำหรับเซิร์ฟเวอร์)
+		if #pathInfo.path > 1 then
+			self:SetPlayerPosition(playerId, pathInfo.endTileId, pathInfo.endPrevTileId)
+		end
+
+		-- รีเซ็ตจำนวนก้าวที่เหลือ
+		self.playerRemainingSteps[playerId] = 0
+
+		-- เรียกใช้ callback ผลกระทบของช่อง
+		if self.onTileEffect then
+			self.onTileEffect(playerId, pathInfo.endTileId, self.tiles[pathInfo.endTileId])
+		end
+
+		-- เรียกใช้ callback เมื่อการเคลื่อนที่เสร็จสิ้น
+		if self.onPlayerPathComplete then
+			self.onPlayerPathComplete(playerId, pathInfo.endTileId)
+		end
+
+		return {
+			autoPath = pathInfo.path,
+			endTileId = pathInfo.endTileId,
+			stepsRemaining = 0,
+			availableDirections = {},
+			requiresChoice = false,
+			autoComplete = true
+		}
+	else
+		-- เดินอัตโนมัติจนถึงจุดที่ต้องเลือก
+		self.playerMovementState[playerId] = "need_choice"
+
+		-- เคลื่อนย้ายผู้เล่นไปยังช่องสุดท้ายของเส้นทางอัตโนมัติ
+		if #pathInfo.path > 1 then
+			self:SetPlayerPosition(playerId, pathInfo.endTileId, pathInfo.endPrevTileId)
+		end
+
+		-- อัปเดตจำนวนก้าวที่เหลือ
+		self.playerRemainingSteps[playerId] = pathInfo.stepsRemaining
+
+		return {
+			autoPath = pathInfo.path,
+			endTileId = pathInfo.endTileId,
+			stepsRemaining = pathInfo.stepsRemaining,
+			availableDirections = pathInfo.availableDirections,
+			requiresChoice = true,
+			autoComplete = false
+		}
+	end
+end
+
+-- ประมวลผลการเลือกทิศทางของผู้เล่น (เวอร์ชันใหม่ - อัตโนมัติ)
+function BoardSystem:ProcessDirectionChoice(playerId, direction)
+	local currentTileId = self.playerPositions[playerId]
+	local prevTileId = self.playerLastTile[playerId]
+	local stepsRemaining = self.playerRemainingSteps[playerId] or 0
+
+	if stepsRemaining <= 0 then
+		warn("ผู้เล่น " .. playerId .. " ไม่มีก้าวที่เหลือ")
+		return false
+	end
+
+	-- รับช่องถัดไปตามทิศทางที่เลือก
+	local nextTileId = self:GetNextTileFromDirection(currentTileId, direction, prevTileId)
+
+	if not nextTileId then
+		warn("การเลือกทิศทางไม่ถูกต้องสำหรับผู้เล่น " .. playerId)
+		return false
+	end
+
+	print("ผู้เล่น " .. playerId .. " เลือกทิศทาง " .. direction .. " ไปยังช่อง " .. nextTileId)
+
+	-- หลังจากเลือกทิศทาง เดินก้าวแรกไปยังช่องที่เลือก
+	self:SetPlayerPosition(playerId, nextTileId, currentTileId)
+
+	-- ลดจำนวนก้าวที่เหลือ
+	stepsRemaining = stepsRemaining - 1
+	self.playerRemainingSteps[playerId] = stepsRemaining
+
+	-- ถ้ายังมีก้าวเหลือ ให้เดินต่อโดยอัตโนมัติ
+	if stepsRemaining > 0 then
+		print("ยังเหลืออีก " .. stepsRemaining .. " ก้าว สร้างเส้นทางอัตโนมัติต่อ")
+
+		-- สร้างเส้นทางอัตโนมัติใหม่จากช่องที่เลือก
+		local pathInfo = self:GenerateAutoPath(playerId, nextTileId, currentTileId, stepsRemaining)
+
+		-- อัปเดตเส้นทางอัตโนมัติ
+		self.playerAutoPath[playerId] = pathInfo.path
+
+		if pathInfo.autoComplete then
+			-- สามารถเดินได้ครบโดยอัตโนมัติ
+			self.playerMovementState[playerId] = "auto_complete"
+
+			-- เคลื่อนย้ายผู้เล่นไปยังช่องสุดท้ายทันที (สำหรับเซิร์ฟเวอร์)
+			if #pathInfo.path > 1 then
+				self:SetPlayerPosition(playerId, pathInfo.endTileId, pathInfo.endPrevTileId)
+			end
+
+			-- รีเซ็ตจำนวนก้าวที่เหลือ
+			self.playerRemainingSteps[playerId] = 0
+
+			-- เรียกใช้ callback ผลกระทบของช่อง
+			if self.onTileEffect then
+				self.onTileEffect(playerId, pathInfo.endTileId, self.tiles[pathInfo.endTileId])
+			end
+
+			-- เรียกใช้ callback เมื่อการเคลื่อนที่เสร็จสิ้น
+			if self.onPlayerPathComplete then
+				self.onPlayerPathComplete(playerId, pathInfo.endTileId)
+			end
+
+			return {
+				autoPath = pathInfo.path,
+				endTileId = pathInfo.endTileId,
+				stepsRemaining = 0,
+				availableDirections = {},
+				requiresChoice = false,
+				autoComplete = true,
+				moveComplete = true
+			}
+		else
+			-- เดินอัตโนมัติจนถึงจุดที่ต้องเลือก
+			self.playerMovementState[playerId] = "need_choice"
+
+			-- เคลื่อนย้ายผู้เล่นไปยังช่องสุดท้ายของเส้นทางอัตโนมัติ
+			if #pathInfo.path > 1 then
+				self:SetPlayerPosition(playerId, pathInfo.endTileId, pathInfo.endPrevTileId)
+			end
+
+			-- อัปเดตจำนวนก้าวที่เหลือ
+			self.playerRemainingSteps[playerId] = pathInfo.stepsRemaining
+
+			return {
+				autoPath = pathInfo.path,
+				endTileId = pathInfo.endTileId,
+				stepsRemaining = pathInfo.stepsRemaining,
+				availableDirections = pathInfo.availableDirections,
+				requiresChoice = true,
+				autoComplete = false,
+				moveComplete = false
+			}
+		end
+	else
+		-- การเคลื่อนที่เสร็จสิ้น
+		self.playerRemainingSteps[playerId] = 0
+		self.playerMovementState[playerId] = "waiting"
+
+		-- เรียกใช้ callback ผลกระทบของช่อง
+		if self.onTileEffect then
+			self.onTileEffect(playerId, nextTileId, self.tiles[nextTileId])
+		end
+
+		-- เรียกใช้ callback เมื่อการเคลื่อนที่เสร็จสิ้น
+		if self.onPlayerPathComplete then
+			self.onPlayerPathComplete(playerId, nextTileId)
+		end
+
+		return {
+			autoPath = {currentTileId, nextTileId},
+			endTileId = nextTileId,
+			stepsRemaining = 0,
+			availableDirections = {},
+			requiresChoice = false,
+			autoComplete = true,
+			moveComplete = true
+		}
+	end
+end
+
+-- ตั้งค่า callback สำหรับเหตุการณ์ต่างๆ
+function BoardSystem:SetupCallbacks(onPlayerMoved, onPlayerPathComplete, onTileEffect)
+	self.onPlayerMoved = onPlayerMoved
+	self.onPlayerPathComplete = onPlayerPathComplete
+	self.onTileEffect = onTileEffect
+end
+
+return BoardSystem
