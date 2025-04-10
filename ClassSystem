@@ -1,6 +1,6 @@
--- ClassSystem.lua
--- โมดูลจัดการระบบคลาสและการอัพเลเวลของผู้เล่น
--- Version: 1.2.0 (Optimized)
+-- FixedClassSystem.lua
+-- โมดูลจัดการระบบคลาสและการอัพเกรดคลาส (เวอร์ชันที่แก้ไขแล้ว)
+-- Version: 2.5.0 (Fixed)
 
 local ClassSystem = {}
 ClassSystem.__index = ClassSystem
@@ -10,251 +10,531 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")
 local Players = game:GetService("Players")
 
--- Class data configurations
-local CLASS_DATA = {
-	Warrior = {
-		name = "Warrior",
-		description = "Strong physical attacker with high HP and defense.",
-		baseStats = {
-			hp = 120, mp = 40, attack = 15, defense = 12, magic = 5
-		},
-		growthRates = {
-			hp = 12, mp = 4, attack = 3.5, defense = 2.5, magic = 1
-		},
-		specialAbilities = {"Strike", "PowerUp"},
-		advancedClass = "Knight"
-	},
-	Mage = {
-		name = "Mage",
-		description = "Powerful magic user with high MP but lower defense.",
-		baseStats = {
-			hp = 80, mp = 100, attack = 6, defense = 7, magic = 18
-		},
-		growthRates = {
-			hp = 7, mp = 10, attack = 1, defense = 1.5, magic = 4
-		},
-		specialAbilities = {"Spell", "MagicDefend"},
-		advancedClass = "Wizard"
-	},
-	Thief = {
-		name = "Thief",
-		description = "Agile character with balanced stats and gold bonus.",
-		baseStats = {
-			hp = 90, mp = 60, attack = 11, defense = 9, magic = 8
-		},
-		growthRates = {
-			hp = 8, mp = 6, attack = 2.5, defense = 2, magic = 1.5
-		},
-		specialAbilities = {"Counter", "Strike"},
-		advancedClass = "Assassin"
-	}
+-- คลาสพื้นฐานที่เลือกได้เริ่มต้น
+local STARTER_CLASSES = {
+    Warrior = true,
+    Mage = true,
+    Thief = true
 }
 
+-- โหลดข้อมูลคลาสจาก ClassData module
+local ClassData = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("ClassData"))
+
+-- Constants
+local EXP_TO_LEVEL_DIVIDER = 100  -- ค่าหารสำหรับคำนวณเลเวลจาก exp
+local CLASS_EXP_DIVIDER = 150     -- ค่าหารสำหรับคำนวณเลเวลคลาสจาก exp
+
 function ClassSystem.new()
-	local self = setmetatable({}, ClassSystem)
+    local self = setmetatable({}, ClassSystem)
 
-	self.playerClasses = {}
-	self.playerLevels = {}
-	self.playerClassLevels = {}
-	self.playerExp = {}
-	self.playerClassExp = {}
-	self.onClassAssigned = nil
+    self.playerClasses = {}       -- เก็บคลาสของผู้เล่น
+    self.playerLevels = {}        -- เก็บเลเวลของผู้เล่น
+    self.playerClassLevels = {}   -- เก็บเลเวลคลาสของผู้เล่น
+    self.playerExp = {}           -- เก็บค่าประสบการณ์ของผู้เล่น
+    self.playerClassExp = {}      -- เก็บค่าประสบการณ์คลาสของผู้เล่น
+    self.onClassAssigned = nil    -- ฟังก์ชันเรียกเมื่อมีการกำหนดคลาสให้ผู้เล่น
+    self.onLevelUp = nil          -- ฟังก์ชันเรียกเมื่อผู้เล่นเลเวลอัพ
+    self.onClassLevelUp = nil     -- ฟังก์ชันเรียกเมื่อผู้เล่นเลเวลคลาสอัพ
 
-	return self
+    return self
 end
 
+-- รับรายชื่อคลาสพื้นฐานทั้งหมด (เฉพาะคลาสเริ่มต้น)
+function ClassSystem:GetStarterClasses()
+    local classes = {}
+    for className, _ in pairs(STARTER_CLASSES) do
+        table.insert(classes, className)
+    end
+    return classes
+end
+
+-- รับรายชื่อคลาสทั้งหมด (รวมคลาสอัพเกรด)
 function ClassSystem:GetAllClasses()
-	local classes = {}
-	for className in pairs(CLASS_DATA) do
-		table.insert(classes, className)
-	end
-	return classes
+    local classes = {}
+    for className, _ in pairs(ClassData.Classes) do
+        table.insert(classes, className)
+    end
+    return classes
 end
 
+-- รับข้อมูลคลาส
 function ClassSystem:GetClassData(className)
-	return CLASS_DATA[className]
+    return ClassData:GetClassInfo(className)
 end
 
+-- รับคลาสพื้นฐานแบบสุ่ม
 function ClassSystem:GetRandomClass()
-	local classes = self:GetAllClasses()
-	return classes[math.random(1, #classes)]
+    local starterClasses = self:GetStarterClasses()
+    return starterClasses[math.random(1, #starterClasses)]
 end
 
+-- กำหนดคลาสให้ผู้เล่น
 function ClassSystem:AssignClassToPlayer(player, className)
-	if not CLASS_DATA[className] then return false end
+    -- ตรวจสอบว่าคลาสมีอยู่จริง
+    if not ClassData:GetClassInfo(className) then 
+        warn("Class not found: " .. tostring(className))
+        return false 
+    end
 
-	-- Store class assignment
-	self.playerClasses[player.UserId] = className
+    -- เก็บการกำหนดคลาส
+    self.playerClasses[player.UserId] = className
 
-	-- Initialize level and experience
-	self.playerLevels[player.UserId] = 1
-	self.playerClassLevels[player.UserId] = 1
-	self.playerExp[player.UserId] = 0
-	self.playerClassExp[player.UserId] = 0
+    -- เริ่มต้นเลเวลและประสบการณ์
+    self.playerLevels[player.UserId] = 1
+    self.playerClassLevels[player.UserId] = 1
+    self.playerExp[player.UserId] = 0
+    self.playerClassExp[player.UserId] = 0
 
-	-- Update player stats via GameManager
-	local playerManager = _G.GameManager and _G.GameManager.playerManager
-	if playerManager then
-		playerManager:SetPlayerClass(player, className)
-	end
+    -- อัปเดตสถิติผู้เล่นผ่าน GameManager
+    local playerManager = _G.GameManager and _G.GameManager.playerManager
+    if playerManager then
+        self:UpdatePlayerStatsFromClass(player, playerManager)
+    end
 
-	-- Fire remote event to inform client
-	local remotes = ReplicatedStorage:WaitForChild("Remotes")
-	local uiRemotes = remotes:WaitForChild("UIRemotes")
-	local classAssignedEvent = uiRemotes:WaitForChild("ClassAssigned")
-	classAssignedEvent:FireClient(player, className, CLASS_DATA[className])
+    -- ส่ง RemoteEvent เพื่อแจ้งให้ไคลเอนต์ทราบ
+    local remotes = ReplicatedStorage:WaitForChild("Remotes")
+    local uiRemotes = remotes:WaitForChild("UIRemotes")
+    local classAssignedEvent = uiRemotes:WaitForChild("ClassAssigned")
+    local classData = ClassData:GetClassInfo(className)
+    classAssignedEvent:FireClient(player, className, classData)
 
-	-- Call event callback if set
-	if self.onClassAssigned then
-		self.onClassAssigned(player, className, CLASS_DATA[className])
-	end
+    -- เรียกฟังก์ชันคอลแบ็คถ้ามีการกำหนด
+    if self.onClassAssigned then
+        self.onClassAssigned(player, className, classData)
+    end
 
-	return true
+    return true
 end
 
+-- อัปเดตสถิติผู้เล่นตามข้อมูลคลาส
+function ClassSystem:UpdatePlayerStatsFromClass(player, playerManager)
+    local userId = typeof(player) == "Instance" and player:IsA("Player") and player.UserId or player
+    local className = self.playerClasses[userId]
+    
+    if not className then
+        warn("No class assigned to player: " .. tostring(userId))
+        return false
+    end
+    
+    local classData = ClassData:GetClassInfo(className)
+    if not classData then
+        warn("Invalid class data for: " .. tostring(className))
+        return false
+    end
+    
+    local playerData = playerManager:GetPlayerData(player)
+    if not playerData then
+        warn("No player data found for: " .. tostring(userId))
+        return false
+    end
+    
+    -- อัปเดตข้อมูลพื้นฐานของผู้เล่น
+    local baseStats = classData.BaseStats
+    if baseStats then
+        -- อัปเดตค่า HP และ MP
+        playerData.stats.maxHp = baseStats.MaxHP or 100
+        playerData.stats.hp = playerData.stats.maxHp
+        playerData.stats.maxMp = baseStats.MaxMP or 50
+        playerData.stats.mp = playerData.stats.maxMp
+        
+        -- อัปเดตค่าสถิติการโจมตีและป้องกัน
+        playerData.stats.attack = baseStats.ATK or 10
+        playerData.stats.defense = baseStats.DEF or 10
+        playerData.stats.magic = baseStats.MAGIC or 10
+        playerData.stats.magicDefense = baseStats.MDEF or 10
+        playerData.stats.agility = baseStats.AGI or 10
+        
+        -- บันทึกข้อมูลคลาส
+        playerData.class = className
+        
+        -- ส่งข้อมูลสถิติใหม่ไปให้ผู้เล่น
+        local remotes = ReplicatedStorage:WaitForChild("Remotes")
+        local uiRemotes = remotes:WaitForChild("UIRemotes")
+        local updatePlayerStatsEvent = uiRemotes:WaitForChild("UpdatePlayerStats")
+        
+        updatePlayerStatsEvent:FireClient(player, userId, {
+            hp = playerData.stats.hp,
+            maxHp = playerData.stats.maxHp,
+            mp = playerData.stats.mp,
+            maxMp = playerData.stats.maxMp,
+            attack = playerData.stats.attack,
+            defense = playerData.stats.defense,
+            magic = playerData.stats.magic,
+            magicDefense = playerData.stats.magicDefense,
+            agility = playerData.stats.agility,
+            level = self.playerLevels[userId] or 1,
+            class = className,
+            money = playerData.stats.money or 100
+        })
+        
+        return true
+    end
+    
+    return false
+end
+
+-- รับคลาสของผู้เล่น
 function ClassSystem:GetPlayerClass(player)
-	local userId = typeof(player) == "Instance" and player:IsA("Player") and player.UserId or player
-	return self.playerClasses[userId]
+    local userId = typeof(player) == "Instance" and player:IsA("Player") and player.UserId or player
+    return self.playerClasses[userId]
 end
 
-function ClassSystem:AddExperience(player, amount)
-	local userId = typeof(player) == "Instance" and player:IsA("Player") and player.UserId or player
-
-	if not self.playerExp[userId] then return false end
-
-	-- Add experience
-	self.playerExp[userId] = self.playerExp[userId] + amount
-	self.playerClassExp[userId] = self.playerClassExp[userId] + math.floor(amount * 0.7)
-
-	-- Check for level ups
-	local leveledUp = self:CheckLevelUp(userId)
-	local classLeveledUp = self:CheckClassLevelUp(userId)
-
-	return leveledUp or classLeveledUp
-end
-
-function ClassSystem:CheckLevelUp(userId)
-	-- Level formula: Level = sqrt(Experience / 100) + 1
-	local newLevel = math.floor(math.sqrt(self.playerExp[userId] / 100)) + 1
-
-	if newLevel > self.playerLevels[userId] then
-		local oldLevel = self.playerLevels[userId]
-		self.playerLevels[userId] = newLevel
-
-		-- Calculate stat increases
-		local className = self.playerClasses[userId]
-		local classData = CLASS_DATA[className]
-		local statIncreases = {}
-
-		for stat, growthRate in pairs(classData.growthRates) do
-			statIncreases[stat] = math.floor(growthRate * (newLevel - oldLevel))
-		end
-
-		-- Notify client and update stats
-		local player = Players:GetPlayerByUserId(userId)
-		if player then
-			-- Send level up notification
-			local remotes = ReplicatedStorage:WaitForChild("Remotes")
-			local uiRemotes = remotes:WaitForChild("UIRemotes")
-			local levelUpEvent = uiRemotes:WaitForChild("LevelUp")
-			levelUpEvent:FireClient(player, newLevel, statIncreases)
-
-			-- Update player stats
-			self:ApplyStatIncreases(player, statIncreases)
-		end
-
-		return true
-	end
-
-	return false
-end
-
-function ClassSystem:CheckClassLevelUp(userId)
-	-- Class level formula: sqrt(ClassExp / 150) + 1
-	local newClassLevel = math.floor(math.sqrt(self.playerClassExp[userId] / 150)) + 1
-
-	if newClassLevel > self.playerClassLevels[userId] then
-		local oldClassLevel = self.playerClassLevels[userId]
-		self.playerClassLevels[userId] = newClassLevel
-
-		-- Calculate class-specific stat increases
-		local className = self.playerClasses[userId]
-		local classData = CLASS_DATA[className]
-		local statIncreases = {}
-
-		for stat, growthRate in pairs(classData.growthRates) do
-			-- Enhanced growth for primary class stats
-			local enhancement = 1.0
-			if className == "Warrior" and (stat == "attack" or stat == "defense" or stat == "hp") then
-				enhancement = 1.5
-			elseif className == "Mage" and (stat == "magic" or stat == "mp") then
-				enhancement = 1.5
-			elseif className == "Thief" and (stat == "attack" or stat == "defense") then
-				enhancement = 1.3
-			end
-
-			statIncreases[stat] = math.floor(growthRate * enhancement * (newClassLevel - oldClassLevel))
-		end
-
-		-- Check for advanced class
-		local advancedClass = newClassLevel >= 10 and classData.advancedClass or nil
-
-		-- Notify client and update stats
-		local player = Players:GetPlayerByUserId(userId)
-		if player then
-			-- Send class level up notification
-			local remotes = ReplicatedStorage:WaitForChild("Remotes")
-			local uiRemotes = remotes:WaitForChild("UIRemotes")
-			local classLevelUpEvent = uiRemotes:WaitForChild("ClassLevelUp")
-			classLevelUpEvent:FireClient(player, newClassLevel, statIncreases, advancedClass)
-
-			-- Update player stats and class
-			self:ApplyStatIncreases(player, statIncreases)
-
-			-- Update class if advanced
-			if advancedClass then
-				local playerManager = _G.GameManager and _G.GameManager.playerManager
-				if playerManager and playerManager:GetPlayerData(player) then
-					playerManager:GetPlayerData(player).class = advancedClass
-				end
-			end
-		end
-
-		return true
-	end
-
-	return false
-end
-
--- Helper function to apply stat increases
-function ClassSystem:ApplyStatIncreases(player, statIncreases)
-	local playerManager = _G.GameManager and _G.GameManager.playerManager
-	if not playerManager then return end
-
-	local playerData = playerManager:GetPlayerData(player)
-	if not playerData then return end
-
-	for stat, increase in pairs(statIncreases) do
-		if stat == "hp" then
-			playerData.stats.maxHp = playerData.stats.maxHp + increase
-			playerData.stats.hp = playerData.stats.maxHp -- Full heal on level up
-		elseif stat == "mp" then
-			playerData.stats.maxMp = playerData.stats.maxMp + increase
-			playerData.stats.mp = playerData.stats.maxMp -- Full MP restore on level up
-		else
-			playerData.stats[stat] = (playerData.stats[stat] or 0) + increase
-		end
-	end
-end
-
+-- รับเลเวลของผู้เล่น
 function ClassSystem:GetPlayerLevel(player)
-	local userId = typeof(player) == "Instance" and player:IsA("Player") and player.UserId or player
-	return self.playerLevels[userId] or 1
+    local userId = typeof(player) == "Instance" and player:IsA("Player") and player.UserId or player
+    return self.playerLevels[userId] or 1
 end
 
+-- รับเลเวลคลาสของผู้เล่น
 function ClassSystem:GetPlayerClassLevel(player)
-	local userId = typeof(player) == "Instance" and player:IsA("Player") and player.UserId or player
-	return self.playerClassLevels[userId] or 1
+    local userId = typeof(player) == "Instance" and player:IsA("Player") and player.UserId or player
+    return self.playerClassLevels[userId] or 1
+end
+
+-- รับค่าประสบการณ์ที่ต้องการสำหรับเลเวลถัดไป
+function ClassSystem:GetExpForNextLevel(level)
+    return (level + 1) * (level + 1) * EXP_TO_LEVEL_DIVIDER
+end
+
+-- รับค่าประสบการณ์คลาสที่ต้องการสำหรับเลเวลคลาสถัดไป
+function ClassSystem:GetClassExpForNextLevel(classLevel)
+    return (classLevel + 1) * (classLevel + 1) * CLASS_EXP_DIVIDER
+end
+
+-- เพิ่มประสบการณ์ให้ผู้เล่น
+function ClassSystem:AddExperience(player, amount)
+    local userId = typeof(player) == "Instance" and player:IsA("Player") and player.UserId or player
+
+    if not self.playerExp[userId] then return false end
+
+    -- เพิ่มประสบการณ์
+    self.playerExp[userId] = self.playerExp[userId] + amount
+    self.playerClassExp[userId] = self.playerClassExp[userId] + math.floor(amount * 0.7)
+
+    -- ตรวจสอบการเลเวลอัพ
+    local leveledUp = self:CheckLevelUp(userId)
+    local classLeveledUp = self:CheckClassLevelUp(userId)
+
+    -- ส่ง RemoteEvent แจ้งค่าประสบการณ์ที่เปลี่ยนแปลง
+    local player = Players:GetPlayerByUserId(userId)
+    if player then
+        local remotes = ReplicatedStorage:WaitForChild("Remotes")
+        local uiRemotes = remotes:WaitForChild("UIRemotes")
+        local updateExpEvent = uiRemotes:FindFirstChild("UpdateExperience")
+        
+        if updateExpEvent then
+            updateExpEvent:FireClient(player, {
+                exp = self.playerExp[userId],
+                nextLevelExp = self:GetExpForNextLevel(self.playerLevels[userId]),
+                classExp = self.playerClassExp[userId],
+                nextClassLevelExp = self:GetClassExpForNextLevel(self.playerClassLevels[userId])
+            })
+        end
+    end
+
+    return leveledUp or classLeveledUp
+end
+
+-- ตรวจสอบการเลเวลอัพ
+function ClassSystem:CheckLevelUp(userId)
+    -- สูตรคำนวณเลเวล: Level = sqrt(Experience / EXP_TO_LEVEL_DIVIDER) + 1
+    local newLevel = math.floor(math.sqrt(self.playerExp[userId] / EXP_TO_LEVEL_DIVIDER)) + 1
+
+    if newLevel > self.playerLevels[userId] then
+        local oldLevel = self.playerLevels[userId]
+        local levelDiff = newLevel - oldLevel
+        self.playerLevels[userId] = newLevel
+
+        -- คำนวณการเพิ่มของสถิติ
+        local className = self.playerClasses[userId]
+        local classData = ClassData:GetClassInfo(className)
+        local statIncreases = {}
+
+        if classData and classData.BaseStats then
+            -- ค่าการเติบโตสำหรับแต่ละสถิติ
+            local growthRates = {
+                MaxHP = 0.1,    -- เพิ่ม 10% ของค่าพื้นฐานต่อเลเวล
+                MaxMP = 0.08,   -- เพิ่ม 8% ของค่าพื้นฐานต่อเลเวล
+                ATK = 0.12,     -- เพิ่ม 12% ของค่าพื้นฐานต่อเลเวล
+                DEF = 0.09,     -- เพิ่ม 9% ของค่าพื้นฐานต่อเลเวล
+                MAGIC = 0.11,   -- เพิ่ม 11% ของค่าพื้นฐานต่อเลเวล
+                MDEF = 0.09,    -- เพิ่ม 9% ของค่าพื้นฐานต่อเลเวล
+                AGI = 0.08      -- เพิ่ม 8% ของค่าพื้นฐานต่อเลเวล
+            }
+            
+            -- คำนวณค่าเพิ่มตามการเติบโต
+            for stat, baseValue in pairs(classData.BaseStats) do
+                local growthRate = growthRates[stat] or 0.1
+                statIncreases[stat] = math.floor(baseValue * growthRate * levelDiff)
+            end
+        end
+
+        -- แจ้งไคลเอนต์และอัปเดตสถิติ
+        local player = Players:GetPlayerByUserId(userId)
+        if player then
+            -- ส่งการแจ้งเตือนการเลเวลอัพ
+            local remotes = ReplicatedStorage:WaitForChild("Remotes")
+            local uiRemotes = remotes:WaitForChild("UIRemotes")
+            local levelUpEvent = uiRemotes:WaitForChild("LevelUp")
+            levelUpEvent:FireClient(player, newLevel, statIncreases)
+
+            -- อัปเดตสถิติผู้เล่น
+            self:ApplyStatIncreases(player, statIncreases)
+            
+            -- เรียกฟังก์ชันคอลแบ็คถ้ามีการกำหนด
+            if self.onLevelUp then
+                self.onLevelUp(player, newLevel, oldLevel, statIncreases)
+            end
+        end
+
+        return true
+    end
+
+    return false
+end
+
+-- ตรวจสอบการเลเวลอัพของคลาส
+function ClassSystem:CheckClassLevelUp(userId)
+    -- สูตรคำนวณเลเวลคลาส: sqrt(ClassExp / CLASS_EXP_DIVIDER) + 1
+    local newClassLevel = math.floor(math.sqrt(self.playerClassExp[userId] / CLASS_EXP_DIVIDER)) + 1
+
+    if newClassLevel > self.playerClassLevels[userId] then
+        local oldClassLevel = self.playerClassLevels[userId]
+        local levelDiff = newClassLevel - oldClassLevel
+        self.playerClassLevels[userId] = newClassLevel
+
+        -- คำนวณการเพิ่มของสถิติตามคลาส
+        local className = self.playerClasses[userId]
+        local classData = ClassData:GetClassInfo(className)
+        local statIncreases = {}
+
+        if classData and classData.BaseStats then
+            -- ค่าการเติบโตสำหรับแต่ละสถิติ
+            local growthRates = {
+                MaxHP = 0.12,    -- เพิ่ม 12% ของค่าพื้นฐานต่อเลเวล
+                MaxMP = 0.10,    -- เพิ่ม 10% ของค่าพื้นฐานต่อเลเวล
+                ATK = 0.15,      -- เพิ่ม 15% ของค่าพื้นฐานต่อเลเวล
+                DEF = 0.12,      -- เพิ่ม 12% ของค่าพื้นฐานต่อเลเวล
+                MAGIC = 0.15,    -- เพิ่ม 15% ของค่าพื้นฐานต่อเลเวล
+                MDEF = 0.12,     -- เพิ่ม 12% ของค่าพื้นฐานต่อเลเวล
+                AGI = 0.10       -- เพิ่ม 10% ของค่าพื้นฐานต่อเลเวล
+            }
+            
+            -- คำนวณค่าเพิ่มตามการเติบโตและเพิ่มโบนัสตามคลาส
+            for stat, baseValue in pairs(classData.BaseStats) do
+                local growthRate = growthRates[stat] or 0.12
+                
+                -- เพิ่มโบนัสตามคลาส
+                local enhancement = 1.0
+                if className == "Warrior" and (stat == "ATK" or stat == "DEF" or stat == "MaxHP") then
+                    enhancement = 1.5 -- โบนัส 50% สำหรับพลังโจมตี, ป้องกัน และ HP ของนักรบ
+                elseif className == "Knight" and (stat == "DEF" or stat == "MaxHP") then
+                    enhancement = 1.8 -- โบนัส 80% สำหรับป้องกันและ HP ของอัศวิน
+                elseif className == "Paladin" and (stat == "DEF" or stat == "MaxHP" or stat == "MDEF") then
+                    enhancement = 2.0 -- โบนัส 100% สำหรับป้องกัน, HP และการป้องกันเวทย์ของพาลาดิน
+                elseif className == "Mage" and (stat == "MAGIC" or stat == "MaxMP") then
+                    enhancement = 1.5 -- โบนัส 50% สำหรับพลังเวทย์และ MP ของเมจ
+                elseif className == "Wizard" and (stat == "MAGIC" or stat == "MaxMP") then
+                    enhancement = 1.8 -- โบนัส 80% สำหรับพลังเวทย์และ MP ของวิซาร์ด
+                elseif className == "Archmage" and (stat == "MAGIC" or stat == "MaxMP" or stat == "MDEF") then
+                    enhancement = 2.0 -- โบนัส 100% สำหรับพลังเวทย์, MP และการป้องกันเวทย์ของอาร์คเมจ
+                elseif className == "Thief" and (stat == "ATK" or stat == "AGI") then
+                    enhancement = 1.3 -- โบนัส 30% สำหรับพลังโจมตีและความคล่องตัวของโจร
+                elseif className == "Assassin" and (stat == "ATK" or stat == "AGI") then
+                    enhancement = 1.6 -- โบนัส 60% สำหรับพลังโจมตีและความคล่องตัวของนักฆ่า
+                elseif className == "Shadow" and (stat == "ATK" or stat == "AGI" or stat == "DEF") then
+                    enhancement = 1.8 -- โบนัส 80% สำหรับพลังโจมตี, ความคล่องตัว และการป้องกันของแชโดว์
+                end
+                
+                statIncreases[stat] = math.floor(baseValue * growthRate * enhancement * levelDiff)
+            end
+        end
+
+        -- ตรวจสอบการอัพเกรดเป็นคลาสขั้นสูง
+        local nextClass = nil
+        local upgradeCondition = nil
+        
+        if classData then
+            nextClass = classData.NextClass
+            upgradeCondition = classData.UpgradeCondition
+        end
+        
+        local canUpgradeClass = false
+        
+        -- ตรวจสอบเงื่อนไขการอัพเกรด
+        if upgradeCondition and nextClass then
+            if upgradeCondition.Type == "Level" and newClassLevel >= upgradeCondition.Value then
+                canUpgradeClass = true
+            end
+        end
+
+        -- แจ้งไคลเอนต์และอัปเดตสถิติ
+        local player = Players:GetPlayerByUserId(userId)
+        if player then
+            -- ส่งการแจ้งเตือนการเลเวลอัพของคลาส
+            local remotes = ReplicatedStorage:WaitForChild("Remotes")
+            local uiRemotes = remotes:WaitForChild("UIRemotes")
+            local classLevelUpEvent = uiRemotes:WaitForChild("ClassLevelUp")
+            
+            classLevelUpEvent:FireClient(
+                player, 
+                newClassLevel, 
+                statIncreases, 
+                canUpgradeClass and nextClass or nil
+            )
+
+            -- อัปเดตสถิติผู้เล่น
+            self:ApplyStatIncreases(player, statIncreases)
+
+            -- แจ้งเตือนถ้าสามารถอัพเกรดคลาสได้
+            if canUpgradeClass and nextClass then
+                local classUpgradeEvent = uiRemotes:FindFirstChild("ClassUpgradeAvailable")
+                if classUpgradeEvent then
+                    local nextClassData = ClassData:GetClassInfo(nextClass)
+                    classUpgradeEvent:FireClient(player, nextClass, nextClassData)
+                end
+            end
+            
+            -- เรียกฟังก์ชันคอลแบ็คถ้ามีการกำหนด
+            if self.onClassLevelUp then
+                self.onClassLevelUp(player, newClassLevel, oldClassLevel, statIncreases, canUpgradeClass and nextClass or nil)
+            end
+        end
+
+        return true
+    end
+
+    return false
+end
+
+-- อัพเกรดคลาสของผู้เล่น
+function ClassSystem:UpgradePlayerClass(player, newClassName)
+    local userId = typeof(player) == "Instance" and player:IsA("Player") and player.UserId or player
+    local currentClass = self.playerClasses[userId]
+    
+    if not currentClass then
+        warn("No class assigned to player: " .. tostring(userId))
+        return false
+    end
+    
+    local classData = ClassData:GetClassInfo(currentClass)
+    if not classData or not classData.NextClass or classData.NextClass ~= newClassName then
+        warn("Invalid class upgrade path from " .. tostring(currentClass) .. " to " .. tostring(newClassName))
+        return false
+    end
+    
+    -- ตรวจสอบเงื่อนไขการอัพเกรด
+    local upgradeCondition = classData.UpgradeCondition
+    if upgradeCondition then
+        if upgradeCondition.Type == "Level" and self.playerClassLevels[userId] < upgradeCondition.Value then
+            warn("Player class level not high enough for upgrade. Required: " .. tostring(upgradeCondition.Value))
+            return false
+        elseif upgradeCondition.Type == "Quest" then
+            -- ต้องมีการตรวจสอบเควสเพิ่มเติม (อาจต้องเชื่อมต่อกับระบบเควส)
+            local questSystem = _G.GameManager and _G.GameManager.questSystem
+            if questSystem and not questSystem:IsQuestCompleted(player, upgradeCondition.Value) then
+                warn("Required quest not completed: " .. tostring(upgradeCondition.Value))
+                return false
+            end
+        elseif upgradeCondition.Type == "Item" then
+            -- ต้องมีการตรวจสอบไอเทมเพิ่มเติม (อาจต้องเชื่อมต่อกับระบบไอเทม)
+            local inventorySystem = _G.GameManager and _G.GameManager.inventorySystem
+            if inventorySystem and not inventorySystem:HasItem(player, upgradeCondition.Value) then
+                warn("Required item not found: " .. tostring(upgradeCondition.Value))
+                return false
+            end
+        end
+    end
+    
+    -- ทำการอัพเกรดคลาส
+    self.playerClasses[userId] = newClassName
+    
+    -- อัปเดตสถิติผู้เล่นตามคลาสใหม่
+    local playerManager = _G.GameManager and _G.GameManager.playerManager
+    if playerManager then
+        self:UpdatePlayerStatsFromClass(player, playerManager)
+    end
+    
+    -- ส่ง RemoteEvent เพื่อแจ้งให้ไคลเอนต์ทราบ
+    local player = Players:GetPlayerByUserId(userId)
+    if player then
+        local remotes = ReplicatedStorage:WaitForChild("Remotes")
+        local uiRemotes = remotes:WaitForChild("UIRemotes")
+        local classUpgradedEvent = uiRemotes:FindFirstChild("ClassUpgraded")
+        
+        if classUpgradedEvent then
+            local newClassData = ClassData:GetClassInfo(newClassName)
+            classUpgradedEvent:FireClient(player, newClassName, newClassData)
+        end
+    end
+    
+    return true
+end
+
+-- ฟังก์ชันช่วยสำหรับการเพิ่มค่าสถิติ
+function ClassSystem:ApplyStatIncreases(player, statIncreases)
+    local playerManager = _G.GameManager and _G.GameManager.playerManager
+    if not playerManager then return end
+
+    local playerData = playerManager:GetPlayerData(player)
+    if not playerData then return end
+
+    -- แปลงชื่อสถิติจาก ClassData เป็นชื่อใน PlayerManager
+    local statMapping = {
+        MaxHP = "maxHp",
+        MaxMP = "maxMp",
+        ATK = "attack",
+        DEF = "defense",
+        MAGIC = "magic",
+        MDEF = "magicDefense",
+        AGI = "agility"
+    }
+
+    -- อัปเดตแต่ละสถิติ
+    for classDataStat, increase in pairs(statIncreases) do
+        local playerDataStat = statMapping[classDataStat]
+        
+        if playerDataStat then
+            if playerDataStat == "maxHp" then
+                playerData.stats.maxHp = playerData.stats.maxHp + increase
+                playerData.stats.hp = playerData.stats.maxHp -- ฟื้นฟู HP เต็มเมื่อเลเวลอัพ
+            elseif playerDataStat == "maxMp" then
+                playerData.stats.maxMp = playerData.stats.maxMp + increase
+                playerData.stats.mp = playerData.stats.maxMp -- ฟื้นฟู MP เต็มเมื่อเลเวลอัพ
+            else
+                playerData.stats[playerDataStat] = (playerData.stats[playerDataStat] or 0) + increase
+            end
+        end
+    end
+    
+    -- ส่งข้อมูลสถิติใหม่ไปให้ผู้เล่น
+    local remotes = ReplicatedStorage:WaitForChild("Remotes")
+    local uiRemotes = remotes:WaitForChild("UIRemotes")
+    local updatePlayerStatsEvent = uiRemotes:WaitForChild("UpdatePlayerStats")
+    
+    updatePlayerStatsEvent:FireClient(player, player.UserId, {
+        hp = playerData.stats.hp,
+        maxHp = playerData.stats.maxHp,
+        mp = playerData.stats.mp,
+        maxMp = playerData.stats.maxMp,
+        attack = playerData.stats.attack,
+        defense = playerData.stats.defense,
+        magic = playerData.stats.magic,
+        magicDefense = playerData.stats.magicDefense,
+        agility = playerData.stats.agility,
+        level = self:GetPlayerLevel(player),
+        class = self:GetPlayerClass(player),
+        money = playerData.stats.money or 100
+    })
+end
+
+-- รีเซ็ตข้อมูลคลาสทั้งหมด (สำหรับการรีสตาร์ทเกม)
+function ClassSystem:ResetAllPlayerClasses()
+    self.playerClasses = {}
+    self.playerLevels = {}
+    self.playerClassLevels = {}
+    self.playerExp = {}
+    self.playerClassExp = {}
 end
 
 return ClassSystem
