@@ -1,6 +1,6 @@
 -- DiceRollHandler.lua
 -- จัดการหน้าทอยลูกเต๋าและเลือกเส้นทาง
--- Version: 1.1.0 (Fixed communication with BoardSystem)
+-- Version: 1.2.0 (Optimized)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -14,7 +14,7 @@ local PlayerGui = player:WaitForChild("PlayerGui")
 local PopupUI = PlayerGui:WaitForChild("PopupUI")
 local DiceRollUI = PopupUI:WaitForChild("DiceRollUI")
 
--- ตรวจสอบว่ามี DiceRollUI หรือไม่
+-- Validate UI exists
 if not DiceRollUI then
 	warn("DiceRollUI not found in PopupUI")
 	return
@@ -30,7 +30,7 @@ local ForwardButton = PathSelectionContainer and PathSelectionContainer:FindFirs
 local LeftButton = PathSelectionContainer and PathSelectionContainer:FindFirstChild("LeftButton")
 local RightButton = PathSelectionContainer and PathSelectionContainer:FindFirstChild("RightButton")
 
--- ตรวจสอบว่ามี UI elements ที่จำเป็นหรือไม่
+-- Validate required UI components
 if not DiceWheel or not DiceResult or not RollButton or not PathSelectionContainer 
 	or not RemainingStepsText or not ForwardButton or not LeftButton or not RightButton then
 	warn("Some required UI elements for DiceRollUI are missing")
@@ -42,7 +42,7 @@ local remotes = ReplicatedStorage:WaitForChild("Remotes")
 local boardRemotes = remotes:WaitForChild("BoardRemotes")
 local gameRemotes = remotes:WaitForChild("GameRemotes")
 
--- รับ Remote Events
+-- Get remote events
 local rollDiceEvent = boardRemotes:WaitForChild("RollDice")
 local showPathSelectionEvent = boardRemotes:WaitForChild("ShowPathSelection")
 local choosePathEvent = boardRemotes:WaitForChild("ChoosePath")
@@ -63,9 +63,7 @@ local canRoll = false
 local currentDiceResult = nil
 local currentPathChoices = nil
 local remainingSteps = 0
-
--- Debug flag - set to true to help troubleshoot issues
-local DEBUG_MODE = true
+local DEBUG_MODE = false
 
 -- Debug helper function
 local function debugLog(message)
@@ -74,7 +72,7 @@ local function debugLog(message)
 	end
 end
 
--- ฟังก์ชันแสดง UI
+-- Show dice roll UI
 local function showDiceRollUI()
 	DiceRollUI.Visible = true
 	RollButton.Visible = true
@@ -95,7 +93,7 @@ local function showDiceRollUI()
 	debugLog("Dice Roll UI shown")
 end
 
--- ฟังก์ชันซ่อน UI
+-- Hide dice roll UI
 local function hideDiceRollUI()
 	DiceRollUI.Visible = false
 	isRolling = false
@@ -103,19 +101,17 @@ local function hideDiceRollUI()
 	debugLog("Dice Roll UI hidden")
 end
 
--- ฟังก์ชันอนิเมชันทอยลูกเต๋า
+-- Animate dice roll
 local function animateDiceRoll(finalResult)
 	if isRolling then return end
 
 	isRolling = true
 	RollButton.Visible = false
 
-	debugLog("Starting dice roll animation, final result will be: " .. finalResult)
-
 	-- Create animation sequence
 	local startTime = tick()
 	local endTime = startTime + DICE_ANIMATION_DURATION
-	local frameRate = 0.1 -- เปลี่ยนตัวเลขทุกๆ 0.1 วินาที
+	local frameRate = 0.1
 	local lastUpdate = 0
 
 	-- Animation loop
@@ -124,28 +120,28 @@ local function animateDiceRoll(finalResult)
 		if currentTime - lastUpdate >= frameRate then
 			lastUpdate = currentTime
 
-			-- สุ่มตัวเลขสำหรับแสดง
+			-- Show random value
 			local randomValue = DICE_VALUES[math.random(1, #DICE_VALUES)]
 			DiceResult.Text = tostring(randomValue)
 
-			-- ปรับความเร็วอนิเมชันเมื่อใกล้จบ
+			-- Slow down animation near end
 			local timeLeft = endTime - currentTime
 			if timeLeft < 1 then
-				frameRate = 0.2 -- ช้าลงเมื่อใกล้จบ
+				frameRate = 0.2
 			end
 
 			wait(frameRate)
 		end
 	end
 
-	-- แสดงผลลัพธ์สุดท้าย
+	-- Show final result
 	DiceResult.Text = tostring(finalResult)
 
 	-- Tween effect for final result
 	local resultTween = TweenService:Create(
 		DiceResult,
 		TweenInfo.new(0.5, Enum.EasingStyle.Bounce, Enum.EasingDirection.Out),
-		{TextSize = 60} -- ขยายขนาดตัวเลข
+		{TextSize = 60}
 	)
 	resultTween:Play()
 
@@ -155,7 +151,7 @@ local function animateDiceRoll(finalResult)
 	local resetTween = TweenService:Create(
 		DiceResult,
 		TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-		{TextSize = 36} -- ขนาดปกติ
+		{TextSize = 36}
 	)
 	resetTween:Play()
 
@@ -165,19 +161,17 @@ local function animateDiceRoll(finalResult)
 
 	wait(0.3)
 
-	-- ส่งผลลัพธ์ไปยังเซิร์ฟเวอร์ - CRITICAL FIX: Make sure to use the correct remote event
-	debugLog("Sending dice roll result to server: " .. finalResult)
+	-- Send result to server
 	rollDiceEvent:FireServer(finalResult)
 
 	return finalResult
 end
 
--- ฟังก์ชันแสดงตัวเลือกทิศทาง
+-- Show path choices
 local function showPathChoices(choices)
 	PathSelectionContainer.Visible = true
 	RemainingStepsText.Text = "Steps: " .. remainingSteps
-wait(2)
-	debugLog("Showing path choices: " .. #choices .. " options")
+	wait(0.5) -- Small delay to ensure UI updates
 
 	-- Reset buttons
 	ForwardButton.Visible = false
@@ -188,27 +182,19 @@ wait(2)
 	for _, choice in ipairs(choices) do
 		if choice.direction == DIRECTIONS.FRONT then
 			ForwardButton.Visible = true
-			debugLog("Forward direction available")
 		elseif choice.direction == DIRECTIONS.LEFT then
 			LeftButton.Visible = true
-			debugLog("Left direction available")
 		elseif choice.direction == DIRECTIONS.RIGHT then
 			RightButton.Visible = true
-			debugLog("Right direction available")
 		end
 	end
 
 	currentPathChoices = choices
 end
 
--- ฟังก์ชันเลือกทิศทาง
+-- Choose path direction
 local function choosePath(direction)
-	if not currentPathChoices then 
-		debugLog("Cannot choose path: no current path choices")
-		return 
-	end
-
-	debugLog("Choosing path direction: " .. direction)
+	if not currentPathChoices then return end
 
 	-- Hide buttons during movement
 	ForwardButton.Visible = false
@@ -223,54 +209,40 @@ local function choosePath(direction)
 	RemainingStepsText.Text = "Steps: " .. remainingSteps
 
 	if remainingSteps <= 0 then
-		-- Hide path selection when movement is complete
 		PathSelectionContainer.Visible = false
-		debugLog("Movement complete, no more steps remaining")
 	end
 end
 
--- Event handlers
+-- Button event handlers
 RollButton.Activated:Connect(function()
 	if not isRolling and canRoll then
 		local diceResult = math.random(1, 6)
-		debugLog("Roll button clicked, rolling: " .. diceResult)
 		animateDiceRoll(diceResult)
-	else
-		debugLog("Roll button clicked but " .. (isRolling and "animation in progress" or "cannot roll now"))
 	end
 end)
 
 ForwardButton.Activated:Connect(function()
-	debugLog("Forward button clicked")
 	choosePath(DIRECTIONS.FRONT)
 end)
 
 LeftButton.Activated:Connect(function()
-	debugLog("Left button clicked")
 	choosePath(DIRECTIONS.LEFT)
 end)
 
 RightButton.Activated:Connect(function()
-	debugLog("Right button clicked")
 	choosePath(DIRECTIONS.RIGHT)
 end)
 
--- Connect remote events
-showPathSelectionEvent.OnClientEvent:Connect(function(choices)
-	debugLog("Received ShowPathSelection event with " .. #choices .. " choices")
-	showPathChoices(choices)
-end)
+-- Remote event handlers
+showPathSelectionEvent.OnClientEvent:Connect(showPathChoices)
 
 updateTurnEvent.OnClientEvent:Connect(function(currentPlayerId)
 	local isMyTurn = currentPlayerId == player.UserId
-	debugLog("Received turn update: " .. (isMyTurn and "It's my turn" or "Not my turn"))
 
 	if isMyTurn then
-		-- It's our turn, allow rolling
 		showDiceRollUI()
 		canRoll = true
 	else
-		-- Not our turn, hide UI
 		hideDiceRollUI()
 		canRoll = false
 	end
@@ -278,7 +250,6 @@ end)
 
 -- Initial setup
 DiceRollUI.Visible = false
-debugLog("DiceRollHandler initialized successfully")
 
 -- Export the module for other scripts to use
 local DiceRollHandler = {}
