@@ -1,42 +1,75 @@
 -- ClassData.lua
 -- ข้อมูลและคุณสมบัติของคลาสต่างๆ ในเกม
--- Version: 1.0.1 (Optimized)
+-- Version: 2.0.0 (Updated)
 -- วางที่: ReplicatedStorage/SharedModules/ClassData.lua
 
 local ClassData = {}
 
 -- ข้อมูลคลาสทั้งหมด
 ClassData.Classes = {
-	-- ===== สายนักรบ =====
+	-- ===== สายนักรบ (คลาสเริ่มต้น) =====
 	Warrior = {
 		DisplayName = "Warrior",
-		Description = "เชี่ยวชาญการต่อสู้ระยะประชิด มีพลังชีวิตและพลังป้องกันเริ่มต้นที่สมดุล",
+		Description = "A sword man",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = {
-			MaxHP = 120,
-			MaxMP = 30,
-			ATK = 12,
-			DEF = 8,
-			MAGIC = 5,
-			MDEF = 5,
-			AGI = 7,
+			MaxHP = 125,
+			MaxMP = 50,
+			ATK = 95,
+			DEF = 75,
+			MAGIC = 10,
+			AGI = 40,
 		},
 		NextClass = "Knight",
 		UpgradeCondition = { Type = "Level", Value = 10 },
 	},
 
+	-- ===== สายขโมย (คลาสเริ่มต้น) =====
+	Thief = {
+		DisplayName = "Thief",
+		Description = "A thief man",
+		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
+		BaseStats = {
+			MaxHP = 100,
+			MaxMP = 60,
+			ATK = 75,
+			DEF = 30,
+			MAGIC = 30,
+			AGI = 80,
+		},
+		NextClass = "Assassin",
+		UpgradeCondition = { Type = "Level", Value = 10 },
+	},
+
+	-- ===== สายเวทย์ (คลาสเริ่มต้น) =====
+	Mage = {
+		DisplayName = "Mage",
+		Description = "A magic man",
+		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
+		BaseStats = {
+			MaxHP = 85,
+			MaxMP = 120,
+			ATK = 25,
+			DEF = 35,
+			MAGIC = 95,
+			AGI = 50,
+		},
+		NextClass = "Wizard",
+		UpgradeCondition = { Type = "Level", Value = 10 },
+	},
+
+	-- ===== คลาสอัพเกรดของ Warrior =====
 	Knight = {
 		DisplayName = "Knight",
 		Description = "นักรบผู้ช่ำชอง เกราะหนาและพลังโจมตีที่หนักหน่วงขึ้น สามารถปกป้องเพื่อนร่วมทีมได้",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = {
 			MaxHP = 180,
-			MaxMP = 50,
-			ATK = 18,
-			DEF = 15,
-			MAGIC = 7,
-			MDEF = 10,
-			AGI = 5,
+			MaxMP = 65,
+			ATK = 120,
+			DEF = 100,
+			MAGIC = 15,
+			AGI = 45,
 		},
 		NextClass = "Paladin",
 		UpgradeCondition = { Type = "Quest", Value = "ProveYourValor" },
@@ -49,46 +82,27 @@ ClassData.Classes = {
 		BaseStats = {
 			MaxHP = 250,
 			MaxMP = 100,
-			ATK = 22,
-			DEF = 20,
-			MAGIC = 15,
-			MDEF = 18,
-			AGI = 6,
+			ATK = 150,
+			DEF = 140,
+			MAGIC = 50,
+			AGI = 50,
 		},
 		NextClass = nil, -- คลาสสูงสุดในสายนี้
 		UpgradeCondition = nil,
 	},
 
-	-- ===== สายเวทย์ =====
-	Mage = {
-		DisplayName = "Mage",
-		Description = "ผู้ใช้พลังเวทมนตร์ โจมตีจากระยะไกลด้วยคาถาหลากหลายรูปแบบ",
-		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = {
-			MaxHP = 80,
-			MaxMP = 80,
-			ATK = 5,
-			DEF = 5,
-			MAGIC = 15,
-			MDEF = 10,
-			AGI = 8,
-		},
-		NextClass = "Wizard",
-		UpgradeCondition = { Type = "Level", Value = 10 },
-	},
-
+	-- ===== คลาสอัพเกรดของ Mage =====
 	Wizard = {
 		DisplayName = "Wizard",
 		Description = "เชี่ยวชาญเวทมนตร์ธาตุต่างๆ มีพลังทำลายล้างสูงขึ้นและคาถาที่ซับซ้อนกว่าเดิม",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = {
 			MaxHP = 110,
-			MaxMP = 150,
-			ATK = 7,
-			DEF = 8,
-			MAGIC = 25,
-			MDEF = 18,
-			AGI = 7,
+			MaxMP = 180,
+			ATK = 35,
+			DEF = 45,
+			MAGIC = 130,
+			AGI = 60,
 		},
 		NextClass = "Archmage",
 		UpgradeCondition = { Type = "Item", Value = "AncientGrimoire" },
@@ -99,36 +113,18 @@ ClassData.Classes = {
 		Description = "ผู้บรรลุศาสตร์แห่งเวทมนตร์ขั้นสูงสุด ควบคุมพลังอันมหาศาลและคาถาที่เปลี่ยนแปลงสนามรบได้",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = {
-			MaxHP = 150,
+			MaxHP = 140,
 			MaxMP = 250,
-			ATK = 10,
-			DEF = 12,
-			MAGIC = 35,
-			MDEF = 25,
-			AGI = 9,
+			ATK = 45,
+			DEF = 60,
+			MAGIC = 180,
+			AGI = 70,
 		},
 		NextClass = nil,
 		UpgradeCondition = nil,
 	},
 
-	-- ===== สายโจร =====
-	Thief = {
-		DisplayName = "Thief",
-		Description = "ว่องไวและมีเล่ห์เหลี่ยม สามารถสร้างความเสียหายอย่างรวดเร็วและหลบหลีกศัตรู",
-		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = {
-			MaxHP = 90,
-			MaxMP = 50,
-			ATK = 10,
-			DEF = 6,
-			MAGIC = 6,
-			MDEF = 6,
-			AGI = 12,
-		},
-		NextClass = "Assassin",
-		UpgradeCondition = { Type = "Level", Value = 10 },
-	},
-
+	-- ===== คลาสอัพเกรดของ Thief =====
 	Assassin = {
 		DisplayName = "Assassin",
 		Description = "เชี่ยวชาญการลอบสังหาร สร้างความเสียหายคริติคอลอย่างรุนแรงและเคลื่อนไหวในเงามืด",
@@ -136,11 +132,10 @@ ClassData.Classes = {
 		BaseStats = {
 			MaxHP = 130,
 			MaxMP = 80,
-			ATK = 16,
-			DEF = 9,
-			MAGIC = 8,
-			MDEF = 9,
-			AGI = 18,
+			ATK = 110,
+			DEF = 45,
+			MAGIC = 40,
+			AGI = 120,
 		},
 		NextClass = "Shadow",
 		UpgradeCondition = { Type = "Skill", Value = "MasterStealth" },
@@ -151,13 +146,12 @@ ClassData.Classes = {
 		Description = "ปรมาจารย์แห่งเงา ผู้ใช้ทักษะลอบเร้นและการโจมตีที่ศัตรูไม่อาจคาดเดาได้",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = {
-			MaxHP = 180,
-			MaxMP = 120,
-			ATK = 20,
-			DEF = 14,
-			MAGIC = 12,
-			MDEF = 14,
-			AGI = 25,
+			MaxHP = 160,
+			MaxMP = 100,
+			ATK = 140,
+			DEF = 60,
+			MAGIC = 55,
+			AGI = 170,
 		},
 		NextClass = nil,
 		UpgradeCondition = nil,
@@ -182,6 +176,22 @@ end
 function ClassData:GetUpgradeCondition(className)
 	local info = self:GetClassInfo(className)
 	return info and info.UpgradeCondition
+end
+
+-- ฟังก์ชันสำหรับดึงคลาสเริ่มต้นทั้งหมด
+function ClassData:GetStarterClasses()
+	return {"Warrior", "Thief", "Mage"}
+end
+
+-- ฟังก์ชันตรวจสอบว่าเป็นคลาสเริ่มต้นหรือไม่
+function ClassData:IsStarterClass(className)
+	local starterClasses = self:GetStarterClasses()
+	for _, class in ipairs(starterClasses) do
+		if class == className then
+			return true
+		end
+	end
+	return false
 end
 
 return ClassData
