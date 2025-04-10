@@ -1,6 +1,6 @@
--- ClassService.server.lua
+-- Enhanced ClassService.server.lua
 -- จัดการระบบคลาสและการเลือกคลาส server-side
--- Version: 1.1.0 (Optimized)
+-- Version: 2.0.0 (Optimized)
 
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -9,42 +9,315 @@ local Players = game:GetService("Players")
 -- Get modules and remote events
 local Modules = ServerStorage:WaitForChild("Modules")
 local ClassSystem = require(Modules:WaitForChild("ClassSystem"))
+local SharedModules = ReplicatedStorage:WaitForChild("SharedModules")
+local ClassData = require(SharedModules:WaitForChild("ClassData"))
 
 -- Get GameManager from global
 local function getGameManager()
 	local startTime = tick()
-	while not _G.GameManager and tick() - startTime < 10 do
-		wait(0.1)
+	local attempts = 0
+	while not _G.GameManager and attempts < 20 do
+		wait(0.5)
+		attempts = attempts + 1
 	end
 	return _G.GameManager
 end
 
--- Initialize service
+-- Initialize player selection tracking
+local playerSelections = {}
+local selectionTimer = nil
+local DEFAULT_SELECTION_TIME = 30
+
+-- Log function
+local function log(message)
+	print("[ClassService] " .. message)
+end
+
+-- Initialize remote events
+local function initializeRemoteEvents()
+	local remotes = ReplicatedStorage:WaitForChild("Remotes")
+	local uiRemotes = remotes:WaitForChild("UIRemotes")
+	local gameRemotes = remotes:WaitForChild("GameRemotes")
+
+	-- Create required remotes if they don't exist
+	local classAssignedEvent = uiRemotes:FindFirstChild("ClassAssigned") or Instance.new("RemoteEvent")
+	classAssignedEvent.Name = "ClassAssigned"
+	classAssignedEvent.Parent = uiRemotes
+
+	local playerSelectedClassEvent = uiRemotes:FindFirstChild("PlayerSelectedClass") or Instance.new("RemoteEvent")
+	playerSelectedClassEvent.Name = "PlayerSelectedClass"
+	playerSelectedClassEvent.Parent = uiRemotes
+
+	local updateClassSelectionEvent = uiRemotes:FindFirstChild("UpdateClassSelection") or Instance.new("RemoteEvent")
+	updateClassSelectionEvent.Name = "UpdateClassSelection"
+	updateClassSelectionEvent.Parent = uiRemotes
+
+	local updateClassSelectionTimerEvent = uiRemotes:FindFirstChild("UpdateClassSelectionTimer") or Instance.new("RemoteEvent")
+	updateClassSelectionTimerEvent.Name = "UpdateClassSelectionTimer"
+	updateClassSelectionTimerEvent.Parent = uiRemotes
+
+	local notifyRandomClassEvent = uiRemotes:FindFirstChild("NotifyRandomClass") or Instance.new("RemoteEvent")
+	notifyRandomClassEvent.Name = "NotifyRandomClass"
+	notifyRandomClassEvent.Parent = uiRemotes
+
+	local showMainGameUIEvent = uiRemotes:FindFirstChild("ShowMainGameUI") or Instance.new("RemoteEvent")
+	showMainGameUIEvent.Name = "ShowMainGameUI"
+	showMainGameUIEvent.Parent = uiRemotes
+
+	local levelUpEvent = uiRemotes:FindFirstChild("LevelUp") or Instance.new("RemoteEvent")
+	levelUpEvent.Name = "LevelUp"
+	levelUpEvent.Parent = uiRemotes
+
+	local classLevelUpEvent = uiRemotes:FindFirstChild("ClassLevelUp") or Instance.new("RemoteEvent")
+	classLevelUpEvent.Name = "ClassLevelUp"
+	classLevelUpEvent.Parent = uiRemotes
+
+	local updatePlayerStatsEvent = uiRemotes:FindFirstChild("UpdatePlayerStats") or Instance.new("RemoteEvent")
+	updatePlayerStatsEvent.Name = "UpdatePlayerStats"
+	updatePlayerStatsEvent.Parent = uiRemotes
+
+	return {
+		classAssigned = classAssignedEvent,
+		playerSelectedClass = playerSelectedClassEvent,
+		updateClassSelection = updateClassSelectionEvent,
+		updateClassSelectionTimer = updateClassSelectionTimerEvent,
+		notifyRandomClass = notifyRandomClassEvent,
+		showMainGameUI = showMainGameUIEvent,
+		levelUp = levelUpEvent,
+		classLevelUp = classLevelUpEvent,
+		updatePlayerStats = updatePlayerStatsEvent
+	}
+end
+
+-- Finish class selection and transition to game
+local function finishClassSelection(remotes)
+	local gameManager = getGameManager()
+	if not gameManager then
+		log("GameManager not found, cannot finish class selection")
+		return
+	end
+
+	-- Assign classes to all players
+	for userId, className in pairs(playerSelections) do
+		local player = nil
+
+		-- Find player from UserId
+		for _, plr in pairs(Players:GetPlayers()) do
+			if plr.UserId == userId then
+				player = plr
+				break
+			end
+		end
+
+		if player then
+			-- Get class data
+			local classInfo = ClassData:GetClassInfo(className)
+
+			-- Assign class via ClassSystem
+			if gameManager.classSystem then
+				gameManager.classSystem:AssignClassToPlayer(player, className)
+			end
+
+			-- Assign class via PlayerManager
+			if gameManager.playerManager then
+				gameManager.playerManager:SetPlayerClass(player, className)
+
+				-- Get player data for UI update
+				local playerData = gameManager.playerManager:GetPlayerData(player)
+				if playerData then
+					-- Update player's UI with stats
+					remotes.updatePlayerStats:FireClient(player, player.UserId, {
+						hp = playerData.stats.hp,
+						maxHp = playerData.stats.maxHp,
+						mp = playerData.stats.mp,
+						maxMp = playerData.stats.maxMp,
+						level = playerData.stats.level or 1,
+						class = className,
+						money = playerData.stats.money
+					})
+				end
+			end
+
+			log(player.Name .. " assigned class: " .. className)
+		end
+	end
+
+	-- Show main game UI to all players
+	wait(1) -- Give time for class assignment to complete
+	remotes.showMainGameUI:FireAllClients()
+	log("All players transitioned to main game UI")
+
+	-- Clean up
+	playerSelections = {}
+end
+
+-- Start class selection timer
+local function startSelectionTimer(remotes)
+	local timeLeft = DEFAULT_SELECTION_TIME
+
+	-- Cancel existing timer if running
+	if selectionTimer then
+		selectionTimer:Disconnect()
+		selectionTimer = nil
+	end
+
+	-- Create new timer
+	selectionTimer = game:GetService("RunService").Heartbeat:Connect(function()
+		timeLeft = timeLeft - game:GetService("RunService").Heartbeat:Wait()
+
+		-- Update timer every second
+		if math.floor(timeLeft) ~= math.floor(timeLeft + game:GetService("RunService").Heartbeat:Wait()) then
+			remotes.updateClassSelectionTimer:FireAllClients(math.floor(timeLeft))
+
+			-- When time is up, assign random classes to players without selection
+			if timeLeft <= 0 then
+				selectionTimer:Disconnect()
+				selectionTimer = nil
+
+				for _, player in pairs(Players:GetPlayers()) do
+					if not playerSelections[player.UserId] then
+						local randomClass = ClassSystem:GetRandomClass()
+						playerSelections[player.UserId] = randomClass
+
+						-- Notify player of random selection
+						remotes.notifyRandomClass:FireClient(player, randomClass)
+
+						-- Update all clients
+						remotes.updateClassSelection:FireAllClients(player.UserId, randomClass)
+
+						log(player.Name .. " was assigned random class: " .. randomClass)
+					end
+				end
+
+				-- Delay to let animations finish
+				wait(2)
+
+				-- Continue game setup
+				finishClassSelection(remotes)
+			end
+		end
+	end)
+
+	-- Initial timer update
+	remotes.updateClassSelectionTimer:FireAllClients(timeLeft)
+	log("Class selection timer started: " .. timeLeft .. " seconds")
+end
+
+	-- Handle player selection
+local function handlePlayerSelection(player, className, remotes)
+	if not player or not className then return end
+
+	-- Validate class name
+	if className ~= "Warrior" and className ~= "Mage" and className ~= "Thief" then
+		log("Invalid class selected by " .. player.Name .. ": " .. tostring(className))
+		return
+	end
+
+	-- Store selection
+	playerSelections[player.UserId] = className
+	log(player.Name .. " selected class: " .. className)
+
+	-- Broadcast to all clients
+	remotes.updateClassSelection:FireAllClients(player.UserId, className)
+
+	-- Check if all players have selected
+	local allSelected = true
+	for _, plr in pairs(Players:GetPlayers()) do
+		if not playerSelections[plr.UserId] then
+			allSelected = false
+			break
+		end
+	end
+
+	-- If all selected, continue game setup
+	if allSelected and #Players:GetPlayers() > 0 then
+		if selectionTimer then
+			selectionTimer:Disconnect()
+			selectionTimer = nil
+		end
+
+		wait(3) -- Give time for animations
+		finishClassSelection(remotes)
+	end
+	end
+
+	-- Reset player selections
+local function resetPlayerSelections()
+	playerSelections = {}
+	if selectionTimer then
+		selectionTimer:Disconnect()
+		selectionTimer = nil
+	end
+	end
+
+	-- Initialize service
 local function initializeClassService()
 	-- Wait for GameManager
 	local gameManager = getGameManager()
-	if not gameManager then return end
+	if not gameManager then
+		log("GameManager not found, initializing own ClassSystem")
+		gameManager = {
+			classSystem = ClassSystem.new()
+		}
+		_G.GameManager = gameManager
+	else
+		log("GameManager found")
+		end
 
-	-- Create ClassSystem if needed
-	if not gameManager.classSystem then
-		gameManager.classSystem = ClassSystem.new()
+		-- Create ClassSystem if needed
+if not gameManager.classSystem then
+	log("Creating new ClassSystem")
+	gameManager.classSystem = ClassSystem.new()
+end
+
+-- Initialize remote events
+local remotes = initializeRemoteEvents()
+log("Remote events initialized")
+
+-- Set up class assignment handler
+local function handleClassAssignment(player, className, classData)
+	-- Could update character appearance based on class
+	log("Handling class assignment for " .. player.Name .. ": " .. className)
+
+	-- Update UI
+	remotes.classAssigned:FireClient(player, className, classData)
 	end
 
-	-- Get RemoteEvents
-	local remotes = ReplicatedStorage:WaitForChild("Remotes")
-	local uiRemotes = remotes:WaitForChild("UIRemotes")
-	local classAssignedEvent = uiRemotes:WaitForChild("ClassAssigned")
-
-	-- Set up class assignment handler
-	local function handleClassAssignment(player, className, classData)
-		-- Could update character appearance based on class
-		-- Update UI
-		classAssignedEvent:FireClient(player, className, classData)
-	end
+	-- Connect to player selected class event
+remotes.playerSelectedClass.OnServerEvent:Connect(function(player, className)
+	handlePlayerSelection(player, className, remotes)
+	end)
 
 	-- Connect to class system events
-	gameManager.classSystem.onClassAssigned = handleClassAssignment
+gameManager.classSystem.onClassAssigned = handleClassAssignment
+
+-- Handle player joining mid-game
+Players.PlayerAdded:Connect(function(player)
+	log("Player joined: " .. player.Name)
+
+	-- If a new player joins during selection phase, update timer
+	if selectionTimer then
+		wait(1) -- Give time for client to load
+		local timeLeft = DEFAULT_SELECTION_TIME -- You might want to get the actual time left
+		remotes.updateClassSelectionTimer:FireClient(player, timeLeft)
+		end
+		end)
+
+		-- Start class selection process for all players
+game.StarterGui.ClassSelection.Enabled = true
+wait(1) -- Give time for client to load
+startSelectionTimer(remotes)
+log("Class selection process started")
+
+-- Add public methods to GameManager
+gameManager.resetPlayerSelections = resetPlayerSelections
+gameManager.startClassSelection = function()
+	resetPlayerSelections()
+	startSelectionTimer(remotes)
+end
+
+return gameManager
 end
 
 -- Start the service
-initializeClassService()
+local gameManager = initializeClassService()
