@@ -1,11 +1,22 @@
 -- FixedClassSelectionHandler.lua
 -- จัดการหน้าเลือกคลาสพื้นฐาน (Warrior, Thief, Mage)
--- Version: 6.0.0 (Fixed)
+-- Version: 7.0.0 (Fully Fixed with Correct Lua Syntax)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+-- Debug mode
+local DEBUG_MODE = false
+
+-- Debug helper function
+local function debugLog(message)
+	if DEBUG_MODE then
+		print("[ClassSelectionHandler] " .. message)
+	end
+end
 
 -- โหลดข้อมูลคลาสจาก SharedModules
 local ClassData = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("ClassData"))
@@ -24,9 +35,9 @@ local WarriorClass, MageClass, ThiefClass
 
 -- คลาสพื้นฐานที่เลือกได้ (กำหนดแค่ 3 คลาสเริ่มต้น)
 local STARTER_CLASSES = {
-    "Warrior",
-    "Thief",
-    "Mage"
+	"Warrior",
+	"Thief",
+	"Mage"
 }
 
 -- RemoteEvents references
@@ -38,7 +49,7 @@ local selectionState = {
 	isConfirmed = false,
 	playerSelections = {},
 	playerFrames = {},
-	timerValue = 60, -- เปลี่ยนเป็น 60 วินาที
+	timerValue = 60,
 	isTimerActive = false
 }
 
@@ -57,7 +68,7 @@ local COLORS = {
 	TIMER_NORMAL = Color3.fromRGB(255, 255, 255),
 	TIMER_WARNING = Color3.fromRGB(255, 150, 50),
 	TIMER_CRITICAL = Color3.fromRGB(255, 50, 50),
-	
+
 	-- สีสถานะสำหรับแต่ละคลาส
 	WARRIOR_COLOR = Color3.fromRGB(200, 80, 80),   -- สีแดง
 	MAGE_COLOR = Color3.fromRGB(70, 100, 200),     -- สีน้ำเงิน
@@ -66,13 +77,13 @@ local COLORS = {
 
 -- Helper function for tweening
 local function createTween(object, properties, duration, style, direction)
-    local tweenInfo = TweenInfo.new(
-        duration or 0.3,
-        style or Enum.EasingStyle.Quad,
-        direction or Enum.EasingDirection.Out
-    )
-    local tween = TweenService:Create(object, tweenInfo, properties)
-    return tween
+	local tweenInfo = TweenInfo.new(
+		duration or 0.3,
+		style or Enum.EasingStyle.Quad,
+		direction or Enum.EasingDirection.Out
+	)
+	local tween = TweenService:Create(object, tweenInfo, properties)
+	return tween
 end
 
 -- Clean up connections
@@ -83,16 +94,68 @@ local function cleanupConnections()
 		end
 	end
 	connections = {}
+	debugLog("Cleaned up all connections")
+end
+
+-- Fix timer frame positioning
+local function fixTimerPosition()
+	if not TimerFrame then return end
+
+	debugLog("Fixing timer position")
+
+	-- Ensure timer doesn't overlap with other UI elements
+	TimerFrame.Position = UDim2.new(0.9, 0, 0.05, 0)
+	TimerFrame.Size = UDim2.new(0.15, 0, 0.06, 0)
+	TimerFrame.AnchorPoint = Vector2.new(1, 0)
+
+	-- Make timer more visible
+	TimerFrame.BackgroundTransparency = 0.2
+	TimerFrame.ZIndex = 10
+
+	if TimerText then
+		TimerText.ZIndex = 11
+	end
+
+	-- Add UICorner if not present
+	if not TimerFrame:FindFirstChild("UICorner") then
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 8)
+		corner.Parent = TimerFrame
+	end
+
+	-- Add UIStroke for better visibility
+	if not TimerFrame:FindFirstChild("UIStroke") then
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = Color3.fromRGB(200, 200, 255)
+		stroke.Thickness = 2
+		stroke.Parent = TimerFrame
+	end
+
+	debugLog("Timer position fixed")
 end
 
 -- Initialize UI references
 local function initializeUI()
+	debugLog("Initializing UI")
+
 	-- Get PlayerGui and ClassSelection
 	PlayerGui = player:WaitForChild("PlayerGui", 10)
-	if not PlayerGui then return false end
+	if not PlayerGui then 
+		warn("ClassSelectionHandler: PlayerGui not found")
+		return false 
+	end
 
 	ClassSelection = PlayerGui:WaitForChild("ClassSelection", 5)
-	if not ClassSelection then return false end
+	if not ClassSelection then 
+		warn("ClassSelectionHandler: ClassSelection not found")
+		return false 
+	end
+
+	-- Check if ClassSelection is already enabled
+	if not ClassSelection.Enabled then
+		ClassSelection.Enabled = false
+		debugLog("ClassSelection disabled initially to prevent UI flash")
+	end
 
 	-- Get main UI components
 	Background = ClassSelection:WaitForChild("Background", 3)
@@ -104,17 +167,17 @@ local function initializeUI()
 	TimerFrame = Background:WaitForChild("TimerFrame", 2)
 
 	if TimerFrame then 
-	    TimerText = TimerFrame:WaitForChild("TimerText", 1) 
-	    -- ปรับตำแหน่งเวลาให้ไม่ทับส่วนอื่น
-	    TimerFrame.Position = UDim2.new(0.9, 0, 0.05, 0)
-	    TimerFrame.Size = UDim2.new(0.15, 0, 0.06, 0)
-	    TimerFrame.AnchorPoint = Vector2.new(1, 0)
+		TimerText = TimerFrame:WaitForChild("TimerText", 1)
+
+		-- Fix timer position
+		fixTimerPosition()
 	end
-	
+
 	PlayersSelectionStatus = Background:WaitForChild("PlayersSelectionStatus", 2)
 
 	-- Validate required components
 	if not TitleText or not ClassesContainer or not ConfirmButton then
+		warn("ClassSelectionHandler: Essential UI components missing")
 		return false
 	end
 
@@ -124,22 +187,23 @@ local function initializeUI()
 	ThiefClass = ClassesContainer:FindFirstChild("ThiefClass")
 
 	if not WarriorClass or not MageClass or not ThiefClass then
+		warn("ClassSelectionHandler: Class frames missing")
 		return false
 	end
 
 	-- Set initial UI state
-	ClassSelection.Enabled = true
-	
-	-- อัปเดตข้อความเวลา
 	if TimerText then
 		TimerText.Text = "Time: " .. selectionState.timerValue
 	end
-	
+
+	debugLog("UI initialized successfully")
 	return true
 end
 
 -- Connect to RemoteEvents
 local function connectRemoteEvents()
+	debugLog("Connecting to remote events")
+
 	-- Get Remotes folders
 	local remotesFolder = ReplicatedStorage:WaitForChild("Remotes", 10)
 	if not remotesFolder then return false end
@@ -155,14 +219,20 @@ local function connectRemoteEvents()
 
 	-- Validate all remotes
 	for name, remote in pairs(remotes) do
-		if not remote then return false end
+		if not remote then 
+			warn("ClassSelectionHandler: Remote event missing - " .. name)
+			return false 
+		end
 	end
 
+	debugLog("Remote events connected successfully")
 	return true
 end
 
 -- Apply hover effects to UI elements
 local function applyUIEffects()
+	debugLog("Applying UI effects")
+
 	-- Add hover effects to class frames
 	for _, classFrame in pairs({WarriorClass, MageClass, ThiefClass}) do
 		if not classFrame then continue end
@@ -175,6 +245,13 @@ local function applyUIEffects()
 			stroke.Color = COLORS.DEFAULT_STROKE
 			stroke.Thickness = 2
 			stroke.Parent = classFrame
+		end
+
+		-- Add UICorner if missing
+		if not classFrame:FindFirstChild("UICorner") then
+			local corner = Instance.new("UICorner")
+			corner.CornerRadius = UDim.new(0, 8)
+			corner.Parent = classFrame
 		end
 
 		-- Add hover effects if not already connected
@@ -195,7 +272,7 @@ local function applyUIEffects()
 
 			table.insert(connections, mouseEnter)
 			table.insert(connections, mouseLeave)
-			
+
 			classFrame:SetAttribute("EffectsApplied", true)
 		end
 	end
@@ -208,6 +285,13 @@ local function applyUIEffects()
 			stroke.Color = COLORS.DEFAULT_STROKE
 			stroke.Thickness = 2
 			stroke.Parent = ConfirmButton
+		end
+
+		-- Add UICorner if missing
+		if not ConfirmButton:FindFirstChild("UICorner") then
+			local corner = Instance.new("UICorner")
+			corner.CornerRadius = UDim.new(0, 8)
+			corner.Parent = ConfirmButton
 		end
 
 		-- Add hover effects
@@ -233,9 +317,11 @@ local function applyUIEffects()
 
 		table.insert(connections, mouseEnter)
 		table.insert(connections, mouseLeave)
-		
+
 		ConfirmButton:SetAttribute("EffectsApplied", true)
 	end
+
+	debugLog("UI effects applied")
 end
 
 -- Update class display
@@ -332,7 +418,10 @@ end
 -- Select class function
 local function selectClass(className)
 	-- Don't allow selection after confirmation
-	if selectionState.isConfirmed then return end
+	if selectionState.isConfirmed then 
+		debugLog("Class selection rejected - already confirmed")
+		return 
+	end
 
 	-- Validate class name (เฉพาะ 3 คลาสพื้นฐานเท่านั้น)
 	local isValid = false
@@ -342,8 +431,13 @@ local function selectClass(className)
 			break
 		end
 	end
-	
-	if not isValid then return end
+
+	if not isValid then 
+		warn("Invalid class selected: " .. className)
+		return 
+	end
+
+	debugLog("Selecting class: " .. className)
 
 	-- Set selected class
 	selectionState.selectedClass = className
@@ -386,7 +480,7 @@ local function updateTimer(timeLeft)
 	-- Update display
 	if TimerText then
 		TimerText.Text = "Time: " .. timeLeft
-		
+
 		-- Change color based on time
 		if timeLeft <= 5 then
 			TimerText.TextColor3 = COLORS.TIMER_CRITICAL
@@ -400,7 +494,7 @@ local function updateTimer(timeLeft)
 			flashTween.Completed:Connect(function()
 				createTween(
 					TimerFrame,
-					{BackgroundColor3 = TimerFrame.BackgroundColor3},
+					{BackgroundColor3 = Color3.fromRGB(50, 50, 70)},
 					0.3
 				):Play()
 			end)
@@ -472,7 +566,7 @@ local function updatePlayerSelectionStatus(userId, className)
 
 		-- Update text and color
 		statusFrame.Text = playerName .. ": " .. className
-		
+
 		-- กำหนดสีตามคลาส
 		if className == "Warrior" then
 			statusFrame.TextColor3 = COLORS.WARRIOR_COLOR
@@ -508,7 +602,13 @@ end
 -- Confirm selection function
 local function confirmSelection()
 	-- Check if class is selected and not already confirmed
-	if not selectionState.selectedClass or selectionState.isConfirmed then return end
+	if not selectionState.selectedClass or selectionState.isConfirmed then 
+		debugLog("Cannot confirm selection: " .. 
+			(not selectionState.selectedClass and "no class selected" or "already confirmed"))
+		return 
+	end
+
+	debugLog("Confirming selection: " .. selectionState.selectedClass)
 
 	-- Set confirmed state
 	selectionState.isConfirmed = true
@@ -541,19 +641,19 @@ local function confirmSelection()
 
 	-- Update own selection status
 	updatePlayerSelectionStatus(player.UserId, selectionState.selectedClass)
-	
+
 	-- แอนิเมชันการยืนยัน - แฟลชที่ปุ่ม Confirm 
 	if ConfirmButton then
 		local originalColor = ConfirmButton.BackgroundColor3
 		local originalTransparency = ConfirmButton.BackgroundTransparency
-		
+
 		createTween(ConfirmButton, {
 			BackgroundColor3 = Color3.fromRGB(100, 255, 100),
 			BackgroundTransparency = 0
 		}, 0.3):Play()
-		
+
 		wait(0.3)
-		
+
 		createTween(ConfirmButton, {
 			BackgroundColor3 = originalColor,
 			BackgroundTransparency = originalTransparency
@@ -571,15 +671,20 @@ local function handleRandomClassAssignment(className)
 			break
 		end
 	end
-	
-	if not isValid then return end
-	
+
+	if not isValid then 
+		warn("Invalid random class assigned: " .. className)
+		return 
+	end
+
+	debugLog("Handling random class assignment: " .. className)
+
 	-- เลือกคลาส
 	selectClass(className)
-	
+
 	-- แสดงการแจ้งเตือน
 	local notification
-	
+
 	-- หาตัวที่มีอยู่แล้วใน UI
 	for _, child in pairs(Background:GetChildren()) do
 		if child:IsA("Frame") and child.Name:find("Notification") then
@@ -590,7 +695,7 @@ local function handleRandomClassAssignment(className)
 			break
 		end
 	end
-	
+
 	-- ถ้าไม่มี ให้สร้างใหม่
 	if not notification then
 		notification = Instance.new("Frame")
@@ -623,7 +728,7 @@ local function handleRandomClassAssignment(className)
 		notificationText.TextWrapped = true
 		notificationText.ZIndex = 11
 		notificationText.Parent = notification
-		
+
 		notification.Parent = Background
 	else
 		-- อัปเดตข้อความ
@@ -655,6 +760,8 @@ end
 
 -- Transition to main game
 local function transitionToMainGame()
+	debugLog("Transitioning to main game")
+
 	-- Fade out effect
 	local fadeOutTween = createTween(Background, {BackgroundTransparency = 1}, 0.5)
 
@@ -682,6 +789,9 @@ local function transitionToMainGame()
 		local MainGameUI = PlayerGui:WaitForChild("MainGameUI", 5)
 		if MainGameUI then
 			MainGameUI.Enabled = true
+			debugLog("Main game UI shown")
+		else
+			warn("MainGameUI not found")
 		end
 
 		-- Clean up
@@ -693,11 +803,12 @@ end
 local function setupButtonConnections()
 	-- Clear previous connections
 	cleanupConnections()
+	debugLog("Setting up button connections")
 
 	-- Connect class buttons
 	local function connectClassButton(classButton, className)
 		if not classButton then return end
-		
+
 		-- Check if already connected
 		if classButton:GetAttribute("Connected") then return end
 
@@ -732,10 +843,13 @@ local function setupButtonConnections()
 	end)
 
 	table.insert(connections, connection)
+	debugLog("Button connections set up")
 end
 
 -- Setup remote event connections
 local function setupRemoteConnections()
+	debugLog("Setting up remote connections")
+
 	-- Update class selection status
 	if remotes.updateClassSelection then
 		local connection = remotes.updateClassSelection.OnClientEvent:Connect(function(userId, className)
@@ -800,10 +914,46 @@ local function setupRemoteConnections()
 	end)
 
 	table.insert(connections, connection)
+	debugLog("Remote connections set up")
+end
+
+-- Fix initial UI glitches 
+local function fixUIGlitches()
+	debugLog("Fixing UI glitches")
+
+	-- Check for PlayerGui and ClassSelection
+	if not PlayerGui or not ClassSelection then return end
+
+	-- Ensure ClassSelection is enabled but transparent while initializing
+	ClassSelection.Enabled = true
+
+	-- Make background transparent initially
+	if Background then
+		Background.BackgroundTransparency = 1
+	end
+
+	-- Fade in the UI smoothly
+	RunService.RenderStepped:Wait()
+
+	if Background then
+		createTween(Background, {BackgroundTransparency = 0}, 0.5):Play()
+	end
+
+	-- Call fixTimerPosition again after a slight delay
+	spawn(function()
+		wait(0.5)
+		if TimerFrame then
+			fixTimerPosition()
+		end
+	end)
+
+	debugLog("UI glitches fixed")
 end
 
 -- Initialization function
 local function initialize()
+	debugLog("Initializing ClassSelectionHandler")
+
 	-- Setup UI
 	if not initializeUI() then
 		warn("ClassSelectionHandler: Failed to initialize UI")
@@ -815,6 +965,9 @@ local function initialize()
 		warn("ClassSelectionHandler: Failed to connect remote events")
 		return
 	end
+
+	-- Fix UI glitches
+	fixUIGlitches()
 
 	-- Apply UI effects
 	applyUIEffects()
@@ -830,6 +983,8 @@ local function initialize()
 
 	-- Show current player status
 	updatePlayerSelectionStatus(player.UserId)
+
+	debugLog("ClassSelectionHandler initialization complete")
 end
 
 -- Setup cleanup when player leaves
@@ -839,5 +994,23 @@ Players.PlayerRemoving:Connect(function(plr)
 	end
 end)
 
+-- Enable debug mode function
+local function enableDebugMode(enable)
+	DEBUG_MODE = enable
+	debugLog("Debug mode " .. (enable and "enabled" or "disabled"))
+	return DEBUG_MODE
+end
+
 -- Start system
 initialize()
+
+-- Export public functions
+local ClassSelectionHandler = {
+	EnableDebug = enableDebugMode,
+	ForceUIFix = function()
+		fixUIGlitches()
+		fixTimerPosition()
+	end
+}
+
+return ClassSelectionHandler
