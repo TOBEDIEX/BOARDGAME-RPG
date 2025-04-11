@@ -1,18 +1,18 @@
 -- BoardService.server.lua
--- บริการฝั่งเซิร์ฟเวอร์สำหรับจัดการระบบกระดาน
--- Version: 2.1.0 (Fixed Turn Coordination)
+-- Server-side service for board system management
+-- Version: 3.0.0 (Optimized)
 
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 
--- โหลดโมดูลที่จำเป็น
+-- Load required modules
 local Modules = ServerStorage:WaitForChild("Modules")
 local BoardSystem = require(Modules:WaitForChild("BoardSystem"))
 local MapData = require(ServerStorage.GameData.MapData)
 
--- ตรวจสอบและสร้าง Remote Events ที่จำเป็น
+-- Create required RemoteEvents
 local function ensureRemoteEvents()
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
 	local boardRemotes = remotes:WaitForChild("BoardRemotes")
@@ -24,7 +24,7 @@ local function ensureRemoteEvents()
 		"TileTriggerEvent",
 		"ActivityComplete",
 		"StartPlayerMovementPath",
-		"MovementVisualizationComplete" -- เพิ่ม event ใหม่สำหรับยืนยันการเคลื่อนที่
+		"MovementVisualizationComplete"
 	}
 
 	for _, eventName in ipairs(requiredEvents) do
@@ -33,7 +33,7 @@ local function ensureRemoteEvents()
 		end
 	end
 
-	-- สร้าง ShowPathSelection เผื่อ Client ยังใช้
+	-- Create ShowPathSelection for backwards compatibility
 	if not boardRemotes:FindFirstChild("ShowPathSelection") then
 		Instance.new("RemoteEvent", boardRemotes).Name = "ShowPathSelection"
 	end
@@ -44,7 +44,7 @@ end
 -- Constants
 local DIRECTIONS = { FRONT = "FRONT", LEFT = "LEFT", RIGHT = "RIGHT" }
 
--- รับ GameManager จาก global variable
+-- Get GameManager from global variable
 local function getGameManager()
 	local startTime = tick()
 	while not _G.GameManager and tick() - startTime < 10 do
@@ -53,15 +53,15 @@ local function getGameManager()
 	return _G.GameManager
 end
 
--- เก็บสถานะของการรอให้การเคลื่อนที่เสร็จสิ้น
+-- Store movement completion state
 local pendingMovementCompletions = {}
 
--- ฟังก์ชันหลักสำหรับเริ่มต้นบริการ
+-- Main service initialization function
 local function initializeBoardService()
 	local remotes = ensureRemoteEvents()
 	local boardSystem = BoardSystem.new()
 
-	-- โหลด Map
+	-- Load Map
 	if not MapData then 
 		boardSystem:LoadMap({tiles={[1]={type="start", position=Vector3.new(0,0,0)}}, connections={}})
 	else 
@@ -72,20 +72,20 @@ local function initializeBoardService()
 	if not gameManager then return end
 	gameManager.boardSystem = boardSystem
 
-	-- ตั้งค่า callbacks
+	-- Set up callbacks
 	boardSystem:SetupCallbacks(
 		-- onPlayerMoved
 		function(playerId, fromTileId, toTileId)
-			-- เมื่อผู้เล่นเคลื่อนที่จากช่องหนึ่งไปอีกช่องหนึ่ง (Logic)
+			-- Logic for when player moves from one tile to another
 		end,
 
 		-- onPlayerPathComplete
 		function(playerId, finalTileId)
-			-- เมื่อผู้เล่นเดินทางครบทุกก้าว (Server-side Logic)
+			-- Logic for when player completes their path (all steps used)
 			local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
 			boardRemotes:WaitForChild("PlayerArrivedAtTile"):FireAllClients(playerId, finalTileId)
 
-			-- เก็บสถานะว่ากำลังรอการยืนยันการเคลื่อนที่จาก Client
+			-- Store pending movement completion state
 			local player = Players:GetPlayerByUserId(playerId)
 			if player then
 				pendingMovementCompletions[playerId] = {
@@ -94,23 +94,23 @@ local function initializeBoardService()
 					confirmed = false
 				}
 
-				-- ตั้งเวลาสำรองในกรณีที่ Client ไม่ตอบกลับ (30 วินาที)
+				-- Set up backup timer in case client doesn't respond (30 seconds)
 				task.spawn(function()
 					task.wait(30)
 					if pendingMovementCompletions[playerId] and not pendingMovementCompletions[playerId].confirmed then
-						-- ถ้ายังไม่ได้รับการยืนยันหลังจาก timeout ให้ถือว่าเสร็จสิ้นแล้ว
+						-- If not confirmed after timeout, consider completed
 						pendingMovementCompletions[playerId].confirmed = true
 
-						-- จบเทิร์นถ้ายังคงเป็นผู้เล่นคนเดิม
+						-- End turn if still same player
 						if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
 							gameManager.turnSystem:EndPlayerTurn(playerId, "move_timeout")
 						end
 					end
 				end)
 			else
-				-- ถ้าไม่พบผู้เล่น (ออกจากเกมไปแล้ว) ให้จบเทิร์นเลย
+				-- If player not found (left game), end turn immediately
 				if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
-					task.wait(0.5) -- รอเล็กน้อยก่อนจบเทิร์น
+					task.wait(0.5) -- Short delay before ending turn
 					gameManager.turnSystem:EndPlayerTurn(playerId, "player_left")
 				end
 			end
@@ -118,109 +118,106 @@ local function initializeBoardService()
 
 		-- onTileEffect
 		function(playerId, tileId, tileInfo)
-			-- เมื่อควรเริ่มเอฟเฟคของช่อง
+			-- Logic for when tile effect should start
 			local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
 			boardRemotes:WaitForChild("TileTriggerEvent"):FireAllClients(playerId, tileId, tileInfo.type)
-
-			-- ประมวลผลเอฟเฟคของช่อง (จะเพิ่มเติมภายหลัง)
 		end
 	)
 
-	-- จัดการการทอยลูกเต๋า
+	-- Handle dice rolling
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
 	local boardRemotes = remotes:WaitForChild("BoardRemotes")
 
 	boardRemotes.RollDice.OnServerEvent:Connect(function(player, diceResult)
 		local playerId = player.UserId
 
-		-- ตรวจสอบว่าเป็นเทิร์นของผู้เล่นหรือไม่
+		-- Check if it's player's turn
 		if gameManager.turnSystem and gameManager.turnSystem:GetCurrentPlayerTurn() ~= playerId then 
 			return 
 		end
 
-		-- ประมวลผลการเคลื่อนที่
+		-- Process movement
 		local moveInfo = boardSystem:ProcessPlayerMove(playerId, diceResult)
 
 		if moveInfo and moveInfo.autoPath and #moveInfo.autoPath > 0 then
-			-- ส่งข้อมูลการเคลื่อนที่ให้ Client
+			-- Send movement data to client
 			local movementData = {
 				path = moveInfo.autoPath,
 				directions = moveInfo.requiresChoice and moveInfo.availableDirections or nil,
-				requiresConfirmation = true -- บอก Client ว่าต้องยืนยันเมื่อการเคลื่อนที่เสร็จสิ้น
+				requiresConfirmation = true
 			}
 			boardRemotes.StartPlayerMovementPath:FireClient(player, playerId, movementData)
 		else
-			-- จบเทิร์นถ้าไม่มีการเคลื่อนไหว
+			-- End turn if no movement
 			if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
 				gameManager.turnSystem:EndPlayerTurn(playerId, "no_move")
 			end
 		end
 	end)
 
-	-- จัดการการเลือกเส้นทาง
+	-- Handle path selection
 	boardRemotes.ChoosePath.OnServerEvent:Connect(function(player, direction)
 		local playerId = player.UserId
 
-		-- ตรวจสอบว่าเป็นเทิร์นของผู้เล่นหรือไม่
+		-- Check if it's player's turn
 		if gameManager.turnSystem and gameManager.turnSystem:GetCurrentPlayerTurn() ~= playerId then 
 			return 
 		end
 
-		-- ตรวจสอบว่าการเคลื่อนที่ก่อนหน้าได้รับการยืนยันแล้วหรือไม่
+		-- Check if previous movement was confirmed
 		if pendingMovementCompletions[playerId] and not pendingMovementCompletions[playerId].confirmed then
 			pendingMovementCompletions[playerId].confirmed = true
 		end
 
-		-- ประมวลผลการเลือก
+		-- Process direction choice
 		local moveResult = boardSystem:ProcessDirectionChoice(playerId, direction)
 
 		if moveResult and moveResult.autoPath and #moveResult.autoPath > 0 then
-			-- ส่งข้อมูลการเคลื่อนที่ (หลังเลือก) ให้ Client
+			-- Send movement data to client
 			local movementData = {
 				path = moveResult.autoPath,
 				directions = moveResult.requiresChoice and moveResult.availableDirections or nil,
-				requiresConfirmation = true -- บอก Client ว่าต้องยืนยันเมื่อการเคลื่อนที่เสร็จสิ้น
+				requiresConfirmation = true
 			}
 			boardRemotes.StartPlayerMovementPath:FireClient(player, playerId, movementData)
 		else
-			-- จบเทิร์นถ้าการเลือกไม่ถูกต้อง
+			-- End turn if choice invalid
 			if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
 				gameManager.turnSystem:EndPlayerTurn(playerId, "invalid_choice")
 			end
 		end
 	end)
 
-	-- จัดการการยืนยันการเคลื่อนที่เสร็จสิ้นจาก Client
+	-- Handle movement completion confirmation from client
 	boardRemotes.MovementVisualizationComplete.OnServerEvent:Connect(function(player, finalTileId)
 		local playerId = player.UserId
 
-		-- ตรวจสอบว่าการเคลื่อนที่นี้อยู่ในการรอยืนยันหรือไม่
+		-- Check if this movement is pending confirmation
 		if not pendingMovementCompletions[playerId] then return end
 
-		-- ตั้งค่าว่าได้รับการยืนยันแล้ว
+		-- Set as confirmed
 		pendingMovementCompletions[playerId].confirmed = true
 
-		-- จบเทิร์นถ้ายังคงเป็นผู้เล่นคนเดิม
+		-- End turn if still same player
 		if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
-			-- ตรวจสอบว่าการเคลื่อนที่เป็นการจบแล้วหรือไม่ (ไม่มีทางเลือกต่อ)
+			-- Check if movement is complete (no more choices)
 			local hasChoices = boardSystem.playerMovementState[playerId] == "need_choice"
 
 			if not hasChoices then
-				-- รอสักครู่เพื่อให้อนิเมชันเสร็จสมบูรณ์ก่อนจบเทิร์น
+				-- Short delay to allow animations to complete
 				task.wait(0.5) 
-				-- จบเทิร์น
 				gameManager.turnSystem:EndPlayerTurn(playerId, "move_complete")
 			end
 		end
 
-		-- ลบข้อมูลการรอยืนยัน
+		-- Clear pending confirmation
 		pendingMovementCompletions[playerId] = nil
 	end)
 
 	return boardSystem
 end
 
--- เริ่มต้นบริการ
+-- Initialize service
 local boardSystemInstance = initializeBoardService()
 _G.BoardSystem = boardSystemInstance
 return boardSystemInstance
