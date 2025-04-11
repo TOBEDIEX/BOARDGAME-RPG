@@ -1,6 +1,6 @@
 -- TurnSystem.lua
--- โมดูลจัดการระบบเทิร์นและลำดับเล่นของผู้เล่น
--- Version: 2.3.0 (Fixed Movement Coordination)
+-- Module for managing turn system and player order
+-- Version: 3.0.0 (Optimized)
 
 local TurnSystem = {}
 TurnSystem.__index = TurnSystem
@@ -12,7 +12,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 -- Constants
 local TURN_TIME_LIMIT = 60
 local INACTIVITY_WARNING_TIME = 15
-local MOVEMENT_SAFETY_DELAY = 0.8 -- เวลารอเพื่อให้แน่ใจว่าการเคลื่อนที่เสร็จสมบูรณ์
+local MOVEMENT_SAFETY_DELAY = 0.8
 
 function TurnSystem.new()
 	local self = setmetatable({}, TurnSystem)
@@ -30,7 +30,6 @@ function TurnSystem.new()
 	self.onTurnEnd = nil
 	self.onTurnTimerUpdate = nil
 	self.remotes = nil
-	self.debugMode = false
 
 	return self
 end
@@ -91,11 +90,6 @@ function TurnSystem:CreateTurnOrderFromActivePlayers(playerManager)
 	-- Shuffle order for fairness
 	self:ShuffleTurnOrder(playerOrder)
 
-	-- Debug turn order
-	if self.debugMode then
-		print("[TurnSystem] Created turn order:", table.concat(playerOrder, ", "))
-	end
-
 	return self:SetTurnOrder(playerOrder)
 end
 
@@ -110,9 +104,6 @@ end
 
 function TurnSystem:StartTurnSystem()
 	if #self.turnOrder == 0 then return false end
-	if self.debugMode then
-		print("[TurnSystem] Starting turn system with " .. #self.turnOrder .. " players")
-	end
 	self:NextTurn()
 	return true
 end
@@ -145,11 +136,7 @@ function TurnSystem:StartPlayerTurn(playerID)
 	-- Clear pending end turn state
 	self.pendingEndTurn[playerID] = nil
 
-	-- Notify clients - IMPORTANT to fire UpdateTurn to trigger DiceRollUI
-	if self.debugMode then
-		print("[TurnSystem] Starting turn for player " .. playerID)
-	end
-
+	-- Notify clients
 	self.remotes.updateTurn:FireAllClients(playerID)
 
 	-- Send additional turn state to the player
@@ -220,18 +207,11 @@ function TurnSystem:EndPlayerTurn(playerID, reason)
 
 	-- Check for pending end turn to avoid multiple calls
 	if self.pendingEndTurn[playerID] then
-		if self.debugMode then
-			print("[TurnSystem] Turn end already pending for player", playerID)
-		end
 		return false
 	end
 
 	-- Check if it's the correct player's turn
 	if playerID ~= self.currentPlayerTurn then 
-		if self.debugMode then
-			print("[TurnSystem] Attempting to end turn for wrong player. Expected:", 
-				self.currentPlayerTurn, "Got:", playerID)
-		end
 		return false 
 	end
 
@@ -268,9 +248,6 @@ end
 function TurnSystem:ExecuteEndTurn(playerID, reason)
 	-- Double-check it's the correct player's turn
 	if playerID ~= self.currentPlayerTurn then 
-		if self.debugMode then
-			print("[TurnSystem] ExecuteEndTurn called for wrong player:", playerID, "current turn:", self.currentPlayerTurn)
-		end
 		return false 
 	end
 
@@ -301,10 +278,6 @@ function TurnSystem:ExecuteEndTurn(playerID, reason)
 		})
 	end
 
-	if self.debugMode then
-		print("[TurnSystem] Turn ended for player", endingPlayerID, "reason:", reason)
-	end
-
 	-- Brief pause before next turn
 	task.wait(0.1)
 
@@ -316,20 +289,12 @@ end
 
 function TurnSystem:NextTurn()
 	if #self.turnOrder == 0 then 
-		if self.debugMode then
-			print("[TurnSystem] No players in turn order")
-		end
 		return false 
 	end
 
 	-- Increment turn index to next player
 	self.currentTurnIndex = (self.currentTurnIndex % #self.turnOrder) + 1
 	local nextPlayerID = self.turnOrder[self.currentTurnIndex]
-
-	if self.debugMode then
-		print("[TurnSystem] Moving to next turn. Current index:", self.currentTurnIndex, 
-			"Next player:", nextPlayerID)
-	end
 
 	-- Start next player's turn
 	self:StartPlayerTurn(nextPlayerID)
@@ -362,9 +327,6 @@ function TurnSystem:HandleTurnAction(player, actionType, actionData)
 
 	-- Check if it's player's turn
 	if not self:IsPlayerTurn(playerID) then 
-		if self.debugMode then
-			print("[TurnSystem] Player", playerID, "attempted action", actionType, "but it's not their turn")
-		end
 		return false 
 	end
 
@@ -422,12 +384,6 @@ function TurnSystem:Reset()
 	self.pendingEndTurn = {}
 
 	return true
-end
-
-function TurnSystem:EnableDebugMode(enabled)
-	self.debugMode = enabled or false
-	print("[TurnSystem] Debug mode " .. (self.debugMode and "enabled" or "disabled"))
-	return self.debugMode
 end
 
 return TurnSystem
