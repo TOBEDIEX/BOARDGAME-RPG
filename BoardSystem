@@ -1,6 +1,6 @@
 -- BoardSystem.lua
--- โมดูลหลักสำหรับระบบกระดานและการเคลื่อนที่ของตัวละคร
--- Version: 2.1.0 (Optimized)
+-- Core module for board system and character movement
+-- Version: 3.0.0 (Optimized)
 
 local BoardSystem = {}
 BoardSystem.__index = BoardSystem
@@ -8,9 +8,8 @@ BoardSystem.__index = BoardSystem
 -- Services
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
-local ServerStorage = game:GetService("ServerStorage")
 
--- โหลดโมดูลที่เกี่ยวข้อง
+-- Load related modules
 local DirectionalPathfinder = require(script.Parent:WaitForChild("DirectionalPathfinder"))
 
 -- Constants for board directions
@@ -58,9 +57,7 @@ function BoardSystem:LoadMap(mapData)
 	end
 
 	-- Load connections
-	for id, connections in pairs(mapData.connections or {}) do
-		self.connections[id] = connections
-	end
+	self.connections = mapData.connections or {}
 
 	-- Load spawn points
 	self.entitySpawnPoints = mapData.entitySpawnPoints or {}
@@ -107,45 +104,36 @@ end
 
 function BoardSystem:GetTilesByType(tileType)
 	local result = {}
-
 	for id, tile in pairs(self.tiles) do
 		if tile.type == tileType then
 			table.insert(result, id)
 		end
 	end
-
 	return result
 end
 
 function BoardSystem:GetAvailableDirections(tileId, prevTileId)
-	-- Use DirectionalPathfinder for direction calculation
-	local pathOptions = DirectionalPathfinder.getPathOptions(
+	return DirectionalPathfinder.getPathOptions(
 		prevTileId, tileId, self.connections, self.tilePositions)
-
-	return pathOptions
 end
 
 function BoardSystem:GetNextTileFromDirection(tileId, direction, prevTileId)
 	local availableDirections = self:GetAvailableDirections(tileId, prevTileId)
-
 	for _, dirInfo in ipairs(availableDirections) do
 		if dirInfo.direction == direction then
 			return dirInfo.tileId
 		end
 	end
-
 	return nil
 end
 
 function BoardSystem:GetPlayersOnTile(tileId)
 	local players = {}
-
 	for playerId, playerTileId in pairs(self.playerPositions) do
 		if playerTileId == tileId then
 			table.insert(players, playerId)
 		end
 	end
-
 	return players
 end
 
