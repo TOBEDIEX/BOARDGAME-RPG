@@ -1,18 +1,18 @@
 -- TurnService.server.lua
--- จัดการระบบเทิร์นและลำดับผู้เล่น
--- Version: 2.1.0 (Optimized)
+-- Service for managing turn system and player order
+-- Version: 3.0.0 (Optimized)
 
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 
--- โหลดโมดูล
+-- Load modules
 local TurnSystem = require(ServerStorage.Modules.TurnSystem)
 
--- สร้าง Service object เพื่อ return
+-- Create service object
 local TurnService = {}
 
--- ฟังก์ชันหาบริการอื่นๆ
+-- Get other services
 local function getGameManager()
 	local startTime = tick()
 	while not _G.GameManager and tick() - startTime < 10 do
@@ -31,20 +31,20 @@ local function getBoardSystem()
 	return gameManager and gameManager.boardSystem
 end
 
--- ฟังก์ชันเริ่มต้นบริการ
+-- Initialize service
 function TurnService:Initialize()
-	-- สร้างระบบเทิร์น
+	-- Create turn system
 	local turnSystem = TurnSystem.new()
 
-	-- รับ Remote Events
+	-- Get Remote Events
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
 	local gameRemotes = remotes:WaitForChild("GameRemotes")
 	local uiRemotes = remotes:WaitForChild("UIRemotes")
 
-	-- ตั้งค่าการสื่อสารกับ Remote Events
+	-- Setup remote events
 	turnSystem:InitializeRemotes(gameRemotes)
 
-	-- ดึง GameManager
+	-- Get GameManager
 	local gameManager = getGameManager()
 	if not gameManager then
 		spawn(function()
@@ -54,27 +54,27 @@ function TurnService:Initialize()
 		return nil
 	end
 
-	-- ตั้งค่า GameManager
+	-- Setup GameManager
 	gameManager.turnSystem = turnSystem
 
-	-- ตรวจสอบและสร้าง Remote Event ที่จำเป็น
+	-- Create necessary RemoteEvent
 	if not uiRemotes:FindFirstChild("UpdateTurnDetails") then
 		local updateTurnDetailsEvent = Instance.new("RemoteEvent")
 		updateTurnDetailsEvent.Name = "UpdateTurnDetails"
 		updateTurnDetailsEvent.Parent = uiRemotes
 	end
 
-	-- ตั้งค่า Event handlers
+	-- Setup event handlers
 
-	-- เมื่อเริ่มเทิร์น
+	-- When turn starts
 	turnSystem.onTurnStart = function(playerID)
-		-- สร้างข้อมูลสำหรับ UI
+		-- Create UI data
 		local player = Players:GetPlayerByUserId(playerID)
 		if player then
 			local playerManager = getPlayerManager()
 			local playerData = playerManager and playerManager:GetPlayerData(player)
 
-			-- ส่งข้อมูลเพิ่มเติมไปยังทุกคลเอนต์
+			-- Send additional data to all clients
 			uiRemotes:WaitForChild("UpdateTurnDetails"):FireAllClients({
 				playerId = playerID,
 				playerName = player.Name,
@@ -85,9 +85,9 @@ function TurnService:Initialize()
 		end
 	end
 
-	-- เมื่อจบเทิร์น
+	-- When turn ends
 	turnSystem.onTurnEnd = function(playerID, reason)
-		-- อัปเดต game state
+		-- Update game state
 		if gameManager.gameState.currentTurn then
 			gameManager.gameState.currentTurn = gameManager.gameState.currentTurn + 1
 		else
@@ -95,37 +95,37 @@ function TurnService:Initialize()
 		end
 	end
 
-	-- เชื่อมต่อกับเหตุการณ์ผู้เล่นออกจากเกม
+	-- Connect to player leave event
 	Players.PlayerRemoving:Connect(function(player)
 		turnSystem:HandlePlayerLeaving(player.UserId)
 	end)
 
-	-- เชื่อมต่อกับเหตุการณ์เริ่มเกม
+	-- Connect to game start event
 	gameRemotes:WaitForChild("StartGame").OnServerEvent:Connect(function()
-		-- สร้างลำดับเทิร์นจากผู้เล่นที่มีอยู่
+		-- Create turn order from active players
 		local playerManager = getPlayerManager()
 		turnSystem:CreateTurnOrderFromActivePlayers(playerManager)
 
-		-- เริ่มระบบเทิร์น
+		-- Start turn system
 		turnSystem:StartTurnSystem()
 
-		-- ตั้งค่าจำนวนเทิร์นเริ่มต้น
+		-- Set initial turn number
 		gameManager.gameState.currentTurn = 1
 	end)
 
-	-- เชื่อมต่อกับเหตุการณ์จบเกม
+	-- Connect to game end event
 	gameRemotes:WaitForChild("EndGame").OnServerEvent:Connect(function()
-		-- รีเซ็ตระบบเทิร์น
+		-- Reset turn system
 		turnSystem:Reset()
 	end)
 
-	-- เพิ่มไปที่ global state
+	-- Add to global state
 	_G.TurnSystem = turnSystem
 
 	return turnSystem
 end
 
--- เริ่มต้นบริการ
+-- Initialize service
 TurnService.system = TurnService:Initialize()
 
 return TurnService
