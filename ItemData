@@ -1,0 +1,112 @@
+-- ItemData.lua
+-- ข้อมูลไอเทมทั้งหมดในเกม (เวอร์ชันทดสอบ)
+-- Version: 1.0.0
+
+-- Constants
+local ITEM_TYPES = {
+	GENERAL = 1,    -- ไอเทมทั่วไป
+	EQUIPMENT = 2,  -- อาวุธและเกราะ
+	SKILL = 3,      -- คัมภีร์สกิล
+	SPECIAL = 4     -- ไอเทมพิเศษ/เควส
+}
+
+local EQUIPMENT_SLOTS = {
+	WEAPON = 1,
+	HELMET = 2,
+	ARMOR = 3,
+	GLOVES = 4,
+	BOOTS = 5,
+	ACCESSORY = 6
+}
+
+local ItemData = {}
+
+-- ฟังก์ชันใช้ไอเทม (จะถูกกำหนดโดย InventoryService)
+ItemData.UseHandlers = {}
+
+-- ไอเทมสำหรับทดสอบ
+ItemData.Items = {
+	-- ไอเทมทดสอบ
+	test_item = {
+		id = "test_item",
+		name = "Test Item",
+		description = "This is a test item for inventory system.",
+		type = ITEM_TYPES.GENERAL,
+		rarity = 1,
+		stackable = true,
+		maxStack = 99,
+		sellPrice = 10,
+		buyPrice = 20,
+		usable = true,
+		consumable = true,
+		iconId = "rbxassetid://6675226918", -- เปลี่ยน ID ตามที่ต้องการ
+		stats = {
+			hp = 50
+		}
+	}
+}
+
+-- อุปกรณ์ทดสอบ
+ItemData.Equipment = {
+	-- อุปกรณ์ทดสอบ
+	test_equipment = {
+		id = "test_equipment",
+		name = "Test Equipment",
+		description = "This is a test equipment for inventory system.",
+		type = ITEM_TYPES.EQUIPMENT,
+		subType = EQUIPMENT_SLOTS.WEAPON,
+		rarity = 2,
+		stackable = false,
+		maxStack = 1,
+		sellPrice = 100,
+		buyPrice = 300,
+		usable = false,
+		iconId = "rbxassetid://6675226140", -- เปลี่ยน ID ตามที่ต้องการ
+		stats = {
+			attack = 10,
+			defense = 5
+		}
+	}
+}
+
+-- ค้นหาไอเทมจาก ID
+function ItemData.GetItemById(itemId)
+	-- ค้นหาในไอเทมทั่วไป
+	if ItemData.Items[itemId] then
+		return ItemData.Items[itemId]
+	end
+
+	-- ค้นหาในอุปกรณ์
+	if ItemData.Equipment[itemId] then
+		return ItemData.Equipment[itemId]
+	end
+
+	return nil
+end
+
+-- ฟังก์ชั่นเพิ่มเติมที่อาจจำเป็น
+function ItemData.GetItemsByType(itemType)
+	local result = {}
+
+	-- ค้นหาในไอเทมทั่วไป
+	for id, item in pairs(ItemData.Items) do
+		if item.type == itemType then
+			table.insert(result, item)
+		end
+	end
+
+	-- ค้นหาในอุปกรณ์
+	for id, item in pairs(ItemData.Equipment) do
+		if item.type == itemType then
+			table.insert(result, item)
+		end
+	end
+
+	return result
+end
+
+-- ส่งออกค่าคงที่
+ItemData.ITEM_TYPES = ITEM_TYPES
+ItemData.EQUIPMENT_SLOTS = EQUIPMENT_SLOTS
+
+return ItemData
