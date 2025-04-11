@@ -1,0 +1,633 @@
+-- InventoryUIHandler.lua
+-- ตัวจัดการ UI ของระบบ Inventory (แบบกระชับ)
+-- Version: 1.2.0
+
+-- Services
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+
+-- Get local player
+local player = Players.LocalPlayer
+
+-- Constants
+local ITEM_TYPES = {
+	GENERAL = 1,
+	EQUIPMENT = 2,
+	SKILL = 3,
+	SPECIAL = 4
+}
+
+-- Rarity colors
+local RARITY_COLORS = {
+	[1] = Color3.fromRGB(150, 150, 150), -- Common
+	[2] = Color3.fromRGB(100, 255, 100), -- Uncommon
+	[3] = Color3.fromRGB(100, 100, 255), -- Rare
+	[4] = Color3.fromRGB(200, 100, 255), -- Epic
+	[5] = Color3.fromRGB(255, 180, 60)   -- Legendary
+}
+
+-- Tween info
+local DEFAULT_TWEEN_INFO = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+-- Main UI Handler
+local InventoryUIHandler = {}
+
+-- UI Variables
+local PlayerGui = player:WaitForChild("PlayerGui")
+local PopupUI = PlayerGui:WaitForChild("PopupUI")
+local InventoryUI = PopupUI:WaitForChild("InventoryUI")
+local itemsGrid = InventoryUI:FindFirstChild("ItemsGrid")
+local categoryTabs = InventoryUI:FindFirstChild("CategoryTabs")
+local itemDetails = InventoryUI:FindFirstChild("ItemDetails")
+local actionButtons = InventoryUI:FindFirstChild("ActionButtons")
+local closeButton = InventoryUI:FindFirstChild("CloseButton") or InventoryUI:FindFirstChild("Close")
+
+-- Remote events
+local remotes = ReplicatedStorage:WaitForChild("Remotes")
+local inventoryRemotes = remotes:WaitForChild("InventoryRemotes", 5)
+if not inventoryRemotes then
+	warn("InventoryRemotes not found, creating folder...")
+	inventoryRemotes = Instance.new("Folder")
+	inventoryRemotes.Name = "InventoryRemotes"
+	inventoryRemotes.Parent = remotes
+end
+
+-- Inventory data
+local currentInventory = {
+	items = {},
+	equippedItems = {},
+	maxSize = 50,
+	selectedItem = nil,
+	currentCategory = 0, -- 0 means All
+	itemSlots = {}
+}
+
+-- Helper functions
+local function tween(object, properties)
+	local tweenObj = TweenService:Create(object, DEFAULT_TWEEN_INFO, properties)
+	tweenObj:Play()
+	return tweenObj
+end
+
+local function playSound(soundName)
+	local sound = game:GetService("SoundService"):FindFirstChild(soundName)
+	if sound and sound:IsA("Sound") then
+		sound:Play()
+	end
+end
+
+-- Clear items grid
+local function clearItemGrid()
+	for _, itemSlot in pairs(currentInventory.itemSlots) do
+		if itemSlot.instance then
+			itemSlot.instance:Destroy()
+		end
+	end
+	currentInventory.itemSlots = {}
+end
+
+-- Update action buttons based on selected item
+local function updateActionButtons(item)
+	if not actionButtons then return end
+
+	-- Find buttons
+	local useButton = actionButtons:FindFirstChild("UseButton") or actionButtons:FindFirstChild("Use")
+	local equipButton = actionButtons:FindFirstChild("EquipButton") or actionButtons:FindFirstChild("Equip")
+	local discardButton = actionButtons:FindFirstChild("DiscardButton") or actionButtons:FindFirstChild("Discard")
+
+	-- Hide by default
+	if useButton then useButton.Visible = false end
+	if equipButton then equipButton.Visible = false end
+	if discardButton then discardButton.Visible = true end -- Always show discard
+
+	if not item then return end
+
+	-- Show buttons based on item type
+	if item.usable and useButton then
+		useButton.Visible = true
+	end
+
+	if item.type == ITEM_TYPES.EQUIPMENT and equipButton then
+		equipButton.Visible = true
+
+		-- Update text based on equipped status
+		local equipText = equipButton:FindFirstChild("EquipText")
+		if equipText then
+			equipText.Text = item.equipped and "Unequip" or "Equip"
+		end
+	end
+end
+
+-- Update item details panel
+local function updateItemDetails(item)
+	if not item or not itemDetails then
+		if itemDetails then itemDetails.Visible = false end
+		if actionButtons then actionButtons.Visible = false end
+		return
+	end
+
+	-- Show panels
+	itemDetails.Visible = true
+	actionButtons.Visible = true
+
+	-- Update item name
+	local selectedItemName = itemDetails:FindFirstChild("SelectedItemName")
+	if selectedItemName then
+		selectedItemName.Text = item.name or "Unknown Item"
+		selectedItemName.TextColor3 = RARITY_COLORS[item.rarity or 1] or Color3.fromRGB(255, 255, 255)
+	end
+
+	-- Update description
+	local itemDescription = itemDetails:FindFirstChild("ItemDescription")
+	if itemDescription then
+		itemDescription.Text = item.description or "No description available."
+	end
+
+	-- Update stats
+	local statEffects = itemDetails:FindFirstChild("StatEffects")
+	if statEffects then
+		-- Clear old stats
+		for _, child in pairs(statEffects:GetChildren()) do
+			if child:IsA("TextLabel") and child.Name ~= "StatEffect" then
+				child:Destroy()
+			end
+		end
+
+		-- Hide template
+		local template = statEffects:FindFirstChild("StatEffect")
+		if template then template.Visible = false end
+
+		-- Add new stats
+		if item.stats and template then
+			for statName, statValue in pairs(item.stats) do
+				if statValue ~= 0 then
+					local statLabel = template:Clone()
+					statLabel.Name = "Stat_" .. statName
+					statLabel.Visible = true
+					statLabel.Text = statName:upper() .. ": " .. (statValue > 0 and "+" or "") .. tostring(statValue)
+					statLabel.TextColor3 = statValue > 0 and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)
+					statLabel.Parent = statEffects
+				end
+			end
+		end
+	end
+
+	-- Update action buttons
+	updateActionButtons(item)
+end
+
+
+-- Select item
+local function selectItem(item)
+	-- Reset previous selection
+	for _, slotData in pairs(currentInventory.itemSlots) do
+		if slotData.instance then
+			tween(slotData.instance, {BackgroundColor3 = Color3.fromRGB(50, 50, 50)})
+		end
+	end
+
+	-- Set selected item
+	currentInventory.selectedItem = item
+
+	-- Highlight selected item
+	local slotData = currentInventory.itemSlots[item.inventoryId]
+	if slotData and slotData.instance then
+		tween(slotData.instance, {BackgroundColor3 = Color3.fromRGB(80, 120, 200)})
+	end
+
+	-- Update details panel
+	updateItemDetails(item)
+
+	-- Request additional details from server
+	if inventoryRemotes:FindFirstChild("InspectItem") then
+		inventoryRemotes.InspectItem:FireServer(item.inventoryId)
+	end
+end
+
+-- Create item slot in grid
+local function createItemSlot(item)
+	if not itemsGrid then return nil end
+
+	-- Find template
+	local template = itemsGrid:FindFirstChild("InventoryItem")
+	if not template or not template:IsA("Frame") then return nil end
+
+	-- Clone template
+	local itemSlot = template:Clone()
+	itemSlot.Name = "Item_" .. item.inventoryId
+	itemSlot.Visible = true
+
+	-- Set icon
+	local itemIcon = itemSlot:FindFirstChild("ItemIcon")
+	if itemIcon then
+		-- Set icon image
+		if item.iconId and item.iconId ~= "" then
+			itemIcon.Image = item.iconId
+		else
+			-- Default icons
+			local defaultIcons = {
+				[ITEM_TYPES.GENERAL] = "rbxassetid://6442564832",
+				[ITEM_TYPES.EQUIPMENT] = "rbxassetid://6442577397",
+				[ITEM_TYPES.SKILL] = "rbxassetid://6442584030",
+				[ITEM_TYPES.SPECIAL] = "rbxassetid://6442590793"
+			}
+			itemIcon.Image = defaultIcons[item.type] or defaultIcons[ITEM_TYPES.GENERAL]
+		end
+
+		-- Set border color by rarity
+		if itemSlot:FindFirstChild("UIStroke") then
+			itemSlot.UIStroke.Color = RARITY_COLORS[item.rarity or 1] or Color3.fromRGB(150, 150, 150)
+		end
+
+		-- Show equipped indicator
+		if item.equipped then
+			local equippedIndicator = itemSlot:FindFirstChild("EquippedIndicator")
+			if not equippedIndicator then
+				equippedIndicator = Instance.new("ImageLabel")
+				equippedIndicator.Name = "EquippedIndicator"
+				equippedIndicator.Size = UDim2.new(1, 0, 1, 0)
+				equippedIndicator.BackgroundTransparency = 1
+				equippedIndicator.Image = "rbxassetid://6442622551"
+				equippedIndicator.ZIndex = itemIcon.ZIndex + 1
+				equippedIndicator.Parent = itemIcon
+			end
+			equippedIndicator.Visible = true
+		end
+	end
+
+	-- Set name
+	local itemName = itemSlot:FindFirstChild("ItemName")
+	if itemName then
+		itemName.Text = item.name or "Unknown Item"
+	end
+
+	-- Set quantity
+	local itemCount = itemSlot:FindFirstChild("ItemCount")
+	if itemCount then
+		itemCount.Visible = (item.quantity and item.quantity > 1)
+		if itemCount.Visible then
+			itemCount.Text = tostring(item.quantity)
+		end
+	end
+
+	-- Setup click event
+	itemSlot.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or
+			input.UserInputType == Enum.UserInputType.Touch then
+			selectItem(item)
+			tween(itemSlot, {BackgroundColor3 = Color3.fromRGB(80, 120, 200)})
+			playSound("ItemSelect")
+		end
+	end)
+
+	itemSlot.InputEnded:Connect(function(input)
+		if (input.UserInputType == Enum.UserInputType.MouseButton1 or
+			input.UserInputType == Enum.UserInputType.Touch) and
+			currentInventory.selectedItem ~= item then
+			tween(itemSlot, {BackgroundColor3 = Color3.fromRGB(50, 50, 50)})
+		end
+	end)
+
+	-- Store reference
+	currentInventory.itemSlots[item.inventoryId] = {
+		instance = itemSlot,
+		item = item
+	}
+
+	-- Set parent
+	itemSlot.Parent = itemsGrid
+
+	return itemSlot
+end
+
+-- Filter items by category
+local function filterItemsByCategory(category)
+	currentInventory.currentCategory = category
+
+	-- Show/hide items based on category
+	for _, itemSlot in pairs(currentInventory.itemSlots) do
+		if itemSlot.instance then
+			itemSlot.instance.Visible = (itemSlot.item.type == category or category == 0)
+		end
+	end
+
+	-- Update tab highlights
+	for _, tab in pairs(categoryTabs:GetChildren()) do
+		if tab:IsA("TextButton") or tab:IsA("Frame") then
+			local tabCategory = tab:GetAttribute("ItemType")
+			local isSelected = (tabCategory == category)
+
+			-- Find the actual button (might be inside a frame)
+			local buttonObj = tab
+			if tab:IsA("Frame") then
+				buttonObj = tab:FindFirstChildOfClass("TextButton") or tab
+			end
+
+			-- Highlight selected tab
+			tween(buttonObj, {
+				BackgroundColor3 = isSelected and Color3.fromRGB(80, 120, 200) or Color3.fromRGB(50, 50, 70)
+			})
+
+			-- Update stroke if exists
+			local stroke = buttonObj:FindFirstChild("UIStroke")
+			if stroke then
+				stroke.Color = isSelected and Color3.fromRGB(100, 150, 255) or Color3.fromRGB(80, 80, 120)
+			end
+		end
+	end
+end
+
+-- Update inventory display
+local function updateInventoryDisplay()
+	-- Clear existing items
+	clearItemGrid()
+
+	-- Sort items by type and rarity
+	local sortedItems = {}
+	for _, item in pairs(currentInventory.items) do
+		table.insert(sortedItems, item)
+	end
+
+	-- Sort by rarity (higher first) then name
+	table.sort(sortedItems, function(a, b)
+		if (a.rarity or 1) == (b.rarity or 1) then
+			return (a.name or "") < (b.name or "")
+		end
+		return (a.rarity or 1) > (b.rarity or 1)
+	end)
+
+	-- Create item slots
+	for _, item in ipairs(sortedItems) do
+		local itemSlot = createItemSlot(item)
+		if itemSlot then
+			itemSlot.Visible = (item.type == currentInventory.currentCategory or currentInventory.currentCategory == 0)
+		end
+	end
+
+	-- Update item count
+	local itemCountText = InventoryUI:FindFirstChild("ItemCountText")
+	if itemCountText then
+		itemCountText.Text = "Items: " .. #sortedItems .. "/" .. currentInventory.maxSize
+	end
+end
+
+-- Handle inventory updates from server
+local function handleInventoryUpdate(clientData)
+	currentInventory.items = clientData.items or {}
+	currentInventory.equippedItems = clientData.equippedItems or {}
+	currentInventory.maxSize = clientData.maxSize or 50
+
+	updateInventoryDisplay()
+
+	-- Reset selection
+	currentInventory.selectedItem = nil
+	updateItemDetails(nil)
+end
+
+-- Initialize category tabs
+local function initCategoryTabs()
+	if not categoryTabs then return end
+
+	-- Tab configuration
+	local tabConfigs = {
+		{Name = "SPECIAL", Type = ITEM_TYPES.SPECIAL},
+		{Name = "GENERAL", Type = ITEM_TYPES.GENERAL},
+		{Name = "SKILL", Type = ITEM_TYPES.SKILL},
+		{Name = "EQUIPMENT", Type = ITEM_TYPES.EQUIPMENT}
+	}
+
+	-- Setup each tab
+	for i, tabConfig in ipairs(tabConfigs) do
+		local tab = nil
+
+		-- Try to find tab by name
+		for _, child in pairs(categoryTabs:GetChildren()) do
+			if child:IsA("TextButton") or child:IsA("Frame") then
+				-- Check by text content or name
+				local textLabel = child:FindFirstChildOfClass("TextLabel")
+				if textLabel and textLabel.Text == tabConfig.Name then
+					tab = child
+					break
+				elseif child.Name == tabConfig.Name or 
+					(child:IsA("TextButton") and child.Text == tabConfig.Name) then
+					tab = child
+					break
+				end
+			end
+		end
+
+		-- If not found, try by position
+		if not tab then
+			local children = categoryTabs:GetChildren()
+			for j, child in pairs(children) do
+				if child:IsA("TextButton") or child:IsA("Frame") then
+					if j == i then
+						tab = child
+						break
+					end
+				end
+			end
+		end
+
+		-- Setup tab if found
+		if tab then
+			tab:SetAttribute("ItemType", tabConfig.Type)
+
+			-- Find clickable object
+			local clickable = tab
+			if tab:IsA("Frame") then
+				clickable = tab:FindFirstChildOfClass("TextButton") or tab
+			end
+
+			-- Setup click handler
+			if not clickable:GetAttribute("Connected") then
+				clickable.MouseButton1Click:Connect(function()
+					filterItemsByCategory(tabConfig.Type)
+					playSound("TabClick")
+				end)
+				clickable:SetAttribute("Connected", true)
+			end
+		end
+	end
+
+	-- Start with general items
+	filterItemsByCategory(ITEM_TYPES.GENERAL)
+end
+
+-- Initialize action buttons
+local function initActionButtons()
+	if not actionButtons then return end
+
+	-- Use button
+	local useButton = actionButtons:FindFirstChild("UseButton") or actionButtons:FindFirstChild("Use")
+	if useButton and not useButton:GetAttribute("Connected") then
+		useButton.MouseButton1Click:Connect(function()
+			if currentInventory.selectedItem and inventoryRemotes:FindFirstChild("UseItem") then
+				inventoryRemotes.UseItem:FireServer(currentInventory.selectedItem.inventoryId)
+				playSound("ItemUse")
+			end
+		end)
+		useButton:SetAttribute("Connected", true)
+	end
+
+	-- Equip button
+	local equipButton = actionButtons:FindFirstChild("EquipButton") or actionButtons:FindFirstChild("Equip")
+	if equipButton and not equipButton:GetAttribute("Connected") then
+		equipButton.MouseButton1Click:Connect(function()
+			if not currentInventory.selectedItem then return end
+
+			local item = currentInventory.selectedItem
+			if item.equipped and inventoryRemotes:FindFirstChild("UnequipItem") then
+				inventoryRemotes.UnequipItem:FireServer(item.subType)
+				playSound("ItemUnequip")
+			elseif not item.equipped and inventoryRemotes:FindFirstChild("EquipItem") then
+				inventoryRemotes.EquipItem:FireServer(item.inventoryId)
+				playSound("ItemEquip")
+			end
+		end)
+		equipButton:SetAttribute("Connected", true)
+	end
+
+	-- Discard button
+	local discardButton = actionButtons:FindFirstChild("DiscardButton") or actionButtons:FindFirstChild("Discard")
+	if discardButton and not discardButton:GetAttribute("Connected") then
+		discardButton.MouseButton1Click:Connect(function()
+			if not currentInventory.selectedItem then return end
+
+			-- Handle confirmation dialog if it exists
+			local confirmDialog = InventoryUI:FindFirstChild("ConfirmDiscard")
+			if confirmDialog then
+				confirmDialog.Visible = true
+
+				local confirmButton = confirmDialog:FindFirstChild("ConfirmButton")
+				if confirmButton and not confirmButton:GetAttribute("Connected") then
+					confirmButton.MouseButton1Click:Connect(function()
+						if inventoryRemotes:FindFirstChild("RemoveItem") then
+							inventoryRemotes.RemoveItem:FireServer(
+								currentInventory.selectedItem.inventoryId, 1
+							)
+						end
+						confirmDialog.Visible = false
+						playSound("ItemDiscard")
+					end)
+					confirmButton:SetAttribute("Connected", true)
+				end
+
+				local cancelButton = confirmDialog:FindFirstChild("CancelButton")
+				if cancelButton and not cancelButton:GetAttribute("Connected") then
+					cancelButton.MouseButton1Click:Connect(function()
+						confirmDialog.Visible = false
+						playSound("Cancel")
+					end)
+					cancelButton:SetAttribute("Connected", true)
+				end
+			else
+				-- Discard directly if no confirmation dialog
+				if inventoryRemotes:FindFirstChild("RemoveItem") then
+					inventoryRemotes.RemoveItem:FireServer(
+						currentInventory.selectedItem.inventoryId, 1
+					)
+					playSound("ItemDiscard")
+				end
+			end
+		end)
+		discardButton:SetAttribute("Connected", true)
+	end
+end
+
+-- Initialize close button
+local function initCloseButton()
+	if not closeButton then return end
+
+	if not closeButton:GetAttribute("Connected") then
+		closeButton.MouseButton1Click:Connect(function()
+			InventoryUI.Visible = false
+			playSound("Close")
+		end)
+		closeButton:SetAttribute("Connected", true)
+	end
+end
+
+-- Initialize inventory UI
+local function init()
+	-- Initial UI setup
+	if InventoryUI then
+		InventoryUI.Visible = false
+
+		-- Hide template objects
+		if itemDetails then
+			itemDetails.Visible = false
+		end
+
+		if actionButtons then
+			actionButtons.Visible = false
+		end
+
+		local confirmDialog = InventoryUI:FindFirstChild("ConfirmDiscard")
+		if confirmDialog then
+			confirmDialog.Visible = false
+		end
+
+		if itemsGrid then
+			local template = itemsGrid:FindFirstChild("InventoryItem")
+			if template then
+				template.Visible = false
+			end
+		end
+	end
+
+	-- Create necessary sounds
+	local sounds = {
+		{Name = "ItemSelect", Id = "rbxassetid://127766346140160", Volume = 0.5},
+		{Name = "ItemUse", Id = "rbxassetid://129486184440383", Volume = 0.6},
+		{Name = "ItemEquip", Id = "rbxassetid://129486184440383", Volume = 0.6},
+		{Name = "ItemUnequip", Id = "rbxassetid://129486184440383", Volume = 0.6},
+		{Name = "ItemDiscard", Id = "rbxassetid://129486184440383", Volume = 0.5},
+		{Name = "TabClick", Id = "rbxassetid://129486184440383", Volume = 0.4},
+		{Name = "Close", Id = "rbxassetid://129486184440383", Volume = 0.5},
+		{Name = "Cancel", Id = "rbxassetid://129486184440383", Volume = 0.5}
+	}
+
+	for _, soundInfo in ipairs(sounds) do
+		local soundService = game:GetService("SoundService")
+		if not soundService:FindFirstChild(soundInfo.Name) then
+			local sound = Instance.new("Sound")
+			sound.Name = soundInfo.Name
+			sound.SoundId = soundInfo.Id
+			sound.Volume = soundInfo.Volume
+			sound.Parent = soundService
+		end
+	end
+
+	-- Initialize UI components
+	initCategoryTabs()
+	initActionButtons()
+	initCloseButton()
+
+	-- Connect to remote events
+	local updateEvent = inventoryRemotes:WaitForChild("UpdateInventory")
+	if updateEvent then
+		updateEvent.OnClientEvent:Connect(handleInventoryUpdate)
+	end
+
+	local inspectEvent = inventoryRemotes:WaitForChild("InspectItem")
+	if inspectEvent then
+		inspectEvent.OnClientEvent:Connect(function(itemData)
+			if currentInventory.selectedItem and 
+				currentInventory.selectedItem.inventoryId == itemData.inventoryId then
+				-- Update item data
+				for k, v in pairs(itemData) do
+					currentInventory.selectedItem[k] = v
+				end
+
+				updateItemDetails(currentInventory.selectedItem)
+			end
+		end)
+	end
+end
+
+-- Initialize on script load
+init()
+
+return InventoryUIHandler
