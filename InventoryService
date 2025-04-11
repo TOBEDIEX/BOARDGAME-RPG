@@ -1,0 +1,455 @@
+-- InventoryService.server.lua
+-- บริการจัดการระบบ Inventory ฝั่งเซิร์ฟเวอร์ (ไม่ใช้ DataStore)
+-- Version: 1.0.0
+
+-- Services
+local ServerStorage = game:GetService("ServerStorage")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- Load dependencies
+local Modules = ServerStorage:WaitForChild("Modules")
+local InventorySystem = require(Modules:WaitForChild("InventorySystem"))
+local ItemData = require(ReplicatedStorage:FindFirstChild("SharedModules"):WaitForChild("ItemData"))
+
+-- Create remotes if they don't exist
+local remotes = ReplicatedStorage:WaitForChild("Remotes")
+local inventoryRemotes = remotes:FindFirstChild("InventoryRemotes")
+
+if not inventoryRemotes then
+	inventoryRemotes = Instance.new("Folder")
+	inventoryRemotes.Name = "InventoryRemotes"
+	inventoryRemotes.Parent = remotes
+end
+
+-- Define remotes
+local remoteEvents = {
+	"UpdateInventory",
+	"AddItem",
+	"RemoveItem",
+	"UseItem",
+	"EquipItem",
+	"UnequipItem",
+	"SortInventory",
+	"DropItem",
+	"TransferItem",
+	"InspectItem"
+}
+
+-- Create required RemoteEvents
+for _, eventName in ipairs(remoteEvents) do
+	if not inventoryRemotes:FindFirstChild(eventName) then
+		local event = Instance.new("RemoteEvent")
+		event.Name = eventName
+		event.Parent = inventoryRemotes
+	end
+end
+
+-- Player inventory cache
+local playerInventories = {}
+
+-- Main service
+local InventoryService = {}
+
+-- Initialize player inventory
+function InventoryService.InitializePlayer(player)
+	if playerInventories[player.UserId] then
+		return playerInventories[player.UserId]
+	end
+
+	local inventory = InventorySystem.new()
+
+	-- ให้ไอเทมเริ่มต้นสำหรับผู้เล่นใหม่
+	InventoryService.GiveStartingItems(player, inventory)
+
+	-- Cache the inventory
+	playerInventories[player.UserId] = inventory
+
+	-- Send initial inventory data to client
+	InventoryService.SendInventoryToClient(player)
+
+	return inventory
+end
+
+-- Give starting items to a new player
+function InventoryService.GiveStartingItems(player, inventory)
+	-- แยกตามคลาสของผู้เล่น (ถ้ามี)
+	local playerData = _G.GameManager and _G.GameManager.playerManager:GetPlayerData(player)
+	local playerClass = playerData and playerData.class or "Unknown"
+
+	-- ไอเทมพื้นฐานที่ทุกคนได้รับ - ในที่นี้เป็นไอเทมทดสอบ
+	inventory:AddItem(ItemData.Items.test_item, 3)
+
+	-- ไอเทมตามคลาส
+	if playerClass == "Warrior" or playerClass == "Knight" or playerClass == "Paladin" then
+		-- ไอเทมสำหรับสายนักรบ
+		inventory:AddItem(ItemData.Equipment.test_equipment)
+	elseif playerClass == "Mage" or playerClass == "Wizard" or playerClass == "Archmage" then
+		-- ไอเทมสำหรับสายเวทย์
+		inventory:AddItem(ItemData.Equipment.test_equipment)
+	elseif playerClass == "Thief" or playerClass == "Assassin" or playerClass == "Shadow" then
+		-- ไอเทมสำหรับสายโจร
+		inventory:AddItem(ItemData.Equipment.test_equipment)
+	else
+		-- ไอเทมทั่วไป
+		inventory:AddItem(ItemData.Equipment.test_equipment)
+	end
+
+	print("[InventoryService] Gave starting items to " .. player.Name)
+	return true
+end
+
+-- Get player inventory
+function InventoryService.GetPlayerInventory(player)
+	if not playerInventories[player.UserId] then
+		return InventoryService.InitializePlayer(player)
+	end
+
+	return playerInventories[player.UserId]
+end
+
+-- Send inventory data to client
+function InventoryService.SendInventoryToClient(player)
+	local inventory = InventoryService.GetPlayerInventory(player)
+	if not inventory then
+		return false
+	end
+
+	-- คัดกรองข้อมูลที่จำเป็นสำหรับไคลเอนต์
+	local clientData = {
+		items = inventory:GetAllItems(),
+		equippedItems = inventory:GetEquippedItems(),
+		maxSize = inventory.maxSize
+	}
+
+	-- ส่งข้อมูลผ่าน Remote
+	local updateEvent = inventoryRemotes:WaitForChild("UpdateInventory")
+	updateEvent:FireClient(player, clientData)
+
+	return true
+end
+
+-- Add item to player inventory
+function InventoryService.AddItemToPlayer(player, itemId, quantity)
+	local inventory = InventoryService.GetPlayerInventory(player)
+	if not inventory then
+		return false, "Failed to get player inventory"
+	end
+
+	-- หาข้อมูลไอเทม
+	local itemData = ItemData.GetItemById(itemId)
+	if not itemData then
+		return false, "Item not found"
+	end
+
+	-- เพิ่มไอเทมลงในคลัง
+	local success, message = inventory:AddItem(itemData, quantity)
+
+	-- ส่งข้อมูลอัปเดตไปยังไคลเอนต์
+	if success then
+		InventoryService.SendInventoryToClient(player)
+		print("[InventoryService] Added item " .. itemId .. " x" .. tostring(quantity) .. " to player " .. player.Name)
+	end
+
+	return success, message
+end
+
+-- Remove item from player inventory
+function InventoryService.RemoveItemFromPlayer(player, inventoryId, quantity)
+	local inventory = InventoryService.GetPlayerInventory(player)
+	if not inventory then
+		return false, "Failed to get player inventory"
+	end
+
+	-- ค้นหาไอเทมเพื่อล็อกข้อมูล
+	local item = inventory:FindItemByInventoryId(inventoryId)
+	local itemName = item and item.name or "Unknown Item"
+
+	-- ลบไอเทมออกจากคลัง
+	local success, message = inventory:RemoveItem(inventoryId, quantity)
+
+	-- ส่งข้อมูลอัปเดตไปยังไคลเอนต์
+	if success then
+		InventoryService.SendInventoryToClient(player)
+		print("[InventoryService] Removed item " .. itemName .. " from player " .. player.Name)
+	end
+
+	return success, message
+end
+
+-- Handle equipment changes
+function InventoryService.EquipItemForPlayer(player, inventoryId)
+	local inventory = InventoryService.GetPlayerInventory(player)
+	if not inventory then
+		return false, "Failed to get player inventory"
+	end
+
+	-- ค้นหาไอเทมเพื่อล็อกข้อมูล
+	local item = inventory:FindItemByInventoryId(inventoryId)
+	local itemName = item and item.name or "Unknown Item"
+
+	-- สวมใส่อุปกรณ์
+	local success, message = inventory:EquipItem(inventoryId)
+
+	-- ส่งข้อมูลอัปเดตไปยังไคลเอนต์
+	if success then
+		InventoryService.SendInventoryToClient(player)
+
+		-- อัปเดตสถิติของผู้เล่น
+		local equipmentStats = inventory:CalculateEquipmentStats()
+		InventoryService.UpdatePlayerStats(player, equipmentStats)
+
+		print("[InventoryService] Player " .. player.Name .. " equipped " .. itemName)
+	end
+
+	return success, message
+end
+
+-- Handle unequipping items
+function InventoryService.UnequipItemForPlayer(player, slotType)
+	local inventory = InventoryService.GetPlayerInventory(player)
+	if not inventory then
+		return false, "Failed to get player inventory"
+	end
+
+	-- ถอดอุปกรณ์
+	local success, message = inventory:UnequipItem(slotType)
+
+	-- ส่งข้อมูลอัปเดตไปยังไคลเอนต์
+	if success then
+		InventoryService.SendInventoryToClient(player)
+
+		-- อัปเดตสถิติของผู้เล่น
+		local equipmentStats = inventory:CalculateEquipmentStats()
+		InventoryService.UpdatePlayerStats(player, equipmentStats)
+
+		print("[InventoryService] Player " .. player.Name .. " unequipped item from slot " .. tostring(slotType))
+	end
+
+	return success, message
+end
+
+-- Handle using items
+function InventoryService.UseItemForPlayer(player, inventoryId)
+	local inventory = InventoryService.GetPlayerInventory(player)
+	if not inventory then
+		return false, "Failed to get player inventory"
+	end
+
+	-- หาข้อมูลไอเทม
+	local item = inventory:FindItemByInventoryId(inventoryId)
+	if not item then
+		return false, "Item not found"
+	end
+
+	local itemName = item.name or "Unknown Item"
+
+	-- ตรวจสอบว่าใช้ได้หรือไม่
+	if not item.usable then
+		return false, "Item cannot be used"
+	end
+
+	-- กำหนดฟังก์ชั่นการใช้งาน (จากอีเวนต์สคริปต์หรือระบบอื่น)
+	local useFunction
+
+	-- เช็คว่ามีฟังก์ชั่นการใช้งานพิเศษหรือไม่
+	if ItemData.UseHandlers and ItemData.UseHandlers[item.id] then
+		useFunction = function(itemData)
+			return ItemData.UseHandlers[item.id](player, itemData)
+		end
+	else
+		-- ฟังก์ชั่นการใช้งานทั่วไป
+		useFunction = function(itemData)
+			-- เช็คประเภทไอเทม
+			if itemData.type == InventorySystem.GetItemTypes().GENERAL then
+				-- ถ้าเป็นไอเทมทั่วไป เช่น โพชั่น
+				if itemData.stats then
+					-- ผลต่อสถิติผู้เล่น
+					local playerData = _G.GameManager and _G.GameManager.playerManager:GetPlayerData(player)
+					if playerData and playerData.stats then
+						local changed = false
+
+						-- เพิ่มค่าสถิติตามไอเทม
+						for statName, statValue in pairs(itemData.stats) do
+							if playerData.stats[statName] ~= nil then
+								playerData.stats[statName] = playerData.stats[statName] + statValue
+								changed = true
+							end
+						end
+
+						-- อัปเดตสถิติถ้ามีการเปลี่ยนแปลง
+						if changed then
+							if _G.GameManager then
+								_G.GameManager.playerManager:UpdatePlayerStats(player)
+							end
+
+							-- ส่งข้อความยืนยัน
+							return true, "Used " .. itemData.name
+						end
+					end
+				end
+			elseif itemData.type == InventorySystem.GetItemTypes().SKILL then
+				-- ถ้าเป็นคัมภีร์สกิล
+				local skillId = itemData.skillId
+				if skillId then
+					-- เรียกใช้ระบบสกิล (ต้องมีระบบสกิลก่อน)
+					if _G.GameManager and _G.GameManager.skillSystem then
+						local success = _G.GameManager.skillSystem:LearnSkill(player, skillId)
+						if success then
+							return true, "Learned new skill: " .. (itemData.skillName or "Unknown Skill")
+						else
+							return false, "Could not learn this skill"
+						end
+					end
+				end
+			end
+
+			return true, "Used " .. itemData.name
+		end
+	end
+
+	-- กำหนดฟังก์ชั่นการใช้งาน
+	item.useFunction = useFunction
+
+	-- ใช้ไอเทม
+	local success, message = inventory:UseItem(inventoryId)
+
+	-- ส่งข้อมูลอัปเดตไปยังไคลเอนต์
+	if success then
+		InventoryService.SendInventoryToClient(player)
+		print("[InventoryService] Player " .. player.Name .. " used " .. itemName)
+	end
+
+	return success, message
+end
+
+-- Update player stats based on equipment
+function InventoryService.UpdatePlayerStats(player, equipmentStats)
+	-- ถ้ามีระบบจัดการผู้เล่น ให้อัปเดตสถิติ
+	if _G.GameManager and _G.GameManager.playerManager then
+		local playerData = _G.GameManager.playerManager:GetPlayerData(player)
+		if playerData and playerData.stats then
+			local baseStats = playerData.baseStats or table.clone(playerData.stats)
+
+			-- เก็บสถิติพื้นฐาน
+			if not playerData.baseStats then
+				playerData.baseStats = baseStats
+			end
+
+			-- คำนวณสถิติรวมจากค่าพื้นฐานบวกอุปกรณ์
+			for statName, baseValue in pairs(baseStats) do
+				if equipmentStats[statName] then
+					playerData.stats[statName] = baseValue + equipmentStats[statName]
+				else
+					playerData.stats[statName] = baseValue
+				end
+			end
+
+			-- อัปเดตสถิติให้ผู้เล่น
+			_G.GameManager.playerManager:UpdatePlayerStats(player)
+		end
+	end
+
+	return true
+end
+
+-- Connect remote events
+local function setupRemoteEvents()
+	-- Add Item
+	local addItemEvent = inventoryRemotes:WaitForChild("AddItem")
+	addItemEvent.OnServerEvent:Connect(function(player, itemId, quantity)
+		-- สำหรับการทดสอบ เปิดให้ผู้เล่นเพิ่มไอเทมเอง
+		InventoryService.AddItemToPlayer(player, itemId, quantity)
+	end)
+
+	-- Remove Item
+	local removeItemEvent = inventoryRemotes:WaitForChild("RemoveItem")
+	removeItemEvent.OnServerEvent:Connect(function(player, inventoryId, quantity)
+		InventoryService.RemoveItemFromPlayer(player, inventoryId, quantity)
+	end)
+
+	-- Equip Item
+	local equipItemEvent = inventoryRemotes:WaitForChild("EquipItem")
+	equipItemEvent.OnServerEvent:Connect(function(player, inventoryId)
+		InventoryService.EquipItemForPlayer(player, inventoryId)
+	end)
+
+	-- Unequip Item
+	local unequipItemEvent = inventoryRemotes:WaitForChild("UnequipItem")
+	unequipItemEvent.OnServerEvent:Connect(function(player, slotType)
+		InventoryService.UnequipItemForPlayer(player, slotType)
+	end)
+
+	-- Use Item
+	local useItemEvent = inventoryRemotes:WaitForChild("UseItem")
+	useItemEvent.OnServerEvent:Connect(function(player, inventoryId)
+		InventoryService.UseItemForPlayer(player, inventoryId)
+	end)
+
+	-- Drop Item (อาจจะเพิ่มระบบวางไอเทมบนกระดาน)
+	local dropItemEvent = inventoryRemotes:WaitForChild("DropItem")
+	dropItemEvent.OnServerEvent:Connect(function(player, inventoryId, quantity)
+		-- ไว้เพิ่มเติมในอนาคต
+	end)
+
+	-- Inspect Item (ดูรายละเอียดไอเทม)
+	local inspectItemEvent = inventoryRemotes:WaitForChild("InspectItem")
+	inspectItemEvent.OnServerEvent:Connect(function(player, inventoryId)
+		local inventory = InventoryService.GetPlayerInventory(player)
+		if not inventory then return end
+
+		local item = inventory:FindItemByInventoryId(inventoryId)
+		if item then
+			-- ส่งข้อมูลไอเทมไปแสดงในหน้าต่างรายละเอียด
+			local updateEvent = inventoryRemotes:WaitForChild("InspectItem")
+			updateEvent:FireClient(player, item)
+		end
+	end)
+end
+
+-- Set up player events
+local function setupPlayerEvents()
+	-- Player joining
+	Players.PlayerAdded:Connect(function(player)
+		-- Initialize inventory when player joins
+		InventoryService.InitializePlayer(player)
+	end)
+
+	-- Player leaving
+	Players.PlayerRemoving:Connect(function(player)
+		-- Clear from cache
+		playerInventories[player.UserId] = nil
+	end)
+
+	-- Initialize for existing players
+	for _, player in pairs(Players:GetPlayers()) do
+		task.spawn(function()
+			InventoryService.InitializePlayer(player)
+		end)
+	end
+end
+
+-- Initialize the service
+local function init()
+	print("Initializing InventoryService...")
+
+	-- ลงทะเบียนกับ GameManager ถ้ามี
+	if _G.GameManager then
+		_G.GameManager.inventoryService = InventoryService
+		print("InventoryService registered with GameManager")
+	end
+
+	-- เชื่อมต่อกับ Remote Events
+	setupRemoteEvents()
+
+	-- เชื่อมต่อกับ Player Events
+	setupPlayerEvents()
+
+	print("InventoryService initialized successfully")
+end
+
+-- Start the initialization
+init()
+
+return InventoryService
