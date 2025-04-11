@@ -1,17 +1,28 @@
--- StreamlinedMainGameUIHandler.lua
--- จัดการ UI หลักของเกมและแสดงสถานะตามคลาสที่เลือก
--- Version: 3.0.0 (Optimized)
+-- FixedMainGameUIHandler.lua
+-- แก้ไขสำหรับแสดงผลค่าสถานะระหว่างเล่นเกมอย่างถูกต้อง
+-- Version: 3.1.0 (Enhanced UI Updates)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 
+-- เปิดโหมดดีบักเพื่อช่วยในการแก้ไขปัญหา
+local DEBUG_MODE = true
+
+-- ฟังก์ชั่นสำหรับแสดงข้อความดีบัก
+local function debugLog(message)
+	if DEBUG_MODE then
+		print("[MainGameUIHandler] " .. message)
+	end
+end
+
 -- Get local player
 local player = Players.LocalPlayer
 if not player then
 	Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
 	player = Players.LocalPlayer
+	debugLog("ได้รับ LocalPlayer")
 end
 
 -- โหลดข้อมูลคลาสจาก SharedModules
@@ -24,7 +35,7 @@ local StatusBarContainer = MainGameUI:WaitForChild("StatusBarContainer")
 
 -- สีตามคลาส
 local CLASS_COLORS = {
-	Warrior = Color3.fromRGB(255, 255, 255),      -- สีแดง
+	Warrior = Color3.fromRGB(220, 60, 60),      -- สีแดง
 	Knight = Color3.fromRGB(180, 60, 60),       -- สีแดงเข้ม
 	Paladin = Color3.fromRGB(220, 100, 100),    -- สีแดงสว่าง
 
@@ -61,6 +72,17 @@ local endGameEvent = gameRemotes:WaitForChild("EndGame")
 local updateTurnDetailsEvent = uiRemotes:FindFirstChild("UpdateTurnDetails")
 local updateTurnTimerEvent = gameRemotes:FindFirstChild("UpdateTurnTimer")
 
+-- เพิ่ม StatChanged event สำหรับการอัปเดตแบบทันที
+local statChangedEvent = uiRemotes:FindFirstChild("StatChanged")
+if not statChangedEvent then
+	statChangedEvent = Instance.new("RemoteEvent")
+	statChangedEvent.Name = "StatChanged"
+	statChangedEvent.Parent = uiRemotes
+	debugLog("สร้าง StatChanged RemoteEvent")
+else
+	debugLog("พบ StatChanged RemoteEvent อยู่แล้ว")
+end
+
 -- ข้อมูลสถานะเทิร์น
 local turnTimerActive = false
 local turnTimerConnection = nil
@@ -78,6 +100,20 @@ local playerClassInfo = {
 	nextClassLevelExp = 150
 }
 
+-- ข้อมูลสถานะปัจจุบันของผู้เล่น
+local currentPlayerStats = {
+	hp = 100,
+	maxHp = 100,
+	mp = 50,
+	maxMp = 50,
+	attack = 10,
+	defense = 10,
+	magic = 10,
+	magicDefense = 10,
+	agility = 10,
+	money = 100
+}
+
 -- Helper function for tweening
 local function createTween(object, properties, duration, style, direction)
 	local tweenInfo = TweenInfo.new(
@@ -91,13 +127,19 @@ end
 
 -- Setup player status bar
 local function setupPlayerStatusBar()
+	debugLog("กำลังตั้งค่าแถบสถานะผู้เล่น")
+
 	-- Get template
 	local template = StatusBarContainer:FindFirstChild("PlayerStatusBar")
-	if not template then return nil end
+	if not template then 
+		debugLog("ไม่พบเทมเพลต PlayerStatusBar")
+		return nil 
+	end
 
 	-- Check if my status bar already exists
 	local existingStatusBar = StatusBarContainer:FindFirstChild("MyPlayerStatusBar")
 	if existingStatusBar then
+		debugLog("พบแถบสถานะที่มีอยู่แล้ว")
 		return existingStatusBar
 	end
 
@@ -110,6 +152,7 @@ local function setupPlayerStatusBar()
 	-- Set initial values
 	if myStatusBar:FindFirstChild("PlayerName") then
 		myStatusBar.PlayerName.Text = player.Name
+		debugLog("ตั้งค่าชื่อผู้เล่น: " .. player.Name)
 	end
 
 	if myStatusBar:FindFirstChild("PlayerClass") then
@@ -162,6 +205,8 @@ local function setupPlayerStatusBar()
 	-- Hide template
 	template.Visible = false
 
+	debugLog("แถบสถานะถูกสร้างเรียบร้อย")
+
 	return myStatusBar
 end
 
@@ -169,19 +214,36 @@ end
 local function updateMyStatusBar(stats)
 	if not myStatusBar then
 		myStatusBar = setupPlayerStatusBar()
-		if not myStatusBar then return end
+		if not myStatusBar then 
+			debugLog("ไม่สามารถสร้างแถบสถานะได้")
+			return 
+		end
 	end
+
+	-- เก็บค่าสถานะปัจจุบันไว้
+	for key, value in pairs(stats) do
+		if currentPlayerStats[key] ~= nil then
+			currentPlayerStats[key] = value
+		end
+	end
+
+	debugLog("อัปเดตแถบสถานะด้วยข้อมูล: HP=" .. (stats.hp or "N/A") .. 
+		"/" .. (stats.maxHp or "N/A") .. 
+		" MP=" .. (stats.mp or "N/A") .. 
+		"/" .. (stats.maxMp or "N/A"))
 
 	-- Update level if provided
 	if stats.level and myStatusBar:FindFirstChild("PlayerLevel") then
 		myStatusBar.PlayerLevel.Text = "Lv." .. stats.level
 		playerClassInfo.level = stats.level
+		debugLog("อัปเดตเลเวลเป็น: " .. stats.level)
 	end
 
 	-- Update class if provided
 	if stats.class and myStatusBar:FindFirstChild("PlayerClass") then
 		myStatusBar.PlayerClass.Text = stats.class
 		playerClassInfo.class = stats.class
+		debugLog("อัปเดตคลาสเป็น: " .. stats.class)
 
 		-- ปรับสีตามคลาส
 		local classColor = CLASS_COLORS[stats.class] or CLASS_COLORS.Default
@@ -214,7 +276,7 @@ local function updateMyStatusBar(stats)
 			end
 		end
 
-		-- แสดงการแจ้งเตือนคลาส (ใช้ notification ที่มีอยู่แล้วถ้ามี)
+		-- แสดงการแจ้งเตือนคลาส
 		local notification = MainGameUI:FindFirstChild("ClassNotification")
 		if not notification then
 			-- หา Notification ที่มีอยู่ก่อน
@@ -226,7 +288,8 @@ local function updateMyStatusBar(stats)
 
 				-- ปรับแต่งการแสดงผล
 				if notification:FindFirstChild("NotificationText") then
-					notification.NotificationText.Text = "Playing as " .. stats.class
+					notification.NotificationText.Text = "Playing as " .. stats.class .. " (HP: " .. stats.maxHp .. 
+						", MP: " .. stats.maxMp .. ")"
 				end
 
 				notification.Parent = MainGameUI
@@ -238,8 +301,8 @@ local function updateMyStatusBar(stats)
 					true
 				)
 
-				-- ซ่อนหลังจาก 3 วินาที
-				delay(3, function()
+				-- ซ่อนหลังจาก 4 วินาที
+				delay(4, function()
 					notification:TweenPosition(
 						UDim2.new(0.5, 0, -0.2, 0),
 						Enum.EasingDirection.In,
@@ -261,11 +324,21 @@ local function updateMyStatusBar(stats)
 		myStatusBar.HPBar:FindFirstChild("HPFill") then
 
 		local hpRatio = stats.hp / stats.maxHp
-		createTween(
-			myStatusBar.HPBar.HPFill,
-			{Size = UDim2.new(hpRatio, 0, 1, 0)},
-			0.3
-		):Play()
+		debugLog("อัตราส่วน HP: " .. hpRatio .. " (" .. stats.hp .. "/" .. stats.maxHp .. ")")
+
+		-- เพิ่มการเช็คเพื่อป้องกันค่าที่ไม่ถูกต้อง
+		if hpRatio >= 0 and hpRatio <= 1 then
+			createTween(
+				myStatusBar.HPBar.HPFill,
+				{Size = UDim2.new(hpRatio, 0, 1, 0)},
+				0.3
+			):Play()
+		else
+			warn("[MainGameUIHandler] อัตราส่วน HP ไม่ถูกต้อง: " .. hpRatio)
+			-- แก้ไขให้แสดงค่าที่ถูกต้อง
+			hpRatio = math.clamp(hpRatio, 0, 1)
+			myStatusBar.HPBar.HPFill.Size = UDim2.new(hpRatio, 0, 1, 0)
+		end
 
 		if myStatusBar.HPBar:FindFirstChild("HPText") then
 			myStatusBar.HPBar.HPText.Text = math.floor(stats.hp) .. "/" .. math.floor(stats.maxHp)
@@ -289,11 +362,21 @@ local function updateMyStatusBar(stats)
 		myStatusBar.MPBar:FindFirstChild("MPFill") then
 
 		local mpRatio = stats.mp / stats.maxMp
-		createTween(
-			myStatusBar.MPBar.MPFill,
-			{Size = UDim2.new(mpRatio, 0, 1, 0)},
-			0.3
-		):Play()
+		debugLog("อัตราส่วน MP: " .. mpRatio .. " (" .. stats.mp .. "/" .. stats.maxMp .. ")")
+
+		-- เพิ่มการเช็คเพื่อป้องกันค่าที่ไม่ถูกต้อง
+		if mpRatio >= 0 and mpRatio <= 1 then
+			createTween(
+				myStatusBar.MPBar.MPFill,
+				{Size = UDim2.new(mpRatio, 0, 1, 0)},
+				0.3
+			):Play()
+		else
+			warn("[MainGameUIHandler] อัตราส่วน MP ไม่ถูกต้อง: " .. mpRatio)
+			-- แก้ไขให้แสดงค่าที่ถูกต้อง
+			mpRatio = math.clamp(mpRatio, 0, 1)
+			myStatusBar.MPBar.MPFill.Size = UDim2.new(mpRatio, 0, 1, 0)
+		end
 
 		if myStatusBar.MPBar:FindFirstChild("MPText") then
 			myStatusBar.MPBar.MPText.Text = math.floor(stats.mp) .. "/" .. math.floor(stats.maxMp)
@@ -710,9 +793,42 @@ end
 updatePlayerStatsEvent.OnClientEvent:Connect(function(playerId, stats)
 	-- Only update for local player
 	if playerId == player.UserId then
+		debugLog("ได้รับอัปเดตค่าสถานะจากเซิร์ฟเวอร์: HP=" .. 
+			(stats.hp or "N/A") .. "/" .. (stats.maxHp or "N/A") .. 
+			" Class=" .. (stats.class or "N/A"))
 		updateMyStatusBar(stats)
 	end
 end)
+
+-- เพิ่มการรับอัปเดตค่าสถานะแบบทันทีทันใด
+if statChangedEvent then
+	statChangedEvent.OnClientEvent:Connect(function(changedStats)
+		debugLog("ได้รับการอัปเดตค่าสถานะแบบทันที")
+
+		-- สร้างอ็อบเจกต์สำหรับส่งไปยัง updateMyStatusBar
+		local statsToUpdate = {}
+
+		for stat, values in pairs(changedStats) do
+			statsToUpdate[stat] = values.newValue
+			currentPlayerStats[stat] = values.newValue
+			debugLog("อัปเดตค่า " .. stat .. " จาก " .. values.oldValue .. " เป็น " .. values.newValue)
+		end
+
+		-- ต้องส่งค่า maxHp/maxMp ไปด้วยเสมอเพื่อให้คำนวณอัตราส่วนได้ถูกต้อง
+		if statsToUpdate.hp and not statsToUpdate.maxHp then
+			statsToUpdate.maxHp = currentPlayerStats.maxHp
+		end
+
+		if statsToUpdate.mp and not statsToUpdate.maxMp then
+			statsToUpdate.maxMp = currentPlayerStats.maxMp
+		end
+
+		updateMyStatusBar(statsToUpdate)
+	end)
+	debugLog("เชื่อมต่อกับ StatChangedEvent เรียบร้อย")
+else
+	debugLog("ไม่พบ StatChangedEvent")
+end
 
 updateTurnEvent.OnClientEvent:Connect(function(currentPlayerId)
 	-- Create minimal turn data if details haven't arrived yet
@@ -776,6 +892,10 @@ levelUpEvent.OnClientEvent:Connect(function(newLevel, statIncreases)
 	if myStatusBar and myStatusBar:FindFirstChild("PlayerLevel") then
 		myStatusBar.PlayerLevel.Text = "Lv." .. newLevel
 	end
+
+	-- อัปเดตค่าสถานะหลังเลเวลอัพ
+	-- (จะมี UpdatePlayerStats event มาจากเซิร์ฟเวอร์ด้วย)
+	debugLog("เลเวลอัพเป็นเลเวล " .. newLevel)
 end)
 
 -- เชื่อมต่อกับการเลเวลอัพของคลาส
@@ -831,6 +951,8 @@ classLevelUpEvent.OnClientEvent:Connect(function(newClassLevel, statIncreases, n
 			)
 		end)
 	end
+
+	debugLog("เลเวลคลาสอัพเป็นเลเวล " .. newClassLevel)
 end)
 
 if updateTurnDetailsEvent then
@@ -846,6 +968,8 @@ if updateTurnTimerEvent then
 end
 
 endGameEvent.OnClientEvent:Connect(function(reason)
+	debugLog("เกมจบแล้ว: " .. reason)
+
 	-- Show game over UI
 	local GameOverScreen = PlayerGui:WaitForChild("GameOverScreen")
 	if GameOverScreen then
@@ -891,10 +1015,13 @@ setupEndTurnButton()
 -- เพิ่มการรับเหตุการณ์เมื่อ MainGameUI เปิดใช้งาน
 MainGameUI:GetPropertyChangedSignal("Enabled"):Connect(function()
 	if MainGameUI.Enabled then
-		-- ปั้บแล้วค่อย animation in
+		debugLog("MainGameUI เปิดใช้งานแล้ว")
 		-- ให้แน่ใจว่าสถานะบาร์ถูกสร้างขึ้นมาแล้ว
 		if not myStatusBar then
 			myStatusBar = setupPlayerStatusBar()
 		end
 	end
 end)
+
+-- แสดงข้อความเริ่มต้น
+debugLog("MainGameUIHandler พร้อมใช้งานแล้ว")
