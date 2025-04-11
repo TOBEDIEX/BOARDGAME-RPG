@@ -1,190 +1,127 @@
 -- EventTileServerHandler.server.lua
--- ตัวจัดการเหตุการณ์ช่องพิเศษฝั่งเซิร์ฟเวอร์อย่างง่าย (สนับสนุนการทำงานแบบไคลเอนต์เป็นหลัก)
--- Version: 1.0.0
+-- ตัวจัดการเหตุการณ์ช่องพิเศษฝั่งเซิร์ฟเวอร์ (สนับสนุนการทำงานแบบไคลเอนต์เป็นหลัก)
+-- Version: 1.1.0 - Optimized
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
-local ServerStorage = game:GetService("ServerStorage")
 
--- Debug mode
-local DEBUG_MODE = true
+-- ตั้งค่า Debug Mode
+local DEBUG = true
+local function log(msg) if DEBUG then print("[EventTileServer] " .. msg) end end
 
--- Helper function for debug logging
-local function debugLog(message)
-	if DEBUG_MODE then
-		print("[EventTileServerHandler] " .. message)
-	end
-end
-
--- สร้างและตรวจสอบ RemoteEvents
+-- สร้าง Remote Events
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
-local eventTileRemotes = remotes:FindFirstChild("EventTileRemotes")
-if not eventTileRemotes then
-	eventTileRemotes = Instance.new("Folder")
-	eventTileRemotes.Name = "EventTileRemotes"
-	eventTileRemotes.Parent = remotes
-	debugLog("สร้างโฟลเดอร์ EventTileRemotes")
-end
+local eventTileRemotes = remotes:FindFirstChild("EventTileRemotes") or Instance.new("Folder")
+eventTileRemotes.Name = "EventTileRemotes"
+eventTileRemotes.Parent = remotes
 
-local moneyEventRemote = eventTileRemotes:FindFirstChild("MoneyEvent")
-if not moneyEventRemote then
-	moneyEventRemote = Instance.new("RemoteEvent")
-	moneyEventRemote.Name = "MoneyEvent"
-	moneyEventRemote.Parent = eventTileRemotes
-	debugLog("สร้าง MoneyEvent RemoteEvent")
-end
+local moneyEventRemote = eventTileRemotes:FindFirstChild("MoneyEvent") or Instance.new("RemoteEvent")
+moneyEventRemote.Name = "MoneyEvent"
+moneyEventRemote.Parent = eventTileRemotes
 
 local uiRemotes = remotes:WaitForChild("UIRemotes")
 local updatePlayerStatsEvent = uiRemotes:FindFirstChild("UpdatePlayerStats")
 local statChangedEvent = uiRemotes:FindFirstChild("StatChanged")
 
--- พยายามหา PlayerManager
+-- หา PlayerManager
 local function getPlayerManager()
-	-- วิธีที่ 1: ผ่าน GameManager
-	if _G.GameManager and _G.GameManager.playerManager then
-		debugLog("พบ PlayerManager ผ่าน GameManager")
-		return _G.GameManager.playerManager
-	end
+	-- ลองหาจากหลายวิธี
+	if _G.GameManager and _G.GameManager.playerManager then return _G.GameManager.playerManager end
+	if _G.PlayerManager then return _G.PlayerManager end
 
-	-- วิธีที่ 2: ดูใน global variables
-	if _G.PlayerManager then
-		debugLog("พบ PlayerManager ใน global variables")
-		return _G.PlayerManager
-	end
-
-	-- วิธีที่ 3: สร้าง stub (จำลอง)
-	debugLog("ไม่พบ PlayerManager สร้าง stub")
+	-- ถ้าไม่พบ สร้าง stub
+	log("ไม่พบ PlayerManager สร้าง stub")
 	return {
-		GetPlayerData = function(_, player)
-			return {
-				stats = {
-					money = 1000
-				}
-			}
-		end,
+		GetPlayerData = function(_, player) return {stats = {money = 1000}} end,
 		UpdatePlayerStats = function(_, player, stats)
-			print("⚠️ [STUB] UpdatePlayerStats เรียกใช้สำหรับ " .. player.Name .. " - ค่าเงินใหม่: " .. (stats.money or "N/A"))
+			log("⚠️ [STUB] UpdatePlayerStats สำหรับ " .. player.Name .. " - เงินใหม่: " .. (stats.money or "N/A"))
 			return true
 		end
 	}
 end
 
--- ฟังก์ชันอัปเดตเงินผู้เล่น
+-- อัพเดทเงินผู้เล่น
 local function updatePlayerMoney(player, amount)
 	local playerManager = getPlayerManager()
-	if not playerManager then
-		warn("ไม่สามารถหา PlayerManager ได้")
-		return false
-	end
 
-	-- รับข้อมูลผู้เล่น
+	-- รับและตรวจสอบข้อมูล
 	local playerData = playerManager.GetPlayerData(playerManager, player)
 	if not playerData or not playerData.stats then
-		warn("ไม่สามารถหาข้อมูลผู้เล่นได้")
+		log("❌ ไม่พบข้อมูลผู้เล่น")
 		return false
-	end
-
-	-- บันทึกค่าเงินเดิม
-	local oldMoney = playerData.stats.money or 0
-
-	-- ตรวจสอบสถานะของเงินปัจจุบัน
-	if type(oldMoney) ~= "number" then
-		warn("พบค่าเงินที่ไม่ถูกต้อง: " .. tostring(oldMoney) .. " จะตั้งค่าเริ่มต้นเป็น 0")
-		oldMoney = 0
 	end
 
 	-- คำนวณเงินใหม่
+	local oldMoney = playerData.stats.money or 0
+	if type(oldMoney) ~= "number" then oldMoney = 0 end
 	local newMoney = oldMoney + amount
 
-	-- ใช้ UpdatePlayerStats ถ้ามี
+	-- ลองวิธีอัพเดทต่างๆ
 	local success = false
+
+	-- วิธี 1: ใช้ UpdatePlayerStats
 	if playerManager.UpdatePlayerStats then
 		success = pcall(function()
-			return playerManager.UpdatePlayerStats(playerManager, player, {
-				money = newMoney
-			})
+			return playerManager.UpdatePlayerStats(playerManager, player, {money = newMoney})
 		end)
 	end
 
-	if success then
-		debugLog("อัปเดตเงินสำเร็จผ่าน UpdatePlayerStats: " .. oldMoney .. " -> " .. newMoney)
-	else
-		debugLog("UpdatePlayerStats ล้มเหลว ลองใช้วิธีอื่น")
-
-		-- วิธีที่ 2: อัปเดตโดยตรง
+	-- ถ้าวิธี 1 ไม่สำเร็จ ลองวิธีอื่น
+	if not success then
+		-- วิธี 2: อัพเดทโดยตรง
 		if playerData.stats then
 			playerData.stats.money = newMoney
-			debugLog("อัปเดตเงินโดยตรงใน playerData: " .. oldMoney .. " -> " .. newMoney)
 			success = true
 		end
 
-		-- วิธีที่ 3: ส่งเหตุการณ์เปลี่ยนแปลงไปยังไคลเอนต์
+		-- วิธี 3: ส่ง event ไปยัง client
 		if statChangedEvent then
 			statChangedEvent:FireClient(player, {
-				money = {
-					oldValue = oldMoney,
-					newValue = newMoney
-				}
+				money = {oldValue = oldMoney, newValue = newMoney}
 			})
-			debugLog("ส่งเหตุการณ์ StatChanged ไปยังไคลเอนต์")
 		end
 
-		-- วิธีที่ 4: เรียกใช้ SyncPlayerStats ถ้ามี
+		-- วิธี 4: เรียก SyncPlayerStats
 		if playerManager.SyncPlayerStats then
-			pcall(function()
-				playerManager.SyncPlayerStats(playerManager, player)
-				debugLog("เรียกใช้ SyncPlayerStats สำเร็จ")
-			end)
+			pcall(function() playerManager.SyncPlayerStats(playerManager, player) end)
 		end
 	end
 
+	log((success and "💰 อัพเดทเงินสำเร็จ: " or "❌ อัพเดทเงินล้มเหลว: ") .. oldMoney .. " → " .. newMoney)
 	return success
 end
 
--- รับฟังเหตุการณ์จากไคลเอนต์
+-- รับฟังเหตุการณ์จาก client
 moneyEventRemote.OnServerEvent:Connect(function(player, command, amount)
-	debugLog("ได้รับคำสั่งจากไคลเอนต์: " .. tostring(command) .. " จำนวน: " .. tostring(amount))
+	log("ได้รับคำสั่ง: " .. tostring(command) .. " จำนวน: " .. tostring(amount))
 
 	if command == "updateMoney" and amount > 0 then
-		local success = updatePlayerMoney(player, amount)
-
-		if success then
-			debugLog("💰 อัปเดตเงินสำเร็จสำหรับ " .. player.Name .. " จำนวน: " .. amount)
-		else
-			warn("❌ อัปเดตเงินล้มเหลวสำหรับ " .. player.Name)
-		end
+		updatePlayerMoney(player, amount)
 	end
 end)
 
--- ฟังก์ชันทดสอบที่สามารถเรียกจากในเกม
+-- ฟังก์ชันทดสอบ
 local function testUpdateMoney(player, amount)
+	-- ถ้าไม่ระบุผู้เล่น ใช้ผู้เล่นแรกในเซิร์ฟเวอร์
 	if not player then
 		local players = Players:GetPlayers()
-		if #players == 0 then
-			warn("ไม่พบผู้เล่นในเกม")
-			return false
-		end
+		if #players == 0 then return false end
 		player = players[1]
 	end
 
+	-- สุ่มจำนวนเงินถ้าไม่ได้ระบุ
 	amount = amount or math.random(500, 2000)
 
-	debugLog("ทดสอบการอัปเดตเงินให้กับ " .. player.Name .. " จำนวน " .. amount)
+	log("ทดสอบอัพเดทเงิน " .. player.Name .. " จำนวน " .. amount)
 
-	-- อัปเดตเงิน
+	-- อัพเดทเงินและส่ง event กลับไปยัง client
 	local success = updatePlayerMoney(player, amount)
-
-	-- ส่งเหตุการณ์ไปยังไคลเอนต์
-	if success then
-		moneyEventRemote:FireClient(player, amount, true)
-		debugLog("ส่งเหตุการณ์เงินไปยังไคลเอนต์")
-	end
+	if success then moneyEventRemote:FireClient(player, amount, true) end
 
 	return success
 end
 
--- เพิ่มฟังก์ชันทดสอบเข้าไปใน global variables
+-- เพิ่มฟังก์ชันทดสอบใน global
 _G.TestUpdateMoney = testUpdateMoney
 
-print("================ ระบบช่องพิเศษฝั่งเซิร์ฟเวอร์ (Event Tile Server Handler) เริ่มต้นแล้ว ================")
-print("พิมพ์ _G.TestUpdateMoney() ในแถบคำสั่งเพื่อทดสอบการอัปเดตเงิน")
+log("ระบบช่องพิเศษฝั่งเซิร์ฟเวอร์เริ่มต้นแล้ว - พิมพ์ _G.TestUpdateMoney() ในแถบคำสั่งเพื่อทดสอบ")
