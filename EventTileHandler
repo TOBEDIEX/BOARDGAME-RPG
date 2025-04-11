@@ -1,0 +1,412 @@
+-- EventTileHandler.client.lua
+-- จัดการอีเวนต์ช่องพิเศษฝั่งไคลเอนต์ (แก้ไขเพื่อใช้ UI ที่มีอยู่แล้ว)
+-- Version: 1.1.0
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+
+-- Get local player
+local player = Players.LocalPlayer
+local PlayerGui = player:WaitForChild("PlayerGui")
+
+-- Debug mode
+local DEBUG_MODE = true
+
+-- Helper function for debug logging
+local function debugLog(message)
+	if DEBUG_MODE then
+		print("[EventTileHandler] " .. message)
+	end
+end
+
+-- Get remotes
+local remotes = ReplicatedStorage:WaitForChild("Remotes")
+local eventTileRemotes = remotes:WaitForChild("EventTileRemotes", 10)
+if not eventTileRemotes then
+	eventTileRemotes = Instance.new("Folder")
+	eventTileRemotes.Name = "EventTileRemotes"
+	eventTileRemotes.Parent = remotes
+	debugLog("สร้างโฟลเดอร์ EventTileRemotes")
+end
+
+local moneyEventRemote = eventTileRemotes:WaitForChild("MoneyEvent", 10)
+if not moneyEventRemote then
+	moneyEventRemote = Instance.new("RemoteEvent")
+	moneyEventRemote.Name = "MoneyEvent"
+	moneyEventRemote.Parent = eventTileRemotes
+	debugLog("สร้าง MoneyEvent RemoteEvent")
+end
+
+local uiRemotes = remotes:WaitForChild("UIRemotes")
+local statChangedEvent = uiRemotes:WaitForChild("StatChanged", 10)
+
+-- Function to find the existing MedievalMoneyRandomizer UI
+local function getMedievalMoneyRandomizerUI()
+	-- ค้นหา UI ที่มีอยู่แล้ว
+	local moneyUI = PlayerGui:FindFirstChild("MedievalMoneyRandomizer")
+
+	if moneyUI then
+		debugLog("พบ MedievalMoneyRandomizer UI ที่มีอยู่แล้ว")
+		return moneyUI
+	else
+		debugLog("ไม่พบ MedievalMoneyRandomizer UI ที่มีอยู่แล้ว จะใช้ PopupUI แทน")
+		-- ใช้ PopupUI แทนถ้าไม่พบ MedievalMoneyRandomizer
+		local popupUI = PlayerGui:FindFirstChild("PopupUI")
+		if popupUI then
+			return popupUI
+		end
+	end
+
+	-- สร้าง UI จำลองอย่างง่ายถ้าไม่พบ UI ที่ต้องการ
+	debugLog("ไม่พบ UI ที่ต้องการ จะสร้าง UI จำลองอย่างง่าย")
+	local simpleUI = Instance.new("ScreenGui")
+	simpleUI.Name = "SimpleMoneyUI"
+	simpleUI.ResetOnSpawn = false
+
+	local frame = Instance.new("Frame")
+	frame.Name = "MainFrame"
+	frame.Size = UDim2.new(0.5, 0, 0.5, 0)
+	frame.Position = UDim2.new(0.5, 0, 0.5, 0)
+	frame.AnchorPoint = Vector2.new(0.5, 0.5)
+	frame.BackgroundColor3 = Color3.fromRGB(50, 45, 40)
+	frame.BorderSizePixel = 0
+	frame.Visible = false
+	frame.Parent = simpleUI
+
+	local uiCorner = Instance.new("UICorner")
+	uiCorner.CornerRadius = UDim.new(0, 8)
+	uiCorner.Parent = frame
+
+	local title = Instance.new("TextLabel")
+	title.Name = "Title"
+	title.Size = UDim2.new(1, 0, 0.2, 0)
+	title.Position = UDim2.new(0, 0, 0, 0)
+	title.BackgroundTransparency = 1
+	title.Font = Enum.Font.SourceSerifBold
+	title.Text = "ได้รับเงิน"
+	title.TextSize = 24
+	title.TextColor3 = Color3.fromRGB(255, 230, 150)
+	title.Parent = frame
+
+	local coinAmount = Instance.new("TextLabel")
+	coinAmount.Name = "CoinAmount"
+	coinAmount.Size = UDim2.new(1, 0, 0.5, 0)
+	coinAmount.Position = UDim2.new(0, 0, 0.25, 0)
+	coinAmount.BackgroundTransparency = 1
+	coinAmount.Font = Enum.Font.SourceSerifBold
+	coinAmount.Text = "0"
+	coinAmount.TextSize = 36
+	coinAmount.TextColor3 = Color3.fromRGB(255, 215, 0)
+	coinAmount.Parent = frame
+
+	local closeButton = Instance.new("TextButton")
+	closeButton.Name = "CloseButton"
+	closeButton.Size = UDim2.new(0.5, 0, 0.15, 0)
+	closeButton.Position = UDim2.new(0.25, 0, 0.8, 0)
+	closeButton.BackgroundColor3 = Color3.fromRGB(150, 120, 80)
+	closeButton.Font = Enum.Font.SourceSerifBold
+	closeButton.Text = "ตกลง"
+	closeButton.TextSize = 20
+	closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+	closeButton.Parent = frame
+
+	local buttonCorner = Instance.new("UICorner")
+	buttonCorner.CornerRadius = UDim.new(0, 6)
+	buttonCorner.Parent = closeButton
+
+	closeButton.MouseButton1Click:Connect(function()
+		frame.Visible = false
+	end)
+
+	simpleUI.Parent = PlayerGui
+	return simpleUI
+end
+
+-- แสดงอนิเมชันการได้รับเงิน
+local function showMoneyAnimation(moneyAmount)
+	-- เตรียม UI
+	local moneyUI = getMedievalMoneyRandomizerUI()
+
+	if not moneyUI then
+		warn("[EventTileHandler] ไม่พบ UI สำหรับแสดงเงิน")
+		return
+	end
+
+	local mainFrame
+	local coinAmount
+	local closeButton
+
+	-- ตรวจสอบประเภท UI ที่พบ
+	if moneyUI.Name == "MedievalMoneyRandomizer" then
+		-- UI ประเภท MedievalMoneyRandomizer
+		mainFrame = moneyUI:FindFirstChild("MainFrame")
+		if mainFrame then
+			local coinDisplay = mainFrame:FindFirstChild("CoinDisplay")
+			if coinDisplay then
+				coinAmount = coinDisplay:FindFirstChild("CoinAmount")
+			end
+			closeButton = mainFrame:FindFirstChild("CloseButton")
+		end
+	elseif moneyUI.Name == "PopupUI" then
+		-- ถ้าเป็น PopupUI ค้นหาเฟรมที่เกี่ยวกับ Money
+		for _, child in ipairs(moneyUI:GetChildren()) do
+			if child:IsA("Frame") and (
+				child.Name:find("Money") or 
+					child.Name:find("Coin") or 
+					child.Name:find("Currency")
+				) then
+				mainFrame = child
+				break
+			end
+		end
+
+		if mainFrame then
+			-- ค้นหา TextLabel ที่แสดงจำนวนเงิน
+			for _, child in ipairs(mainFrame:GetDescendants()) do
+				if child:IsA("TextLabel") and (
+					child.Name:find("Amount") or 
+						child.Name:find("Value") or 
+						child.Name:find("Coin")
+					) then
+					coinAmount = child
+					break
+				end
+			end
+
+			-- ค้นหาปุ่มปิด
+			for _, child in ipairs(mainFrame:GetDescendants()) do
+				if child:IsA("TextButton") and (
+					child.Name:find("Close") or 
+						child.Name:find("OK") or 
+						child.Name:find("Accept")
+					) then
+					closeButton = child
+					break
+				end
+			end
+		end
+	elseif moneyUI.Name == "SimpleMoneyUI" then
+		-- UI จำลองอย่างง่าย
+		mainFrame = moneyUI:FindFirstChild("MainFrame")
+		if mainFrame then
+			coinAmount = mainFrame:FindFirstChild("CoinAmount")
+			closeButton = mainFrame:FindFirstChild("CloseButton")
+		end
+	end
+
+	if not mainFrame then
+		warn("[EventTileHandler] ไม่พบ MainFrame ใน UI")
+		return
+	end
+
+	if not coinAmount then
+		warn("[EventTileHandler] ไม่พบส่วนแสดงจำนวนเงินใน UI")
+		-- ค้นหา TextLabel ที่อาจแสดงจำนวนเงิน
+		for _, child in ipairs(mainFrame:GetDescendants()) do
+			if child:IsA("TextLabel") then
+				coinAmount = child
+				break
+			end
+		end
+
+		if not coinAmount then
+			debugLog("สร้าง TextLabel สำหรับแสดงจำนวนเงิน")
+			coinAmount = Instance.new("TextLabel")
+			coinAmount.Name = "CoinAmount"
+			coinAmount.Size = UDim2.new(0.5, 0, 0.3, 0)
+			coinAmount.Position = UDim2.new(0.25, 0, 0.35, 0)
+			coinAmount.BackgroundTransparency = 1
+			coinAmount.Font = Enum.Font.SourceSerifBold
+			coinAmount.Text = "0"
+			coinAmount.TextSize = 36
+			coinAmount.TextColor3 = Color3.fromRGB(255, 215, 0)
+			coinAmount.Parent = mainFrame
+		end
+	end
+
+	-- แสดง UI
+	mainFrame.Visible = true
+
+	-- แสดงจำนวนเงินด้วยอนิเมชัน
+	coinAmount.Text = "0"
+
+	-- สร้างอนิเมชันสำหรับ bounce effect
+	local bounceScale = coinAmount:FindFirstChild("BounceAnimation")
+	if not bounceScale then
+		bounceScale = Instance.new("UIScale")
+		bounceScale.Name = "BounceAnimation"
+		bounceScale.Scale = 1
+		bounceScale.Parent = coinAmount
+	end
+
+	-- อนิเมชันเพิ่มแบบไล่ค่าและ bounce
+	local countDuration = 2 -- เวลาที่ใช้นับ (วินาที)
+	local startTime = tick()
+	local startValue = 0
+	local targetValue = moneyAmount
+
+	-- เสียงเหรียญ
+	local coinSound = Instance.new("Sound")
+	coinSound.SoundId = "rbxassetid://131323304" -- เสียงเหรียญ
+	coinSound.Volume = 0.5
+	coinSound.Parent = mainFrame
+	coinSound:Play()
+
+	-- ฟังก์ชัน easing สำหรับการนับเงิน
+	local function easeOutQuart(t)
+		return 1 - (1 - t)^4
+	end
+
+	-- อัปเดตค่าเงินแบบเรียลไทม์
+	local countConnection
+	countConnection = game:GetService("RunService").RenderStepped:Connect(function()
+		local elapsed = tick() - startTime
+		local progress = math.min(elapsed / countDuration, 1)
+
+		-- คำนวณค่าปัจจุบันตาม easing function
+		local easedProgress = easeOutQuart(progress)
+		local currentValue = math.floor(startValue + easedProgress * (targetValue - startValue))
+
+		-- อัปเดตข้อความ
+		coinAmount.Text = tostring(currentValue)
+
+		-- อนิเมชัน bounce
+		if bounceScale then
+			local bounce = 1 + math.sin(progress * math.pi * 8) * 0.1 * (1 - progress)
+			bounceScale.Scale = bounce
+		end
+
+		-- หยุดเมื่อเสร็จสิ้น
+		if progress >= 1 then
+			countConnection:Disconnect()
+
+			-- เล่นเสียงเหรียญอีกครั้งเมื่อจบ
+			local finalCoinSound = Instance.new("Sound")
+			finalCoinSound.SoundId = "rbxassetid://131323304" -- เสียงเหรียญสุดท้าย
+			finalCoinSound.Volume = 0.7
+			finalCoinSound.Parent = mainFrame
+			finalCoinSound:Play()
+
+			-- แสดงเอฟเฟกต์เมื่อเสร็จสิ้น
+			TweenService:Create(
+				coinAmount, 
+				TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), 
+				{TextSize = coinAmount.TextSize * 1.3}
+			):Play()
+
+			task.delay(0.3, function()
+				TweenService:Create(
+					coinAmount, 
+					TweenInfo.new(0.2, Enum.EasingStyle.Quad), 
+					{TextSize = coinAmount.TextSize / 1.3}
+				):Play()
+			end)
+
+			-- ถ้าไม่มีปุ่มปิด ให้ปิดอัตโนมัติหลังจาก 5 วินาที
+			if not closeButton then
+				task.delay(5, function()
+					mainFrame.Visible = false
+				end)
+			end
+		end
+	end)
+
+	-- ถ้ามีปุ่มปิด ให้ปิด UI เมื่อกดปุ่ม
+	if closeButton then
+		-- ตรวจสอบว่ามีการเชื่อมต่อกับปุ่มแล้วหรือไม่
+		if not closeButton:GetAttribute("Connected") then
+			closeButton.MouseButton1Click:Connect(function()
+				mainFrame.Visible = false
+			end)
+			closeButton:SetAttribute("Connected", true)
+		end
+	end
+end
+
+-- เชื่อมต่อกับเหตุการณ์เงิน
+moneyEventRemote.OnClientEvent:Connect(function(moneyAmount)
+	debugLog("ได้รับเหตุการณ์เงิน: จำนวน " .. moneyAmount)
+
+	-- สร้าง notification บนหน้าจอ
+	local notification = Instance.new("TextLabel")
+	notification.Size = UDim2.new(0, 200, 0, 50)
+	notification.Position = UDim2.new(0.5, 0, 0.1, 0)
+	notification.AnchorPoint = Vector2.new(0.5, 0)
+	notification.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+	notification.BackgroundTransparency = 0.3
+	notification.BorderSizePixel = 0
+	notification.Text = "ตกช่องเงิน! +"..moneyAmount
+	notification.TextColor3 = Color3.fromRGB(255, 215, 0)
+	notification.TextSize = 20
+	notification.Font = Enum.Font.SourceSansBold
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = notification
+
+	notification.Parent = PlayerGui
+
+	-- แสดงการแจ้งเตือนด้วย tween
+	TweenService:Create(
+		notification,
+		TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+		{Position = UDim2.new(0.5, 0, 0.05, 0)}
+	):Play()
+
+	-- ลบการแจ้งเตือนหลังจาก 3 วินาที
+	task.delay(3, function()
+		TweenService:Create(
+			notification,
+			TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+			{Position = UDim2.new(0.5, 0, -0.1, 0)}
+		):Play()
+
+		task.delay(0.5, function()
+			notification:Destroy()
+		end)
+	end)
+
+	-- แสดงอนิเมชันเงิน
+	showMoneyAnimation(moneyAmount)
+
+	-- รอฟังการอัปเดตเงินและแสดงการแจ้งเตือนเมื่อเงินเปลี่ยนแปลง
+	local moneyUpdateConnection
+	moneyUpdateConnection = statChangedEvent.OnClientEvent:Connect(function(changedStats)
+		if changedStats.money then
+			debugLog("เงินอัปเดต: " .. changedStats.money.oldValue .. " -> " .. changedStats.money.newValue)
+
+			-- เมื่อได้รับการอัปเดตเงินแล้ว ยกเลิกการเชื่อมต่อ
+			moneyUpdateConnection:Disconnect()
+		end
+	end)
+end)
+
+-- เชื่อมต่อกับ TileTriggerEvent สำหรับเอฟเฟกต์ช่องทั่วไป
+local boardRemotes = remotes:WaitForChild("BoardRemotes")
+local tileTriggerEvent = boardRemotes:WaitForChild("TileTriggerEvent")
+
+tileTriggerEvent.OnClientEvent:Connect(function(playerId, tileId, tileType)
+	-- จัดการเฉพาะเหตุการณ์สำหรับผู้เล่นในเครื่อง
+	if playerId ~= player.UserId then return end
+
+	debugLog("ได้รับเหตุการณ์ตกช่อง: ช่อง " .. tileId .. " ประเภท " .. tileType)
+
+	-- จัดการประเภทช่องต่างๆ (สามารถขยายได้ในภายหลัง)
+	if tileType == "money" then
+		debugLog("ตกช่องเงิน รอการแสดงผล UI")
+		-- แสดงข้อความแจ้งเตือนในกล่องคำสั่ง
+		print("[EVENT] คุณตกบนช่องเงิน! กำลังสุ่มจำนวนเงิน...")
+	elseif tileType == "shop" then
+		debugLog("ตกช่องร้านค้า")
+	elseif tileType == "battle" then
+		debugLog("ตกช่องต่อสู้")
+	elseif tileType == "casino" then
+		debugLog("ตกช่องคาสิโน")
+	elseif tileType == "item" then
+		debugLog("ตกช่องไอเทม")
+	end
+end)
+
+debugLog("EventTileHandler เริ่มต้นแล้ว")
+print("================ ระบบช่องพิเศษ (Event Tile) พร้อมใช้งานแล้ว ================")
