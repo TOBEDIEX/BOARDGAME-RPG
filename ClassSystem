@@ -1,6 +1,6 @@
--- FixedClassSystem.lua
--- โมดูลจัดการระบบคลาสและการอัพเกรดคลาส (เวอร์ชันที่แก้ไขแล้ว)
--- Version: 3.0.0 (Fixed)
+-- ClassSystem.lua
+-- Module for managing player classes and class upgrades
+-- Version: 4.0.0 (Optimized)
 
 local ClassSystem = {}
 ClassSystem.__index = ClassSystem
@@ -10,37 +10,36 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")
 local Players = game:GetService("Players")
 
--- คลาสพื้นฐานที่เลือกได้เริ่มต้น
+-- Starter classes
 local STARTER_CLASSES = {
 	Warrior = true,
 	Mage = true,
 	Thief = true
 }
 
--- โหลดข้อมูลคลาสจาก ClassData module
+-- Load ClassData module
 local ClassData = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("ClassData"))
 
 -- Constants
-local EXP_TO_LEVEL_DIVIDER = 100  -- ค่าหารสำหรับคำนวณเลเวลจาก exp
-local CLASS_EXP_DIVIDER = 150     -- ค่าหารสำหรับคำนวณเลเวลคลาสจาก exp
+local EXP_TO_LEVEL_DIVIDER = 100  -- For calculating level from exp
+local CLASS_EXP_DIVIDER = 150     -- For calculating class level from exp
 
 function ClassSystem.new()
 	local self = setmetatable({}, ClassSystem)
 
-	self.playerClasses = {}       -- เก็บคลาสของผู้เล่น
-	self.playerLevels = {}        -- เก็บเลเวลของผู้เล่น
-	self.playerClassLevels = {}   -- เก็บเลเวลคลาสของผู้เล่น
-	self.playerExp = {}           -- เก็บค่าประสบการณ์ของผู้เล่น
-	self.playerClassExp = {}      -- เก็บค่าประสบการณ์คลาสของผู้เล่น
-	self.onClassAssigned = nil    -- ฟังก์ชันเรียกเมื่อมีการกำหนดคลาสให้ผู้เล่น
-	self.onLevelUp = nil          -- ฟังก์ชันเรียกเมื่อผู้เล่นเลเวลอัพ
-	self.onClassLevelUp = nil     -- ฟังก์ชันเรียกเมื่อผู้เล่นเลเวลคลาสอัพ
-	self.debugMode = false        -- โหมดดีบัก
+	self.playerClasses = {}       -- Player classes
+	self.playerLevels = {}        -- Player levels
+	self.playerClassLevels = {}   -- Player class levels
+	self.playerExp = {}           -- Player experience
+	self.playerClassExp = {}      -- Player class experience
+	self.onClassAssigned = nil    -- Called when class assigned
+	self.onLevelUp = nil          -- Called when player levels up
+	self.onClassLevelUp = nil     -- Called when class levels up
 
 	return self
 end
 
--- รับรายชื่อคลาสพื้นฐานทั้งหมด (เฉพาะคลาสเริ่มต้น)
+-- Get all starter classes
 function ClassSystem:GetStarterClasses()
 	local classes = {}
 	for className, _ in pairs(STARTER_CLASSES) do
@@ -49,7 +48,7 @@ function ClassSystem:GetStarterClasses()
 	return classes
 end
 
--- รับรายชื่อคลาสทั้งหมด (รวมคลาสอัพเกรด)
+-- Get all classes (including upgrades)
 function ClassSystem:GetAllClasses()
 	local classes = {}
 	for className, _ in pairs(ClassData.Classes) do
@@ -58,42 +57,41 @@ function ClassSystem:GetAllClasses()
 	return classes
 end
 
--- รับข้อมูลคลาส
+-- Get class data
 function ClassSystem:GetClassData(className)
 	return ClassData:GetClassInfo(className)
 end
 
--- รับคลาสพื้นฐานแบบสุ่ม
+-- Get random starter class
 function ClassSystem:GetRandomClass()
 	local starterClasses = self:GetStarterClasses()
 	return starterClasses[math.random(1, #starterClasses)]
 end
 
--- กำหนดคลาสให้ผู้เล่น
+-- Assign class to player
 function ClassSystem:AssignClassToPlayer(player, className)
-	-- ตรวจสอบว่าคลาสมีอยู่จริง
+	-- Validate class
 	if not ClassData:GetClassInfo(className) then 
 		warn("Class not found: " .. tostring(className))
 		return false 
 	end
 
-	-- เก็บการกำหนดคลาส
+	-- Store class assignment
 	self.playerClasses[player.UserId] = className
 
-	-- เริ่มต้นเลเวลและประสบการณ์
+	-- Initialize level and experience
 	self.playerLevels[player.UserId] = 1
 	self.playerClassLevels[player.UserId] = 1
 	self.playerExp[player.UserId] = 0
 	self.playerClassExp[player.UserId] = 0
 
-	-- อัปเดตสถิติผู้เล่นผ่าน GameManager
+	-- Update player stats via GameManager
 	local playerManager = _G.GameManager and _G.GameManager.playerManager
 	if playerManager then
-		-- อัปเดตสเตตัสจากคลาส (แก้ไขแล้ว)
 		self:UpdatePlayerStatsFromClass(player, playerManager)
 	end
 
-	-- ส่ง RemoteEvent เพื่อแจ้งให้ไคลเอนต์ทราบ
+	-- Send RemoteEvent to client
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
 	local uiRemotes = remotes:WaitForChild("UIRemotes")
 	local classAssignedEvent = uiRemotes:WaitForChild("ClassAssigned")
@@ -101,23 +99,17 @@ function ClassSystem:AssignClassToPlayer(player, className)
 
 	if classAssignedEvent and classData then
 		classAssignedEvent:FireClient(player, className, classData)
-	else
-		warn("Failed to fire ClassAssigned event for player: " .. player.Name)
 	end
 
-	-- เรียกฟังก์ชันคอลแบ็คถ้ามีการกำหนด
+	-- Call callback if assigned
 	if self.onClassAssigned then
 		self.onClassAssigned(player, className, classData)
-	end
-
-	if self.debugMode then
-		print("[ClassSystem] Assigned class: " .. className .. " to player: " .. player.Name)
 	end
 
 	return true
 end
 
--- อัปเดตสถิติผู้เล่นตามข้อมูลคลาส (แก้ไขให้ใช้ค่าจาก ClassData อย่างถูกต้อง)
+-- Update player stats based on class
 function ClassSystem:UpdatePlayerStatsFromClass(player, playerManager)
 	local userId = typeof(player) == "Instance" and player:IsA("Player") and player.UserId or player
 	local className = self.playerClasses[userId]
@@ -139,31 +131,26 @@ function ClassSystem:UpdatePlayerStatsFromClass(player, playerManager)
 		return false
 	end
 
-	-- อัปเดตข้อมูลพื้นฐานของผู้เล่น
+	-- Update base stats
 	local baseStats = classData.BaseStats
 	if baseStats then
-		if self.debugMode then
-			print("[ClassSystem] Applying stats for player: " .. tostring(userId) .. " class: " .. className)
-			print("[ClassSystem] Base MaxHP: " .. tostring(baseStats.MaxHP))
-		end
-
-		-- อัปเดตค่า HP และ MP ให้ใช้ค่าจาก ClassData โดยตรง
+		-- Update HP and MP
 		playerData.stats.maxHp = baseStats.MaxHP
-		playerData.stats.hp = baseStats.MaxHP  -- เริ่มด้วยพลังชีวิตเต็ม
+		playerData.stats.hp = baseStats.MaxHP  -- Start with full health
 		playerData.stats.maxMp = baseStats.MaxMP
-		playerData.stats.mp = baseStats.MaxMP  -- เริ่มด้วยพลังเวทเต็ม
+		playerData.stats.mp = baseStats.MaxMP  -- Start with full mana
 
-		-- อัปเดตค่าสถิติการโจมตีและป้องกัน
+		-- Update combat stats
 		playerData.stats.attack = baseStats.ATK
 		playerData.stats.defense = baseStats.DEF
 		playerData.stats.magic = baseStats.MAGIC
-		playerData.stats.magicDefense = baseStats.MDEF or baseStats.DEF  -- ใช้ DEF ถ้าไม่มี MDEF
+		playerData.stats.magicDefense = baseStats.MDEF or baseStats.DEF  -- Use DEF if MDEF not specified
 		playerData.stats.agility = baseStats.AGI
 
-		-- บันทึกข้อมูลคลาส
+		-- Store class
 		playerData.class = className
 
-		-- ส่งข้อมูลสถิติใหม่ไปให้ผู้เล่น
+		-- Send new stats to player
 		local remotes = ReplicatedStorage:WaitForChild("Remotes")
 		local uiRemotes = remotes:WaitForChild("UIRemotes")
 		local updatePlayerStatsEvent = uiRemotes:WaitForChild("UpdatePlayerStats")
@@ -183,13 +170,6 @@ function ClassSystem:UpdatePlayerStatsFromClass(player, playerManager)
 				class = className,
 				money = playerData.stats.money or 100
 			})
-
-			if self.debugMode then
-				print("[ClassSystem] Updated player stats: HP=" .. playerData.stats.hp .. 
-					"/" .. playerData.stats.maxHp)
-			end
-		else
-			warn("Failed to find UpdatePlayerStats event")
 		end
 
 		return true
@@ -198,49 +178,49 @@ function ClassSystem:UpdatePlayerStatsFromClass(player, playerManager)
 	return false
 end
 
--- รับคลาสของผู้เล่น
+-- Get player's class
 function ClassSystem:GetPlayerClass(player)
 	local userId = typeof(player) == "Instance" and player:IsA("Player") and player.UserId or player
 	return self.playerClasses[userId]
 end
 
--- รับเลเวลของผู้เล่น
+-- Get player's level
 function ClassSystem:GetPlayerLevel(player)
 	local userId = typeof(player) == "Instance" and player:IsA("Player") and player.UserId or player
 	return self.playerLevels[userId] or 1
 end
 
--- รับเลเวลคลาสของผู้เล่น
+-- Get player's class level
 function ClassSystem:GetPlayerClassLevel(player)
 	local userId = typeof(player) == "Instance" and player:IsA("Player") and player.UserId or player
 	return self.playerClassLevels[userId] or 1
 end
 
--- รับค่าประสบการณ์ที่ต้องการสำหรับเลเวลถัดไป
+-- Get exp required for next level
 function ClassSystem:GetExpForNextLevel(level)
 	return (level + 1) * (level + 1) * EXP_TO_LEVEL_DIVIDER
 end
 
--- รับค่าประสบการณ์คลาสที่ต้องการสำหรับเลเวลคลาสถัดไป
+-- Get class exp required for next level
 function ClassSystem:GetClassExpForNextLevel(classLevel)
 	return (classLevel + 1) * (classLevel + 1) * CLASS_EXP_DIVIDER
 end
 
--- เพิ่มประสบการณ์ให้ผู้เล่น
+-- Add experience to player
 function ClassSystem:AddExperience(player, amount)
 	local userId = typeof(player) == "Instance" and player:IsA("Player") and player.UserId or player
 
 	if not self.playerExp[userId] then return false end
 
-	-- เพิ่มประสบการณ์
+	-- Add experience
 	self.playerExp[userId] = self.playerExp[userId] + amount
 	self.playerClassExp[userId] = self.playerClassExp[userId] + math.floor(amount * 0.7)
 
-	-- ตรวจสอบการเลเวลอัพ
+	-- Check for level up
 	local leveledUp = self:CheckLevelUp(userId)
 	local classLeveledUp = self:CheckClassLevelUp(userId)
 
-	-- ส่ง RemoteEvent แจ้งค่าประสบการณ์ที่เปลี่ยนแปลง
+	-- Send updated exp to client
 	local player = Players:GetPlayerByUserId(userId)
 	if player then
 		local remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -260,9 +240,9 @@ function ClassSystem:AddExperience(player, amount)
 	return leveledUp or classLeveledUp
 end
 
--- ตรวจสอบการเลเวลอัพ
+-- Check for level up
 function ClassSystem:CheckLevelUp(userId)
-	-- สูตรคำนวณเลเวล: Level = sqrt(Experience / EXP_TO_LEVEL_DIVIDER) + 1
+	-- Calculate level: Level = sqrt(Experience / EXP_TO_LEVEL_DIVIDER) + 1
 	local newLevel = math.floor(math.sqrt(self.playerExp[userId] / EXP_TO_LEVEL_DIVIDER)) + 1
 
 	if newLevel > self.playerLevels[userId] then
@@ -270,43 +250,43 @@ function ClassSystem:CheckLevelUp(userId)
 		local levelDiff = newLevel - oldLevel
 		self.playerLevels[userId] = newLevel
 
-		-- คำนวณการเพิ่มของสถิติ
+		-- Calculate stat increases
 		local className = self.playerClasses[userId]
 		local classData = ClassData:GetClassInfo(className)
 		local statIncreases = {}
 
 		if classData and classData.BaseStats then
-			-- ค่าการเติบโตสำหรับแต่ละสถิติ
+			-- Growth rates for each stat
 			local growthRates = {
-				MaxHP = 0.1,    -- เพิ่ม 10% ของค่าพื้นฐานต่อเลเวล
-				MaxMP = 0.08,   -- เพิ่ม 8% ของค่าพื้นฐานต่อเลเวล
-				ATK = 0.12,     -- เพิ่ม 12% ของค่าพื้นฐานต่อเลเวล
-				DEF = 0.09,     -- เพิ่ม 9% ของค่าพื้นฐานต่อเลเวล
-				MAGIC = 0.11,   -- เพิ่ม 11% ของค่าพื้นฐานต่อเลเวล
-				MDEF = 0.09,    -- เพิ่ม 9% ของค่าพื้นฐานต่อเลเวล
-				AGI = 0.08      -- เพิ่ม 8% ของค่าพื้นฐานต่อเลเวล
+				MaxHP = 0.1,    -- 10% of base value per level
+				MaxMP = 0.08,   -- 8% of base value per level
+				ATK = 0.12,     -- 12% of base value per level
+				DEF = 0.09,     -- 9% of base value per level
+				MAGIC = 0.11,   -- 11% of base value per level
+				MDEF = 0.09,    -- 9% of base value per level
+				AGI = 0.08      -- 8% of base value per level
 			}
 
-			-- คำนวณค่าเพิ่มตามการเติบโต
+			-- Calculate stat increases
 			for stat, baseValue in pairs(classData.BaseStats) do
 				local growthRate = growthRates[stat] or 0.1
 				statIncreases[stat] = math.floor(baseValue * growthRate * levelDiff)
 			end
 		end
 
-		-- แจ้งไคลเอนต์และอัปเดตสถิติ
+		-- Notify client and update stats
 		local player = Players:GetPlayerByUserId(userId)
 		if player then
-			-- ส่งการแจ้งเตือนการเลเวลอัพ
+			-- Send level up notification
 			local remotes = ReplicatedStorage:WaitForChild("Remotes")
 			local uiRemotes = remotes:WaitForChild("UIRemotes")
 			local levelUpEvent = uiRemotes:WaitForChild("LevelUp")
 			levelUpEvent:FireClient(player, newLevel, statIncreases)
 
-			-- อัปเดตสถิติผู้เล่น
+			-- Apply stat increases
 			self:ApplyStatIncreases(player, statIncreases)
 
-			-- เรียกฟังก์ชันคอลแบ็คถ้ามีการกำหนด
+			-- Call level up callback
 			if self.onLevelUp then
 				self.onLevelUp(player, newLevel, oldLevel, statIncreases)
 			end
@@ -318,9 +298,9 @@ function ClassSystem:CheckLevelUp(userId)
 	return false
 end
 
--- ตรวจสอบการเลเวลอัพของคลาส
+-- Check for class level up
 function ClassSystem:CheckClassLevelUp(userId)
-	-- สูตรคำนวณเลเวลคลาส: sqrt(ClassExp / CLASS_EXP_DIVIDER) + 1
+	-- Calculate class level: sqrt(ClassExp / CLASS_EXP_DIVIDER) + 1
 	local newClassLevel = math.floor(math.sqrt(self.playerClassExp[userId] / CLASS_EXP_DIVIDER)) + 1
 
 	if newClassLevel > self.playerClassLevels[userId] then
@@ -328,54 +308,54 @@ function ClassSystem:CheckClassLevelUp(userId)
 		local levelDiff = newClassLevel - oldClassLevel
 		self.playerClassLevels[userId] = newClassLevel
 
-		-- คำนวณการเพิ่มของสถิติตามคลาส
+		-- Calculate class-specific stat increases
 		local className = self.playerClasses[userId]
 		local classData = ClassData:GetClassInfo(className)
 		local statIncreases = {}
 
 		if classData and classData.BaseStats then
-			-- ค่าการเติบโตสำหรับแต่ละสถิติ
+			-- Growth rates for each stat
 			local growthRates = {
-				MaxHP = 0.12,    -- เพิ่ม 12% ของค่าพื้นฐานต่อเลเวล
-				MaxMP = 0.10,    -- เพิ่ม 10% ของค่าพื้นฐานต่อเลเวล
-				ATK = 0.15,      -- เพิ่ม 15% ของค่าพื้นฐานต่อเลเวล
-				DEF = 0.12,      -- เพิ่ม 12% ของค่าพื้นฐานต่อเลเวล
-				MAGIC = 0.15,    -- เพิ่ม 15% ของค่าพื้นฐานต่อเลเวล
-				MDEF = 0.12,     -- เพิ่ม 12% ของค่าพื้นฐานต่อเลเวล
-				AGI = 0.10       -- เพิ่ม 10% ของค่าพื้นฐานต่อเลเวล
+				MaxHP = 0.12,    -- 12% of base value per level
+				MaxMP = 0.10,    -- 10% of base value per level
+				ATK = 0.15,      -- 15% of base value per level
+				DEF = 0.12,      -- 12% of base value per level
+				MAGIC = 0.15,    -- 15% of base value per level
+				MDEF = 0.12,     -- 12% of base value per level
+				AGI = 0.10       -- 10% of base value per level
 			}
 
-			-- คำนวณค่าเพิ่มตามการเติบโตและเพิ่มโบนัสตามคลาส
+			-- Calculate stat increases with class bonuses
 			for stat, baseValue in pairs(classData.BaseStats) do
 				local growthRate = growthRates[stat] or 0.12
 
-				-- เพิ่มโบนัสตามคลาส
+				-- Class-specific bonuses
 				local enhancement = 1.0
 				if className == "Warrior" and (stat == "ATK" or stat == "DEF" or stat == "MaxHP") then
-					enhancement = 1.5 -- โบนัส 50% สำหรับพลังโจมตี, ป้องกัน และ HP ของนักรบ
+					enhancement = 1.5 -- 50% bonus for Warriors' ATK, DEF, HP
 				elseif className == "Knight" and (stat == "DEF" or stat == "MaxHP") then
-					enhancement = 1.8 -- โบนัส 80% สำหรับป้องกันและ HP ของอัศวิน
+					enhancement = 1.8 -- 80% bonus for Knights' DEF, HP
 				elseif className == "Paladin" and (stat == "DEF" or stat == "MaxHP" or stat == "MDEF") then
-					enhancement = 2.0 -- โบนัส 100% สำหรับป้องกัน, HP และการป้องกันเวทย์ของพาลาดิน
+					enhancement = 2.0 -- 100% bonus for Paladins' DEF, HP, MDEF
 				elseif className == "Mage" and (stat == "MAGIC" or stat == "MaxMP") then
-					enhancement = 1.5 -- โบนัส 50% สำหรับพลังเวทย์และ MP ของเมจ
+					enhancement = 1.5 -- 50% bonus for Mages' MAGIC, MP
 				elseif className == "Wizard" and (stat == "MAGIC" or stat == "MaxMP") then
-					enhancement = 1.8 -- โบนัส 80% สำหรับพลังเวทย์และ MP ของวิซาร์ด
+					enhancement = 1.8 -- 80% bonus for Wizards' MAGIC, MP
 				elseif className == "Archmage" and (stat == "MAGIC" or stat == "MaxMP" or stat == "MDEF") then
-					enhancement = 2.0 -- โบนัส 100% สำหรับพลังเวทย์, MP และการป้องกันเวทย์ของอาร์คเมจ
+					enhancement = 2.0 -- 100% bonus for Archmages' MAGIC, MP, MDEF
 				elseif className == "Thief" and (stat == "ATK" or stat == "AGI") then
-					enhancement = 1.3 -- โบนัส 30% สำหรับพลังโจมตีและความคล่องตัวของโจร
+					enhancement = 1.3 -- 30% bonus for Thieves' ATK, AGI
 				elseif className == "Assassin" and (stat == "ATK" or stat == "AGI") then
-					enhancement = 1.6 -- โบนัส 60% สำหรับพลังโจมตีและความคล่องตัวของนักฆ่า
+					enhancement = 1.6 -- 60% bonus for Assassins' ATK, AGI
 				elseif className == "Shadow" and (stat == "ATK" or stat == "AGI" or stat == "DEF") then
-					enhancement = 1.8 -- โบนัส 80% สำหรับพลังโจมตี, ความคล่องตัว และการป้องกันของแชโดว์
+					enhancement = 1.8 -- 80% bonus for Shadows' ATK, AGI, DEF
 				end
 
 				statIncreases[stat] = math.floor(baseValue * growthRate * enhancement * levelDiff)
 			end
 		end
 
-		-- ตรวจสอบการอัพเกรดเป็นคลาสขั้นสูง
+		-- Check for class upgrade
 		local nextClass = nil
 		local upgradeCondition = nil
 
@@ -386,17 +366,17 @@ function ClassSystem:CheckClassLevelUp(userId)
 
 		local canUpgradeClass = false
 
-		-- ตรวจสอบเงื่อนไขการอัพเกรด
+		-- Check upgrade condition
 		if upgradeCondition and nextClass then
 			if upgradeCondition.Type == "Level" and newClassLevel >= upgradeCondition.Value then
 				canUpgradeClass = true
 			end
 		end
 
-		-- แจ้งไคลเอนต์และอัปเดตสถิติ
+		-- Notify client and update stats
 		local player = Players:GetPlayerByUserId(userId)
 		if player then
-			-- ส่งการแจ้งเตือนการเลเวลอัพของคลาส
+			-- Send class level up notification
 			local remotes = ReplicatedStorage:WaitForChild("Remotes")
 			local uiRemotes = remotes:WaitForChild("UIRemotes")
 			local classLevelUpEvent = uiRemotes:WaitForChild("ClassLevelUp")
@@ -408,10 +388,10 @@ function ClassSystem:CheckClassLevelUp(userId)
 				canUpgradeClass and nextClass or nil
 			)
 
-			-- อัปเดตสถิติผู้เล่น
+			-- Apply stat increases
 			self:ApplyStatIncreases(player, statIncreases)
 
-			-- แจ้งเตือนถ้าสามารถอัพเกรดคลาสได้
+			-- Notify if class upgrade available
 			if canUpgradeClass and nextClass then
 				local classUpgradeEvent = uiRemotes:FindFirstChild("ClassUpgradeAvailable")
 				if classUpgradeEvent then
@@ -420,7 +400,7 @@ function ClassSystem:CheckClassLevelUp(userId)
 				end
 			end
 
-			-- เรียกฟังก์ชันคอลแบ็คถ้ามีการกำหนด
+			-- Call class level up callback
 			if self.onClassLevelUp then
 				self.onClassLevelUp(player, newClassLevel, oldClassLevel, statIncreases, canUpgradeClass and nextClass or nil)
 			end
@@ -432,7 +412,7 @@ function ClassSystem:CheckClassLevelUp(userId)
 	return false
 end
 
--- ฟังก์ชันช่วยสำหรับการเพิ่มค่าสถิติ
+-- Apply stat increases to player
 function ClassSystem:ApplyStatIncreases(player, statIncreases)
 	local playerManager = _G.GameManager and _G.GameManager.playerManager
 	if not playerManager then return end
@@ -440,7 +420,7 @@ function ClassSystem:ApplyStatIncreases(player, statIncreases)
 	local playerData = playerManager:GetPlayerData(player)
 	if not playerData then return end
 
-	-- แปลงชื่อสถิติจาก ClassData เป็นชื่อใน PlayerManager
+	-- Map ClassData stat names to PlayerManager stat names
 	local statMapping = {
 		MaxHP = "maxHp",
 		MaxMP = "maxMp",
@@ -451,24 +431,24 @@ function ClassSystem:ApplyStatIncreases(player, statIncreases)
 		AGI = "agility"
 	}
 
-	-- อัปเดตแต่ละสถิติ
+	-- Update each stat
 	for classDataStat, increase in pairs(statIncreases) do
 		local playerDataStat = statMapping[classDataStat]
 
 		if playerDataStat then
 			if playerDataStat == "maxHp" then
 				playerData.stats.maxHp = playerData.stats.maxHp + increase
-				playerData.stats.hp = playerData.stats.maxHp -- ฟื้นฟู HP เต็มเมื่อเลเวลอัพ
+				playerData.stats.hp = playerData.stats.maxHp -- Restore full HP on level up
 			elseif playerDataStat == "maxMp" then
 				playerData.stats.maxMp = playerData.stats.maxMp + increase
-				playerData.stats.mp = playerData.stats.maxMp -- ฟื้นฟู MP เต็มเมื่อเลเวลอัพ
+				playerData.stats.mp = playerData.stats.maxMp -- Restore full MP on level up
 			else
 				playerData.stats[playerDataStat] = (playerData.stats[playerDataStat] or 0) + increase
 			end
 		end
 	end
 
-	-- ส่งข้อมูลสถิติใหม่ไปให้ผู้เล่น
+	-- Send updated stats to client
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
 	local uiRemotes = remotes:WaitForChild("UIRemotes")
 	local updatePlayerStatsEvent = uiRemotes:WaitForChild("UpdatePlayerStats")
@@ -489,14 +469,7 @@ function ClassSystem:ApplyStatIncreases(player, statIncreases)
 	})
 end
 
--- เปิด/ปิดโหมดดีบัก
-function ClassSystem:EnableDebugMode(enabled)
-	self.debugMode = enabled or false
-	print("[ClassSystem] Debug mode " .. (self.debugMode and "enabled" or "disabled"))
-	return self.debugMode
-end
-
--- รีเซ็ตข้อมูลคลาสทั้งหมด (สำหรับการรีสตาร์ทเกม)
+-- Reset all player class data (for game restart)
 function ClassSystem:ResetAllPlayerClasses()
 	self.playerClasses = {}
 	self.playerLevels = {}
