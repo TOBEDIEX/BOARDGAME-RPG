@@ -1,23 +1,23 @@
 -- InventorySystem.lua
--- โมดูลหลักสำหรับระบบอินเวนทอรี
--- Version: 1.0.0
+-- Core module for inventory management
+-- Version: 2.0.0 (Optimized)
 
 local InventorySystem = {}
 InventorySystem.__index = InventorySystem
 
 -- Constants
-local MAX_INVENTORY_SIZE = 50 -- จำนวนไอเทมสูงสุดทั้งหมด
-local MAX_EQUIPPABLE_ITEMS = 6 -- จำนวนไอเทมที่สวมใส่ได้พร้อมกัน (อาวุธ, หมวก, เกราะ, ถุงมือ, รองเท้า, เครื่องประดับ)
+local MAX_INVENTORY_SIZE = 50
+local MAX_EQUIPPABLE_ITEMS = 6
 
--- ประเภทของไอเทม
+-- Item types
 local ITEM_TYPES = {
-	GENERAL = 1,    -- ไอเทมทั่วไป
-	EQUIPMENT = 2,  -- อาวุธและเกราะ
-	SKILL = 3,      -- คัมภีร์สกิล
-	SPECIAL = 4     -- ไอเทมพิเศษ/เควส
+	GENERAL = 1,    -- General items
+	EQUIPMENT = 2,  -- Weapons and armor
+	SKILL = 3,      -- Skill books
+	SPECIAL = 4     -- Special/quest items
 }
 
--- ประเภทย่อยของอุปกรณ์
+-- Equipment slots
 local EQUIPMENT_SLOTS = {
 	WEAPON = 1,
 	HELMET = 2,
@@ -27,46 +27,14 @@ local EQUIPMENT_SLOTS = {
 	ACCESSORY = 6
 }
 
--- โครงสร้างข้อมูลไอเทม
---[[
-    ItemData Structure:
-    {
-        id = "item_id",                -- รหัสไอเทม (string)
-        name = "Item Name",            -- ชื่อไอเทม (string)
-        description = "Description",   -- คำอธิบาย (string)
-        type = ITEM_TYPE.GENERAL,      -- ประเภทไอเทม (number)
-        subType = nil,                 -- ประเภทย่อย (เฉพาะอุปกรณ์) (number หรือ nil)
-        rarity = 1,                    -- ความหายาก (1-5)
-        stackable = true,              -- สามารถซ้อนกันได้หรือไม่ (boolean)
-        maxStack = 99,                 -- จำนวนสูงสุดที่ซ้อนได้ (number)
-        sellPrice = 10,                -- ราคาขาย (number)
-        buyPrice = 20,                 -- ราคาซื้อ (number)
-        usable = true,                 -- ใช้งานได้หรือไม่ (boolean)
-        consumable = true,             -- เป็นวัตถุสิ้นเปลืองหรือไม่ (boolean)
-        questItem = false,             -- เป็นไอเทมเควสหรือไม่ (boolean)
-        iconId = "rbxassetid://123456", -- ไอดีไอคอน (string)
-        stats = {                      -- ค่าสถิติที่ได้รับ (table หรือ nil)
-            attack = 5,
-            defense = 0,
-            hp = 0,
-            mp = 0,
-            -- และอื่นๆ
-        },
-        effects = {                    -- เอฟเฟกต์พิเศษ (table หรือ nil)
-            -- ต่างๆ
-        },
-        useFunction = nil              -- ฟังก์ชันที่จะเรียกเมื่อใช้ไอเทม (function หรือ nil)
-    }
---]]
-
 -- Constructor
 function InventorySystem.new()
 	local self = setmetatable({}, InventorySystem)
 
 	-- Inventory structure
-	self.items = {}            -- รายการไอเทมทั้งหมด
-	self.equippedItems = {}    -- ไอเทมที่สวมใส่อยู่
-	self.itemCount = 0         -- จำนวนไอเทมทั้งหมด
+	self.items = {}            -- All items
+	self.equippedItems = {}    -- Equipped items
+	self.itemCount = 0         -- Total item count
 	self.maxSize = MAX_INVENTORY_SIZE
 
 	-- Initialize equipped item slots
@@ -86,9 +54,7 @@ function InventorySystem.GetEquipmentSlots()
 	return EQUIPMENT_SLOTS
 end
 
--- Core inventory functions
-
--- เพิ่มไอเทมเข้าไปในคลัง
+-- Add item to inventory
 function InventorySystem:AddItem(itemData, quantity)
 	if not itemData then
 		warn("InventorySystem:AddItem - itemData is nil")
@@ -97,26 +63,26 @@ function InventorySystem:AddItem(itemData, quantity)
 
 	quantity = quantity or 1
 
-	-- ตรวจสอบว่าพื้นที่เพียงพอหรือไม่
+	-- Check if there's enough space
 	if not self:HasSpace() and not self:CanStack(itemData) then
 		return false, "Inventory is full"
 	end
 
-	-- ตรวจสอบว่าเป็นไอเทมแบบซ้อนกันได้หรือไม่
+	-- Check if item is stackable
 	if itemData.stackable then
-		-- หาว่ามีสแต็คที่มีอยู่แล้วหรือไม่
-		for i, item in pairs(self.items) do
+		-- Look for existing stack
+		for _, item in pairs(self.items) do
 			if item.id == itemData.id then
-				-- คำนวณจำนวนที่สามารถเพิ่มได้
+				-- Calculate how many can be added
 				local maxAddable = (item.maxStack or 99) - (item.quantity or 0)
 				local toAdd = math.min(quantity, maxAddable)
 
-				-- ถ้าเพิ่มได้
+				-- If we can add some
 				if toAdd > 0 then
 					item.quantity = (item.quantity or 0) + toAdd
 					quantity = quantity - toAdd
 
-					-- ถ้าเพิ่มครบแล้ว
+					-- If we've added all
 					if quantity <= 0 then
 						return true, "Item added successfully"
 					end
@@ -125,20 +91,20 @@ function InventorySystem:AddItem(itemData, quantity)
 		end
 	end
 
-	-- ถ้ายังมีจำนวนเหลือ ต้องสร้าง entry ใหม่
+	-- If there's still quantity remaining, create new entries
 	while quantity > 0 and self.itemCount < self.maxSize do
 		local newItem = table.clone(itemData)
 		local stackSize = math.min(quantity, newItem.maxStack or 99)
 
 		newItem.quantity = stackSize
-		newItem.inventoryId = self:GenerateInventoryId() -- สร้าง ID ภายใน
+		newItem.inventoryId = self:GenerateInventoryId()
 
 		table.insert(self.items, newItem)
 		self.itemCount = self.itemCount + 1
 		quantity = quantity - stackSize
 	end
 
-	-- ถ้ายังมีจำนวนเหลือ แสดงว่าเต็มแล้ว
+	-- If there's still quantity remaining, inventory is full
 	if quantity > 0 then
 		return true, "Some items were added, but inventory is now full"
 	end
@@ -146,17 +112,17 @@ function InventorySystem:AddItem(itemData, quantity)
 	return true, "Item added successfully"
 end
 
--- สร้าง ID ภายในสำหรับไอเทมในอินเวนทอรี
+-- Generate unique internal ID for inventory item
 function InventorySystem:GenerateInventoryId()
 	return tostring(os.time()) .. "_" .. math.random(1000, 9999)
 end
 
--- ตรวจสอบว่ามีพื้นที่เหลือหรือไม่
+-- Check if there's space available
 function InventorySystem:HasSpace()
 	return self.itemCount < self.maxSize
 end
 
--- ตรวจสอบว่าไอเทมซ้อนกับของที่มีอยู่ได้หรือไม่
+-- Check if item can stack with existing items
 function InventorySystem:CanStack(itemData)
 	if not itemData.stackable then
 		return false
@@ -171,19 +137,19 @@ function InventorySystem:CanStack(itemData)
 	return false
 end
 
--- ลบไอเทมออกจากคลัง
+-- Remove item from inventory
 function InventorySystem:RemoveItem(inventoryId, quantity)
 	quantity = quantity or 1
 
 	for i, item in pairs(self.items) do
 		if item.inventoryId == inventoryId then
 			if (item.quantity or 1) <= quantity then
-				-- ลบทั้งหมด
+				-- Remove all
 				table.remove(self.items, i)
 				self.itemCount = self.itemCount - 1
 				return true, "Item removed"
 			else
-				-- ลบบางส่วน
+				-- Remove some
 				item.quantity = item.quantity - quantity
 				return true, "Some items removed"
 			end
@@ -193,25 +159,25 @@ function InventorySystem:RemoveItem(inventoryId, quantity)
 	return false, "Item not found"
 end
 
--- ลบไอเทมตาม itemId
+-- Remove item by ID
 function InventorySystem:RemoveItemById(itemId, quantity)
 	quantity = quantity or 1
 	local remainingToRemove = quantity
 	local removed = false
 
-	-- สร้างตัวแปรเก็บดัชนีที่ต้องลบ
+	-- Create list of indices to remove
 	local indicesToRemove = {}
 
-	-- หาไอเทมที่ต้องการลบ
+	-- Find items to remove
 	for i, item in pairs(self.items) do
 		if item.id == itemId and remainingToRemove > 0 then
 			if (item.quantity or 1) <= remainingToRemove then
-				-- ลบทั้งหมด
+				-- Remove all
 				table.insert(indicesToRemove, i)
 				remainingToRemove = remainingToRemove - (item.quantity or 1)
 				removed = true
 			else
-				-- ลบบางส่วน
+				-- Remove some
 				item.quantity = item.quantity - remainingToRemove
 				remainingToRemove = 0
 				removed = true
@@ -220,7 +186,7 @@ function InventorySystem:RemoveItemById(itemId, quantity)
 		end
 	end
 
-	-- ลบรายการที่บันทึกไว้ (ต้องลบจากท้ายมาหน้าเพื่อไม่ให้ดัชนีเปลี่ยน)
+	-- Remove from the end to avoid index shifts
 	table.sort(indicesToRemove, function(a, b) return a > b end)
 	for _, index in ipairs(indicesToRemove) do
 		table.remove(self.items, index)
@@ -238,7 +204,7 @@ function InventorySystem:RemoveItemById(itemId, quantity)
 	return false, "Item not found"
 end
 
--- ค้นหาไอเทมจาก ID ภายในคลัง
+-- Find item by inventory ID
 function InventorySystem:FindItemByInventoryId(inventoryId)
 	for _, item in pairs(self.items) do
 		if item.inventoryId == inventoryId then
@@ -248,7 +214,7 @@ function InventorySystem:FindItemByInventoryId(inventoryId)
 	return nil
 end
 
--- ค้นหาไอเทมทั้งหมดตาม ID
+-- Find all items by item ID
 function InventorySystem:FindAllItemsById(itemId)
 	local results = {}
 
@@ -261,7 +227,7 @@ function InventorySystem:FindAllItemsById(itemId)
 	return results
 end
 
--- นับจำนวนไอเทมทั้งหมดตาม ID
+-- Count total quantity of an item by ID
 function InventorySystem:CountItemsById(itemId)
 	local count = 0
 
@@ -274,7 +240,7 @@ function InventorySystem:CountItemsById(itemId)
 	return count
 end
 
--- ใช้ไอเทม
+-- Use an item
 function InventorySystem:UseItem(inventoryId)
 	local item = self:FindItemByInventoryId(inventoryId)
 
@@ -286,7 +252,7 @@ function InventorySystem:UseItem(inventoryId)
 		return false, "Item cannot be used"
 	end
 
-	-- เรียกใช้ฟังก์ชันการใช้งานถ้ามี
+	-- Call use function if available
 	local success, result
 	if type(item.useFunction) == "function" then
 		success, result = pcall(item.useFunction, item)
@@ -296,7 +262,7 @@ function InventorySystem:UseItem(inventoryId)
 		end
 	end
 
-	-- ถ้าเป็นไอเทมแบบใช้แล้วหมด ให้ลบออก
+	-- Remove if consumable
 	if item.consumable then
 		return self:RemoveItem(inventoryId, 1)
 	end
@@ -304,7 +270,7 @@ function InventorySystem:UseItem(inventoryId)
 	return true, result or "Item used successfully"
 end
 
--- สวมใส่อุปกรณ์
+-- Equip an item
 function InventorySystem:EquipItem(inventoryId)
 	local item = self:FindItemByInventoryId(inventoryId)
 
@@ -320,26 +286,26 @@ function InventorySystem:EquipItem(inventoryId)
 		return false, "Invalid equipment type"
 	end
 
-	-- ถอดอุปกรณ์ชิ้นเดิมออก (ถ้ามี)
+	-- Unequip existing item in slot
 	if self.equippedItems[item.subType] then
 		local oldItemInventoryId = self.equippedItems[item.subType]
 		self.equippedItems[item.subType] = nil
 
-		-- ทำเครื่องหมายว่าไม่ได้สวมใส่
+		-- Mark as unequipped
 		local oldItem = self:FindItemByInventoryId(oldItemInventoryId)
 		if oldItem then
 			oldItem.equipped = false
 		end
 	end
 
-	-- สวมใส่อุปกรณ์ใหม่
+	-- Equip new item
 	self.equippedItems[item.subType] = inventoryId
 	item.equipped = true
 
 	return true, "Item equipped successfully"
 end
 
--- ถอดอุปกรณ์
+-- Unequip an item
 function InventorySystem:UnequipItem(slotType)
 	if not self.equippedItems[slotType] then
 		return false, "No item equipped in this slot"
@@ -348,7 +314,7 @@ function InventorySystem:UnequipItem(slotType)
 	local inventoryId = self.equippedItems[slotType]
 	self.equippedItems[slotType] = nil
 
-	-- ทำเครื่องหมายว่าไม่ได้สวมใส่
+	-- Mark as unequipped
 	local item = self:FindItemByInventoryId(inventoryId)
 	if item then
 		item.equipped = false
@@ -357,7 +323,7 @@ function InventorySystem:UnequipItem(slotType)
 	return true, "Item unequipped successfully"
 end
 
--- ดูรายการอุปกรณ์ที่สวมใส่
+-- Get all equipped items
 function InventorySystem:GetEquippedItems()
 	local result = {}
 
@@ -371,12 +337,12 @@ function InventorySystem:GetEquippedItems()
 	return result
 end
 
--- ดูรายการไอเทมทั้งหมด
+-- Get all items
 function InventorySystem:GetAllItems()
 	return self.items
 end
 
--- รับรายการไอเทมแยกตามประเภท
+-- Get items by type
 function InventorySystem:GetItemsByType(itemType)
 	local result = {}
 
@@ -389,7 +355,7 @@ function InventorySystem:GetItemsByType(itemType)
 	return result
 end
 
--- คำนวณสถิติจากอุปกรณ์ที่สวมใส่
+-- Calculate stats from equipped items
 function InventorySystem:CalculateEquipmentStats()
 	local stats = {
 		attack = 0,
@@ -400,7 +366,6 @@ function InventorySystem:CalculateEquipmentStats()
 		agility = 0,
 		critRate = 0,
 		evasion = 0
-		-- สถิติอื่นๆ ตามต้องการ
 	}
 
 	for _, inventoryId in pairs(self.equippedItems) do
@@ -417,7 +382,7 @@ function InventorySystem:CalculateEquipmentStats()
 	return stats
 end
 
--- สร้างข้อมูลเซิร์ฟเป็น JSON
+-- Serialize to JSON
 function InventorySystem:Serialize()
 	local data = {
 		items = {},
@@ -426,17 +391,17 @@ function InventorySystem:Serialize()
 		maxSize = self.maxSize
 	}
 
-	-- คัดลอกไอเทมแต่ละชิ้น (ไม่รวมฟังก์ชัน)
+	-- Copy each item (excluding functions)
 	for i, item in ipairs(self.items) do
 		local itemCopy = table.clone(item)
-		itemCopy.useFunction = nil -- ไม่สามารถทำ serialize ฟังก์ชันได้
+		itemCopy.useFunction = nil -- Functions can't be serialized
 		table.insert(data.items, itemCopy)
 	end
 
 	return game:GetService("HttpService"):JSONEncode(data)
 end
 
--- โหลดข้อมูลจาก JSON
+-- Deserialize from JSON
 function InventorySystem:Deserialize(jsonData)
 	if not jsonData or jsonData == "" then
 		return false
@@ -459,43 +424,43 @@ function InventorySystem:Deserialize(jsonData)
 	return true
 end
 
--- คืนค่าจำนวนช่องว่างที่เหลือ
+-- Get remaining space
 function InventorySystem:GetRemainingSpace()
 	return self.maxSize - self.itemCount
 end
 
--- ตรวจสอบว่ามีไอเทมเพียงพอหรือไม่
+-- Check if there are enough items
 function InventorySystem:HasEnoughItems(itemId, quantity)
 	return self:CountItemsById(itemId) >= quantity
 end
 
--- ทำความสะอาดข้อมูล (สำหรับแก้ปัญหาข้อมูลซ้ำซ้อน)
+-- Clean up data (fix duplicates and other issues)
 function InventorySystem:CleanupData()
-	-- ตรวจสอบและแก้ไขจำนวนไอเทมให้ถูกต้อง
+	-- Fix item count
 	local actualCount = #self.items
 	if self.itemCount ~= actualCount then
 		self.itemCount = actualCount
 	end
 
-	-- ตรวจสอบ ID ภายในไม่ให้ซ้ำกัน
+	-- Check for duplicate inventory IDs
 	local idMap = {}
 	for i, item in ipairs(self.items) do
 		if not item.inventoryId then
 			item.inventoryId = self:GenerateInventoryId()
 		elseif idMap[item.inventoryId] then
-			-- ถ้ามีการซ้ำกัน สร้างใหม่
+			-- If duplicate, generate new ID
 			item.inventoryId = self:GenerateInventoryId()
 		end
 		idMap[item.inventoryId] = true
 	end
 
-	-- ตรวจสอบอุปกรณ์ที่สวมใส่ว่ายังมีอยู่หรือไม่
+	-- Verify equipped items exist
 	for slot, inventoryId in pairs(self.equippedItems) do
 		local found = false
 		for _, item in ipairs(self.items) do
 			if item.inventoryId == inventoryId then
 				found = true
-				-- ตรวจสอบว่าฟิลด์ equipped เป็นจริง
+				-- Ensure equipped flag is set
 				if not item.equipped then
 					item.equipped = true
 				end
@@ -504,7 +469,7 @@ function InventorySystem:CleanupData()
 		end
 
 		if not found then
-			-- ถ้าไม่พบไอเทมที่อ้างถึง ให้ลบออกจากสล็อต
+			-- If referenced item not found, clear slot
 			self.equippedItems[slot] = nil
 		end
 	end
