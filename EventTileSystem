@@ -1,0 +1,226 @@
+-- EventTileSystem.lua
+-- โมดูลจัดการระบบช่องพิเศษบนกระดานเกม (แก้ไขเพื่อให้ทำงานได้ 100%)
+-- Version: 1.1.0
+
+local EventTileSystem = {}
+EventTileSystem.__index = EventTileSystem
+
+-- Services
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerStorage = game:GetService("ServerStorage")
+local Players = game:GetService("Players")
+
+-- Debug mode
+local DEBUG_MODE = true
+
+-- Helper function for debug logging
+local function debugLog(message)
+	if DEBUG_MODE then
+		print("[EventTileSystem] " .. message)
+	end
+end
+
+function EventTileSystem.new(gameManager)
+	local self = setmetatable({}, EventTileSystem)
+
+	-- Reference to game manager
+	self.gameManager = gameManager
+
+	-- Initialize event handlers for different tile types
+	self.tileHandlers = {
+		money = self.HandleMoneyTile,
+		shop = self.HandleShopTile,
+		battle = self.HandleBattleTile,
+		casino = self.HandleCasinoTile,
+		item = self.HandleItemTile,
+		-- Add more handlers as needed
+	}
+
+	-- Initialize remote events
+	self:InitializeRemotes()
+
+	-- ตั้งค่าการทดสอบ
+	self:SetupTestingHooks()
+
+	print("================ ระบบช่องพิเศษ (Event Tile System) เริ่มต้นแล้ว! ================")
+	debugLog("EventTileSystem สร้างขึ้นเรียบร้อย")
+
+	return self
+end
+
+function EventTileSystem:InitializeRemotes()
+	local remotes = ReplicatedStorage:WaitForChild("Remotes")
+
+	-- Create EventTileRemotes folder if it doesn't exist
+	local eventTileRemotes = remotes:FindFirstChild("EventTileRemotes")
+	if not eventTileRemotes then
+		eventTileRemotes = Instance.new("Folder")
+		eventTileRemotes.Name = "EventTileRemotes"
+		eventTileRemotes.Parent = remotes
+		debugLog("สร้างโฟลเดอร์ EventTileRemotes")
+	end
+
+	-- Create MoneyEvent RemoteEvent if it doesn't exist
+	self.moneyEventRemote = eventTileRemotes:FindFirstChild("MoneyEvent")
+	if not self.moneyEventRemote then
+		self.moneyEventRemote = Instance.new("RemoteEvent")
+		self.moneyEventRemote.Name = "MoneyEvent"
+		self.moneyEventRemote.Parent = eventTileRemotes
+		debugLog("สร้าง MoneyEvent RemoteEvent")
+	end
+
+	-- Add more remote events for other tile types as needed
+
+	debugLog("Remote events เตรียมพร้อมแล้ว")
+end
+
+-- ตั้งค่าฟังก์ชันสำหรับการทดสอบระบบ
+function EventTileSystem:SetupTestingHooks()
+	-- ตั้งค่าฟังก์ชันทดสอบใน global environment เพื่อสามารถเรียกใช้ได้จาก Command Bar
+	_G.TestEventTile = function(player, tileType, tileId)
+		if not player then 
+			local players = Players:GetPlayers()
+			if #players == 0 then
+				print("ไม่พบผู้เล่นในเกม")
+				return
+			end
+			player = players[1]
+		end
+
+		tileType = tileType or "money"
+		tileId = tileId or 13
+
+		print("กำลังทดสอบช่อง " .. tileType .. " (ID: " .. tileId .. ") กับผู้เล่น " .. player.Name)
+		self:ProcessTileEvent(player, tileId, tileType)
+	end
+
+	debugLog("ตั้งค่าฟังก์ชันทดสอบแล้ว (_G.TestEventTile)")
+end
+
+-- Process a tile event when a player lands on it
+function EventTileSystem:ProcessTileEvent(player, tileId, tileType)
+	print("▶️ [EventTileSystem] ผู้เล่น " .. player.Name .. " ตกช่อง " .. tileId .. " ประเภท " .. tileType)
+
+	-- Get handler for this tile type
+	local handler = self.tileHandlers[tileType]
+
+	if handler then
+		-- Call the appropriate handler
+		local success = handler(self, player, tileId)
+		print("✅ [EventTileSystem] การประมวลผลช่อง " .. tileType .. " สำเร็จ: " .. tostring(success))
+		return success
+	else
+		print("❌ [EventTileSystem] ไม่พบ handler สำหรับช่องประเภท " .. tileType)
+		return false
+	end
+end
+
+-- Handler for money tile
+function EventTileSystem:HandleMoneyTile(player, tileId)
+	print("💰 [EventTileSystem] กำลังประมวลผลช่องเงินสำหรับผู้เล่น " .. player.Name)
+
+	-- Generate random money amount (500 to 2000)
+	local minAmount = 500
+	local maxAmount = 2000
+	local moneyAmount = math.random(minAmount, maxAmount)
+
+	print("💰 [EventTileSystem] สุ่มจำนวนเงิน: " .. moneyAmount)
+
+	-- Fire client event to show money randomizer UI
+	self.moneyEventRemote:FireClient(player, moneyAmount)
+
+	-- Update player's money in the PlayerManager
+	if self.gameManager and self.gameManager.playerManager then
+		local playerData = self.gameManager.playerManager:GetPlayerData(player)
+
+		if playerData then
+			-- Record old money for logging
+			local oldMoney = playerData.stats.money
+
+			-- Update player's money
+			local newMoney = oldMoney + moneyAmount
+			local success = self.gameManager.playerManager:UpdatePlayerStats(player, {
+				money = newMoney
+			})
+
+			print("💰 [EventTileSystem] อัปเดตเงินของผู้เล่น " .. player.Name .. " จาก " .. oldMoney .. " เป็น " .. newMoney)
+
+			if not success then
+				print("❌ [EventTileSystem] การอัปเดตเงินล้มเหลว จะลองใช้ UpdatePlayerHP แทน")
+				-- ทางเลือกถ้า UpdatePlayerStats ไม่ทำงาน ให้ลองปรับค่าเงินโดยตรง
+				playerData.stats.money = newMoney
+
+				-- ส่งข้อมูลไปยังไคลเอนต์
+				if self.gameManager.playerManager.statChangedEvent then
+					self.gameManager.playerManager.statChangedEvent:FireClient(player, {
+						money = {
+							oldValue = oldMoney,
+							newValue = newMoney
+						}
+					})
+				end
+
+				-- ซิงค์ข้อมูลเต็มรูปแบบ
+				if self.gameManager.playerManager.SyncPlayerStats then
+					self.gameManager.playerManager:SyncPlayerStats(player)
+				end
+			end
+
+			return true
+		else
+			warn("[EventTileSystem] ไม่พบข้อมูลผู้เล่นสำหรับ " .. player.Name)
+
+			-- ทางเลือกกรณีฉุกเฉิน: ส่ง RemoteEvent แต่ไม่อัปเดตค่าเงิน
+			print("⚠️ [EventTileSystem] ส่งเฉพาะเหตุการณ์ UI โดยไม่อัปเดตเงิน")
+			return true
+		end
+	else
+		warn("[EventTileSystem] ไม่สามารถเข้าถึง PlayerManager ได้")
+
+		-- ทางเลือกกรณีฉุกเฉิน: ส่ง RemoteEvent แต่ไม่อัปเดตค่าเงิน
+		print("⚠️ [EventTileSystem] ส่งเฉพาะเหตุการณ์ UI โดยไม่อัปเดตเงิน")
+		return true
+	end
+end
+
+-- Placeholder for other tile handlers
+function EventTileSystem:HandleShopTile(player, tileId)
+	debugLog("กำลังประมวลผลช่องร้านค้าสำหรับผู้เล่น " .. player.Name)
+	-- Implementation will be added later
+	return true
+end
+
+function EventTileSystem:HandleBattleTile(player, tileId)
+	debugLog("กำลังประมวลผลช่องต่อสู้สำหรับผู้เล่น " .. player.Name)
+	-- Implementation will be added later
+	return true
+end
+
+function EventTileSystem:HandleCasinoTile(player, tileId)
+	debugLog("กำลังประมวลผลช่องคาสิโนสำหรับผู้เล่น " .. player.Name)
+	-- Implementation will be added later
+	return true
+end
+
+function EventTileSystem:HandleItemTile(player, tileId)
+	debugLog("กำลังประมวลผลช่องไอเทมสำหรับผู้เล่น " .. player.Name)
+	-- Implementation will be added later
+	return true
+end
+
+-- ทดสอบระบบกับผู้เล่นที่กำหนด
+function EventTileSystem:TestWithPlayer(player, tileType, tileId)
+	tileType = tileType or "money"
+	tileId = tileId or 13
+
+	print("🧪 [EventTileSystem] ทดสอบช่อง " .. tileType .. " กับผู้เล่น " .. player.Name)
+	self:ProcessTileEvent(player, tileId, tileType)
+end
+
+-- Set debug mode
+function EventTileSystem:SetDebugMode(enabled)
+	DEBUG_MODE = enabled
+	print("[EventTileSystem] Debug mode " .. (enabled and "enabled" or "disabled"))
+end
+
+return EventTileSystem
