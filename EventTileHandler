@@ -1,6 +1,6 @@
 -- EventTileHandler.client.lua
--- จัดการอีเวนต์ช่องพิเศษฝั่งไคลเอนต์ (มีอนิเมชันหมุนและสุ่มไพ่)
--- Version: 7.0.0 - Optimized
+-- Manages special tile events on the client side
+-- Version: 8.0.0 (Optimized)
 
 -- Services
 local Players = game:GetService("Players")
@@ -9,7 +9,6 @@ local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 
 -- Constants
-local DEBUG = true
 local MONEY_COLOR = Color3.fromRGB(255, 215, 0)
 local SHOP_COLOR = Color3.fromRGB(85, 170, 255)
 local BATTLE_COLOR = Color3.fromRGB(255, 80, 80)
@@ -35,15 +34,13 @@ local state = {
 	isProcessingEvent = false
 }
 
--- Remote events (เริ่มต้นเป็น nil จะถูกเตรียมในฟังก์ชัน initRemotes)
+-- Remote events (initialized in initRemotes function)
 local remotes, eventTileRemotes, moneyEventRemote
 local uiRemotes, statChangedEvent
 local boardRemotes, tileTriggerEvent, playerArrivedAtTile, movementVisualizationComplete
 local showPathSelection, startPlayerMovementPath, activityComplete
 
 -- Helper functions
-local function log(msg) if DEBUG then print("[EventTileHandler] " .. msg) end end
-
 local function tweenUI(obj, duration, properties, style, direction, onComplete)
 	style = style or Enum.EasingStyle.Quad
 	direction = direction or Enum.EasingDirection.Out
@@ -86,10 +83,11 @@ local function initRemotes()
 		moneyEventRemote.Parent = eventTileRemotes
 	end
 
-	-- Board Remotes
+	-- UI Remotes
 	uiRemotes = remotes:WaitForChild("UIRemotes")
 	statChangedEvent = uiRemotes:FindFirstChild("StatChanged")
 
+	-- Board Remotes
 	boardRemotes = remotes:WaitForChild("BoardRemotes")
 	tileTriggerEvent = boardRemotes:WaitForChild("TileTriggerEvent")
 	playerArrivedAtTile = boardRemotes:WaitForChild("PlayerArrivedAtTile")
@@ -99,7 +97,7 @@ local function initRemotes()
 	activityComplete = boardRemotes:FindFirstChild("ActivityComplete")
 end
 
--- สร้างแจ้งเตือน
+-- Create notification
 local function createNotification(message, duration, color)
 	duration = duration or NOTIFY_DURATION
 	color = color or MONEY_COLOR
@@ -113,7 +111,7 @@ local function createNotification(message, duration, color)
 	notification.BackgroundTransparency = 0.2
 	notification.BorderSizePixel = 0
 
-	-- เพิ่ม UI Elements
+	-- Add UI Elements
 	local corner = Instance.new("UICorner", notification)
 	corner.CornerRadius = UDim.new(0, 8)
 
@@ -123,7 +121,7 @@ local function createNotification(message, duration, color)
 	icon.Position = UDim2.new(0, 14, 0.5, 0)
 	icon.AnchorPoint = Vector2.new(0, 0.5)
 	icon.BackgroundTransparency = 1
-	icon.Image = "rbxassetid://3354536235" -- ไอคอนเหรียญ
+	icon.Image = "rbxassetid://3354536235" -- Coin icon
 
 	local textLabel = Instance.new("TextLabel", notification)
 	textLabel.Name = "Message"
@@ -139,7 +137,7 @@ local function createNotification(message, duration, color)
 
 	notification.Parent = PlayerGui
 
-	-- แสดงและซ่อนการแจ้งเตือน
+	-- Show and hide notification
 	tweenUI(notification, 0.5, {Position = UDim2.new(0.5, 0, 0.05, 0)}, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 
 	task.delay(duration, function()
@@ -152,19 +150,19 @@ local function createNotification(message, duration, color)
 	return notification
 end
 
--- ค้นหา UI MedievalMoneyRandomizer
+-- Find UI MedievalMoneyRandomizer
 local function findMoneyRandomizerUI()
-	-- ค้นหาใน PlayerGui โดยตรง
+	-- Look directly in PlayerGui
 	local moneyUI = PlayerGui:FindFirstChild("MedievalMoneyRandomizer")
 	if moneyUI then return moneyUI end
 
-	-- ค้นหาในทุก ScreenGui
+	-- Look in all ScreenGuis
 	for _, gui in pairs(PlayerGui:GetChildren()) do
 		if gui:IsA("ScreenGui") then
 			moneyUI = gui:FindFirstChild("MedievalMoneyRandomizer")
 			if moneyUI then return moneyUI end
 
-			-- ค้นหาใน Frame ลูก
+			-- Look in child frames
 			for _, child in pairs(gui:GetDescendants()) do
 				if child:IsA("Frame") and child.Name == "MedievalMoneyRandomizer" then
 					return child
@@ -175,22 +173,20 @@ local function findMoneyRandomizerUI()
 	return nil
 end
 
--- เล่นอนิเมชันการ์ดหมุน
+-- Play card reveal animation
 local function playCardRevealAnimation(frame, onComplete)
 	if not frame then 
 		if onComplete then onComplete() end
 		return 
 	end
 
-	log("เล่นอนิเมชันสุ่มไพ่")
-
-	-- บันทึกค่าเดิม
+	-- Store original values
 	local originalRotation = frame.Rotation or 0
 	local originalSize = frame.Size
 	local originalPosition = frame.Position
 	local originalTransparency = frame.BackgroundTransparency or 0
 
-	-- สร้างไพ่หลัง
+	-- Create card back
 	local cardBack = Instance.new("Frame")
 	cardBack.Name = "CardBack"
 	cardBack.Size = originalSize
@@ -200,7 +196,7 @@ local function playCardRevealAnimation(frame, onComplete)
 	cardBack.ZIndex = frame.ZIndex + 1
 	cardBack.Parent = frame.Parent
 
-	-- เพิ่มลายและขอบ
+	-- Add design elements
 	local pattern = Instance.new("ImageLabel")
 	pattern.Name = "CardPattern"
 	pattern.Size = UDim2.fromScale(0.8, 0.8)
@@ -222,20 +218,20 @@ local function playCardRevealAnimation(frame, onComplete)
 	corner.CornerRadius = UDim.new(0, 8)
 	corner.Parent = cardBack
 
-	-- ซ่อน frame หลัก
+	-- Hide main frame
 	frame.Visible = false
 
-	-- กำหนดจุดเริ่มต้น
+	-- Set starting position
 	cardBack.Rotation = 180
 	cardBack.Size = UDim2.new(
 		originalSize.X.Scale, originalSize.X.Offset * 0.8,
 		originalSize.Y.Scale, originalSize.Y.Offset * 0.8
 	)
 
-	-- เล่นเสียงไพ่พลิก
+	-- Play card flip sound
 	playSound(cardBack, "rbxassetid://6732897163", 0.5)
 
-	-- อนิเมชันสุ่มไพ่
+	-- Card shuffle animation
 	local numShuffle = 5
 	local shuffleDelay = 0.1
 
@@ -254,17 +250,17 @@ local function playCardRevealAnimation(frame, onComplete)
 		end)
 	end
 
-	-- พลิกไพ่หลังจากสุ่ม
+	-- Flip card after shuffle
 	task.delay(numShuffle * shuffleDelay + 0.2, function()
-		-- กลับไปตำแหน่งเดิม
+		-- Return to original position
 		tweenUI(cardBack, 0.3, {
 			Position = originalPosition,
 			Rotation = 0
 		}, Enum.EasingStyle.Back, Enum.EasingDirection.Out, function()
-			-- เล่นเสียงพลิกการ์ด
+			-- Play card flip sound
 			playSound(cardBack, "rbxassetid://5852130173", 0.7)
 
-			-- อนิเมชันการ์ดหายไป
+			-- Card disappear animation
 			tweenUI(cardBack, 0.4, {
 				Size = UDim2.new(
 					originalSize.X.Scale, originalSize.X.Offset * 0.1,
@@ -272,10 +268,10 @@ local function playCardRevealAnimation(frame, onComplete)
 				),
 				Rotation = 90
 			}, Enum.EasingStyle.Back, Enum.EasingDirection.In, function()
-				-- ลบการ์ดหลัง
+				-- Remove card back
 				cardBack:Destroy()
 
-				-- แสดงการ์ดหน้า
+				-- Show front card
 				frame.Visible = true
 				frame.Rotation = 90
 				frame.Size = UDim2.new(
@@ -283,16 +279,16 @@ local function playCardRevealAnimation(frame, onComplete)
 					originalSize.Y.Scale, originalSize.Y.Offset
 				)
 
-				-- อนิเมชันการ์ดหน้าปรากฏ
+				-- Front card reveal animation
 				tweenUI(frame, 0.4, {
 					Rotation = 0,
 					Size = originalSize,
 					BackgroundTransparency = originalTransparency
 				}, Enum.EasingStyle.Back, Enum.EasingDirection.Out, function()
-					-- เล่นเสียงประกาย
+					-- Play sparkle sound
 					playSound(frame, "rbxassetid://5852296378", 0.5)
 
-					-- สร้างประกาย
+					-- Create sparkle effects
 					for i = 1, 8 do
 						task.delay(i * 0.05, function()
 							local sparkle = Instance.new("Frame")
@@ -317,34 +313,31 @@ local function playCardRevealAnimation(frame, onComplete)
 							}, nil, nil, function()
 								sparkle:Destroy()
 								if i == 8 and onComplete then onComplete() end
-								end)
-								end)
-								end
-								end)
-								end)
-								end)
-								end)
-								end
+							end)
+						end)
+					end
+				end)
+			end)
+		end)
+	end)
+end
 
-								-- สุ่มและแสดงเงิน
+-- Get random money amount
 local function getRandomMoneyAmount()
 	return math.random(MONEY_RANGE[1], MONEY_RANGE[2])
 end
 
--- แสดงอนิเมชันเงิน
-local function showMoneyAnimationWithExistingUI(amount)
-	log("💰 แสดงอนิเมชันเงิน: " .. amount)
-
-	-- ค้นหา UI
+-- Show money animation with existing UI
+local function showMoneyAnimation(amount)
+	-- Find UI
 	local moneyUI = findMoneyRandomizerUI()
 	if not moneyUI then
-		log("❌ ไม่พบ UI เงิน ใช้การแจ้งเตือนแทน")
-		createNotification("คุณได้รับ " .. amount .. " เหรียญ!", NOTIFY_DURATION, MONEY_COLOR)
+		createNotification("You received " .. amount .. " coins!", NOTIFY_DURATION, MONEY_COLOR)
 		moneyEventRemote:FireServer("updateMoney", amount)
 		return
 	end
 
-	-- ค้นหา MainFrame
+	-- Find MainFrame
 	local mainFrame
 	if moneyUI:IsA("Frame") then
 		mainFrame = moneyUI
@@ -361,13 +354,12 @@ local function showMoneyAnimationWithExistingUI(amount)
 	end
 
 	if not mainFrame then
-		log("❌ ไม่พบ MainFrame ใช้การแจ้งเตือนแทน")
-		createNotification("คุณได้รับ " .. amount .. " เหรียญ!", NOTIFY_DURATION, MONEY_COLOR)
+		createNotification("You received " .. amount .. " coins!", NOTIFY_DURATION, MONEY_COLOR)
 		moneyEventRemote:FireServer("updateMoney", amount)
 		return
 	end
 
-	-- ค้นหา CoinAmount
+	-- Find CoinAmount
 	local coinAmount
 	local coinDisplay = mainFrame:FindFirstChild("CoinDisplay")
 
@@ -388,13 +380,12 @@ local function showMoneyAnimationWithExistingUI(amount)
 	end
 
 	if not coinAmount then
-		log("❌ ไม่พบ CoinAmount ใช้การแจ้งเตือนแทน")
-		createNotification("คุณได้รับ " .. amount .. " เหรียญ!", NOTIFY_DURATION, MONEY_COLOR)
+		createNotification("You received " .. amount .. " coins!", NOTIFY_DURATION, MONEY_COLOR)
 		moneyEventRemote:FireServer("updateMoney", amount)
 		return
 	end
 
-	-- ค้นหาปุ่มปิด
+	-- Find close button
 	local closeButton
 	for _, child in pairs(mainFrame:GetDescendants()) do
 		if child:IsA("TextButton") and (
@@ -409,17 +400,17 @@ local function showMoneyAnimationWithExistingUI(amount)
 		end
 	end
 
-	-- แสดง UI และเริ่มอนิเมชัน
+	-- Show UI and start animation
 	moneyUI.Enabled = true
 
 	local originalTextSize = coinAmount.TextSize
 	coinAmount.Text = "0"
 
 	playCardRevealAnimation(mainFrame, function()
-		-- เสียงเหรียญ
+		-- Coin sound
 		playSound(mainFrame, "rbxassetid://131323304", 0.5)
 
-		-- อนิเมชันเพิ่มค่าเงิน
+		-- Animate coin counting
 		local countDuration = 2
 		local startTime = tick()
 
@@ -440,20 +431,20 @@ local function showMoneyAnimationWithExistingUI(amount)
 			if progress >= 1 then
 				countConnection:Disconnect()
 
-				-- เล่นเสียงเหรียญอีกครั้ง
+				-- Play coin sound again
 				playSound(mainFrame, "rbxassetid://131323304", 0.7)
 
-				-- แสดงเอฟเฟกต์เมื่อเสร็จสิ้น
+				-- Show completion effect
 				tweenUI(coinAmount, 0.3, {TextSize = originalTextSize * 1.3}, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 
 				task.delay(0.3, function()
 					tweenUI(coinAmount, 0.2, {TextSize = originalTextSize})
 				end)
 
-				-- อัพเดทเงิน
+				-- Update money
 				moneyEventRemote:FireServer("updateMoney", amount)
 
-				-- ถ้าไม่มีปุ่มปิด ให้ปิดอัตโนมัติ
+				-- Auto close if no close button
 				if not closeButton then
 					task.delay(5, function()
 						mainFrame.Visible = false
@@ -463,7 +454,7 @@ local function showMoneyAnimationWithExistingUI(amount)
 		end)
 	end)
 
-	-- ถ้ามีปุ่มปิด ให้ปิด UI เมื่อกดปุ่ม
+	-- Close UI when button clicked
 	if closeButton and not closeButton:GetAttribute("Connected") then
 		closeButton.MouseButton1Click:Connect(function()
 			mainFrame.Visible = false
@@ -472,89 +463,78 @@ local function showMoneyAnimationWithExistingUI(amount)
 	end
 end
 
--- ตรวจสอบถึงช่องปลายทาง
+-- Check if reached end tile
 local function checkEndTile()
-	-- ป้องกันการทำงานซ้ำซ้อน
+	-- Prevent processing overlap
 	if state.isProcessingEvent then 
-		log("🔄 กำลังประมวลผลอยู่แล้ว")
 		return 
 	end
 
-	-- ตรวจเงื่อนไข
+	-- Check conditions
 	if state.isMoving then
-		log("🚶 ผู้เล่นกำลังเคลื่อนที่อยู่")
 		return
 	end
 
 	if not state.hasReachedEndTile then
-		log("🔄 ยังไม่ถึงปลายทาง")
 		return
 	end
 
-	-- มีช่องเงินรอดำเนินการ
+	-- Process pending money tile
 	if state.pendingMoneyTile then
-		log("🏁✅ ถึงช่องปลายทางและมีช่องเงินรอ")
-
 		state.isProcessingEvent = true
 		state.pendingMoneyTile = false
 
-		-- สุ่มเงิน
+		-- Get random money
 		state.moneyAmount = getRandomMoneyAmount()
 
-		-- แจ้งเตือนและแสดง UI
-		createNotification("ถึงช่องปลายทางแล้ว! ได้รับ " .. state.moneyAmount .. " เหรียญ", NOTIFY_DURATION)
+		-- Show notification and UI
+		createNotification("Reached end tile! Received " .. state.moneyAmount .. " coins", NOTIFY_DURATION)
 
 		task.delay(DELAY_BEFORE_UI, function()
-			showMoneyAnimationWithExistingUI(state.moneyAmount)
+			showMoneyAnimation(state.moneyAmount)
 			state.isProcessingEvent = false
 		end)
-	else
-		log("🏁 ถึงช่องปลายทางแล้ว แต่ไม่มีช่องเงินรอ")
 	end
 
 	state.hasReachedEndTile = false
 end
 
--- ตั้งค่าการเชื่อมต่อเหตุการณ์
+-- Set up event connections
 local function setupConnections()
-	-- เหตุการณ์เงิน
+	-- Money event
 	moneyEventRemote.OnClientEvent:Connect(function(amount)
 		if amount and amount > 0 then
-			createNotification("ได้รับ " .. amount .. " เหรียญ", NOTIFY_DURATION, MONEY_COLOR)
-			showMoneyAnimationWithExistingUI(amount)
+			createNotification("Received " .. amount .. " coins", NOTIFY_DURATION, MONEY_COLOR)
+			showMoneyAnimation(amount)
 		end
 	end)
 
-	-- เมื่อเริ่มเคลื่อนที่
+	-- Start movement
 	startPlayerMovementPath.OnClientEvent:Connect(function(playerId, movementData)
 		if playerId ~= player.UserId then return end
 
-		log("🚶 เริ่มเคลื่อนที่ตามเส้นทาง")
 		state.isMoving = true
 		state.hasReachedEndTile = false
 	end)
 
-	-- เมื่อถึงช่องปลายทาง
+	-- Arrived at tile
 	playerArrivedAtTile.OnClientEvent:Connect(function(playerId, finalTileId)
 		if playerId ~= player.UserId then return end
 
-		log("🏁 ถึงช่องปลายทาง: " .. finalTileId)
 		state.lastTileId = finalTileId
 		state.isMakingPathChoice = false
 	end)
 
-	-- ตอนเลือกเส้นทาง
+	-- Path selection
 	if showPathSelection then
 		showPathSelection.OnClientEvent:Connect(function()
-			log("🧭 กำลังเลือกเส้นทาง")
 			state.isMakingPathChoice = true
 		end)
 	end
 
-	-- เมื่อการเคลื่อนที่เสร็จสมบูรณ์
+	-- Movement complete
 	if movementVisualizationComplete then
 		movementVisualizationComplete.OnClientEvent:Connect(function(finalTileId)
-			log("✅ การเคลื่อนที่เสร็จสมบูรณ์: " .. finalTileId)
 			state.lastTileId = finalTileId
 			state.isMoving = false
 			state.hasReachedEndTile = true
@@ -564,7 +544,7 @@ local function setupConnections()
 		end)
 	end
 
-	-- เมื่อกิจกรรมเสร็จสิ้น
+	-- Activity complete
 	if activityComplete then
 		activityComplete.OnClientEvent:Connect(function(activityType)
 			if activityType == "movement" or activityType == "turn" then
@@ -575,35 +555,33 @@ local function setupConnections()
 		end)
 	end
 
-	-- เมื่อตกช่อง
+	-- Tile trigger
 	tileTriggerEvent.OnClientEvent:Connect(function(playerId, tileId, tileType)
 		if playerId ~= player.UserId then return end
 
-		log("ตกช่อง: " .. tileId .. " ประเภท " .. tileType)
 		state.lastTileId = tileId
 		state.lastTileType = tileType
 
 		if state.isMakingPathChoice then
-			log("⏩ ข้ามเนื่องจากกำลังเลือกเส้นทาง")
 			return
 		end
 
-		-- แสดงการแจ้งเตือนตามประเภทช่อง
+		-- Show notifications based on tile type
 		if tileType == "money" then
-			createNotification("คุณตกช่องเงิน! เงินจะถูกสุ่มเมื่อถึงช่องปลายทาง", 2, MONEY_COLOR)
+			createNotification("You landed on a money tile! Coins will be awarded when you reach the end tile", 2, MONEY_COLOR)
 			state.pendingMoneyTile = true
 		elseif tileType == "shop" then
-			createNotification("คุณตกช่องร้านค้า", 2, SHOP_COLOR)
+			createNotification("You landed on a shop tile", 2, SHOP_COLOR)
 		elseif tileType == "battle" then
-			createNotification("คุณตกช่องต่อสู้! เตรียมตัวให้พร้อม", 2, BATTLE_COLOR)
+			createNotification("You landed on a battle tile! Prepare to fight", 2, BATTLE_COLOR)
 		elseif tileType == "casino" then
-			createNotification("คุณตกช่องคาสิโน! อยากลองเสี่ยงโชคไหม?", 2, CASINO_COLOR)
+			createNotification("You landed on a casino tile! Try your luck?", 2, CASINO_COLOR)
 		elseif tileType == "item" then
-			createNotification("คุณตกช่องไอเทม! กำลังสุ่มไอเทม...", 2, ITEM_COLOR)
+			createNotification("You landed on an item tile! Getting random item...", 2, ITEM_COLOR)
 		end
 	end)
 
-	-- ตรวจจับการเลือกเส้นทาง
+	-- Detect path selection
 	task.spawn(function()
 		local PlayerGui = player:WaitForChild("PlayerGui")
 		local PopupUI = PlayerGui:WaitForChild("PopupUI", 10)
@@ -614,37 +592,33 @@ local function setupConnections()
 				if PathSelectionContainer then
 					PathSelectionContainer:GetPropertyChangedSignal("Visible"):Connect(function()
 						state.isMakingPathChoice = PathSelectionContainer.Visible
-						log("📍 การเลือกเส้นทาง: " .. (state.isMakingPathChoice and "เปิด" or "ปิด"))
 					end)
 				end
 			end
 		end
 	end)
 
-	-- ตรวจจับการเคลื่อนที่จริงของตัวละคร
+	-- Detect actual character movement
 	task.spawn(function()
 		while true do
-			task.wait(0.5) -- ตรวจสอบทุก 0.5 วินาที
+			task.wait(0.5) -- Check every 0.5 seconds
 
 			local character = player.Character
 			if character and character:FindFirstChild("HumanoidRootPart") and character:FindFirstChild("Humanoid") then
 				local humanoid = character:FindFirstChild("Humanoid")
 
-				-- เช็คสถานะการเคลื่อนที่
+				-- Check movement state
 				if humanoid.MoveDirection.Magnitude > 0 then
 					if not state.isMoving then
-						log("🚶 ตรวจพบการเคลื่อนที่")
 						state.isMoving = true
 						state.hasReachedEndTile = false
 					end
 				else
 					if state.isMoving then
-						log("🛑 ตรวจพบการหยุดเคลื่อนที่")
 						state.isMoving = false
 
 						task.delay(DELAY_BEFORE_UI, function()
 							if state.pendingMoneyTile and not state.isMoving then
-								log("🔄 ตัวละครหยุดและมีช่องเงินรอ")
 								state.hasReachedEndTile = true
 								checkEndTile()
 							end
@@ -656,80 +630,11 @@ local function setupConnections()
 	end)
 end
 
--- ตั้งค่าฟังก์ชันทดสอบ
-local function setupTestFunctions()
-	-- ทดสอบ UI เงิน
-	_G.TestMoneyUI = function(amount)
-		amount = amount or getRandomMoneyAmount()
-		log("ทดสอบ UI เงิน: " .. amount)
-		showMoneyAnimationWithExistingUI(amount)
-		return "กำลังทดสอบ UI สุ่มเงิน: " .. amount .. " เหรียญ"
-	end
-
-	-- ทดสอบอนิเมชันการ์ด
-	_G.TestCardAnimation = function()
-		local moneyUI = findMoneyRandomizerUI()
-		if moneyUI then
-			local mainFrame = moneyUI:IsA("Frame") and moneyUI or moneyUI:FindFirstChild("MainFrame")
-			if mainFrame then
-				moneyUI.Enabled = true
-				mainFrame.Visible = true
-				playCardRevealAnimation(mainFrame)
-				return "กำลังทดสอบอนิเมชันการ์ด"
-			end
-		end
-		return "ไม่พบ UI ที่จะทดสอบ"
-	end
-
-	-- ทดสอบลำดับการตกช่องเงิน
-	_G.TestMoneyTileSequence = function()
-		log("ทดสอบลำดับการตกช่องเงินและถึงช่องปลายทาง")
-
-		-- รีเซ็ตสถานะ
-		state.pendingMoneyTile = false
-		state.isMoving = false
-		state.hasReachedEndTile = false
-		state.isProcessingEvent = false
-
-		-- จำลองตกช่องเงิน
-		state.pendingMoneyTile = true
-		createNotification("คุณตกช่องเงิน! เงินจะถูกสุ่มเมื่อถึงช่องปลายทาง", 2, MONEY_COLOR)
-
-		-- จำลองเคลื่อนที่
-		log("จำลองการเริ่มเคลื่อนที่...")
-		state.isMoving = true
-
-		-- รอแล้วจำลองการหยุด
-		task.delay(2, function()
-			log("จำลองการหยุดเคลื่อนที่และถึงช่องปลายทาง")
-			state.isMoving = false
-			state.hasReachedEndTile = true
-			checkEndTile()
-		end)
-
-		return "กำลังทดสอบลำดับเหตุการณ์ตั้งแต่ตกช่องเงินจนถึงช่องปลายทาง"
-	end
-end
-
--- เริ่มต้นระบบ
+-- Initialize system
 local function initialize()
-	log("เริ่มต้นระบบ EventTileHandler...")
-
 	initRemotes()
 	setupConnections()
-	setupTestFunctions()
-
-	-- ตรวจสอบ UI ที่มีอยู่
-	task.spawn(function()
-		task.wait(2)
-		local ui = findMoneyRandomizerUI()
-		log(ui and "✅ พบ UI MedievalMoneyRandomizer" or "❌ ไม่พบ UI MedievalMoneyRandomizer")
-	end)
-
-	log("ระบบช่องพิเศษพร้อมใช้งานแล้ว")
-	print("================ ระบบช่องพิเศษ (Event Tile) พร้อมใช้งานแล้ว ================")
-	print("ทดสอบได้ด้วย: _G.TestMoneyUI(), _G.TestCardAnimation(), _G.TestMoneyTileSequence()")
 end
 
--- เริ่มต้นระบบ
+-- Start system
 initialize()
