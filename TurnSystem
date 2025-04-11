@@ -1,6 +1,6 @@
 -- TurnSystem.lua
 -- โมดูลจัดการระบบเทิร์นและลำดับเล่นของผู้เล่น
--- Version: 2.2.0 (Fixed Movement Coordination)
+-- Version: 2.3.0 (Fixed Movement Coordination)
 
 local TurnSystem = {}
 TurnSystem.__index = TurnSystem
@@ -12,7 +12,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 -- Constants
 local TURN_TIME_LIMIT = 60
 local INACTIVITY_WARNING_TIME = 15
-local MOVEMENT_SAFETY_DELAY = 1.5 -- เวลารอเผื่อเพื่อให้แน่ใจว่าการเคลื่อนที่เสร็จสมบูรณ์
+local MOVEMENT_SAFETY_DELAY = 0.8 -- เวลารอเพื่อให้แน่ใจว่าการเคลื่อนที่เสร็จสมบูรณ์
 
 function TurnSystem.new()
 	local self = setmetatable({}, TurnSystem)
@@ -91,6 +91,11 @@ function TurnSystem:CreateTurnOrderFromActivePlayers(playerManager)
 	-- Shuffle order for fairness
 	self:ShuffleTurnOrder(playerOrder)
 
+	-- Debug turn order
+	if self.debugMode then
+		print("[TurnSystem] Created turn order:", table.concat(playerOrder, ", "))
+	end
+
 	return self:SetTurnOrder(playerOrder)
 end
 
@@ -105,6 +110,9 @@ end
 
 function TurnSystem:StartTurnSystem()
 	if #self.turnOrder == 0 then return false end
+	if self.debugMode then
+		print("[TurnSystem] Starting turn system with " .. #self.turnOrder .. " players")
+	end
 	self:NextTurn()
 	return true
 end
@@ -134,11 +142,17 @@ function TurnSystem:StartPlayerTurn(playerID)
 	self.isTurnActive = true
 	self.turnTimeRemaining = TURN_TIME_LIMIT
 
-	-- ล้างสถานะการจบเทิร์นที่รอดำเนินการ
+	-- Clear pending end turn state
 	self.pendingEndTurn[playerID] = nil
 
-	-- Notify clients
+	-- Notify clients - IMPORTANT to fire UpdateTurn to trigger DiceRollUI
+	if self.debugMode then
+		print("[TurnSystem] Starting turn for player " .. playerID)
+	end
+
 	self.remotes.updateTurn:FireAllClients(playerID)
+
+	-- Send additional turn state to the player
 	self.remotes.turnState:FireClient(player, {
 		timeLimit = TURN_TIME_LIMIT,
 		isYourTurn = true
@@ -204,7 +218,7 @@ end
 function TurnSystem:EndPlayerTurn(playerID, reason)
 	reason = reason or "normal"
 
-	-- ถ้ามีการรอจบเทิร์นอยู่แล้ว ไม่ต้องทำซ้ำ
+	-- Check for pending end turn to avoid multiple calls
 	if self.pendingEndTurn[playerID] then
 		if self.debugMode then
 			print("[TurnSystem] Turn end already pending for player", playerID)
@@ -213,41 +227,46 @@ function TurnSystem:EndPlayerTurn(playerID, reason)
 	end
 
 	-- Check if it's the correct player's turn
-	if playerID ~= self.currentPlayerTurn then return false end
+	if playerID ~= self.currentPlayerTurn then 
+		if self.debugMode then
+			print("[TurnSystem] Attempting to end turn for wrong player. Expected:", 
+				self.currentPlayerTurn, "Got:", playerID)
+		end
+		return false 
+	end
 
-	-- ตรวจสอบการรอการจบเทิร์นด้วยเหตุผลของการเคลื่อนที่
+	-- For movement-related reasons, add a delay for animation completion
 	if reason == "move_complete" or reason == "move_timeout" then
-		-- เพิ่มเวลารอเผื่อสำหรับการเคลื่อนที่
+		-- Track the pending end
 		self.pendingEndTurn[playerID] = {
 			reason = reason,
 			timestamp = os.time()
 		}
 
-		-- ล่าช้าการจบเทิร์นเพื่อให้แน่ใจว่าอนิเมชันเสร็จสมบูรณ์
+		-- Delay turn end to ensure animations are complete
 		task.spawn(function()
 			task.wait(MOVEMENT_SAFETY_DELAY)
 
-			-- ตรวจสอบว่ายังเป็นเทิร์นปัจจุบันหรือไม่
+			-- Verify it's still the current turn
 			if self.currentPlayerTurn == playerID and self.pendingEndTurn[playerID] then
-				-- ล้างข้อมูลการรอ
+				-- Get ending reason and clear pending data
 				local endingReason = self.pendingEndTurn[playerID].reason
 				self.pendingEndTurn[playerID] = nil
 
-				-- ดำเนินการจบเทิร์นจริงๆ
+				-- Execute actual turn end
 				self:ExecuteEndTurn(playerID, endingReason)
 			end
 		end)
 
 		return true
 	else
-		-- สำหรับเหตุผลอื่นๆ ที่ไม่เกี่ยวกับการเคลื่อนที่ สามารถจบเทิร์นได้ทันที
+		-- For non-movement reasons, end turn immediately
 		return self:ExecuteEndTurn(playerID, reason)
 	end
 end
 
--- แยกฟังก์ชันการจบเทิร์นจริงๆ ออกมาเพื่อให้มีความยืดหยุ่นในการใช้งาน
 function TurnSystem:ExecuteEndTurn(playerID, reason)
-	-- ตรวจสอบอีกครั้งว่าเป็นเทิร์นของผู้เล่นที่ถูกต้อง
+	-- Double-check it's the correct player's turn
 	if playerID ~= self.currentPlayerTurn then 
 		if self.debugMode then
 			print("[TurnSystem] ExecuteEndTurn called for wrong player:", playerID, "current turn:", self.currentPlayerTurn)
@@ -255,8 +274,10 @@ function TurnSystem:ExecuteEndTurn(playerID, reason)
 		return false 
 	end
 
-	-- Clear current turn variables
+	-- Store current player for callbacks
 	local endingPlayerID = self.currentPlayerTurn
+
+	-- Update turn state
 	self.isTurnActive = false
 
 	-- Stop timer
@@ -284,6 +305,9 @@ function TurnSystem:ExecuteEndTurn(playerID, reason)
 		print("[TurnSystem] Turn ended for player", endingPlayerID, "reason:", reason)
 	end
 
+	-- Brief pause before next turn
+	task.wait(0.1)
+
 	-- Move to next turn
 	self:NextTurn()
 
@@ -291,11 +315,21 @@ function TurnSystem:ExecuteEndTurn(playerID, reason)
 end
 
 function TurnSystem:NextTurn()
-	if #self.turnOrder == 0 then return false end
+	if #self.turnOrder == 0 then 
+		if self.debugMode then
+			print("[TurnSystem] No players in turn order")
+		end
+		return false 
+	end
 
 	-- Increment turn index to next player
 	self.currentTurnIndex = (self.currentTurnIndex % #self.turnOrder) + 1
 	local nextPlayerID = self.turnOrder[self.currentTurnIndex]
+
+	if self.debugMode then
+		print("[TurnSystem] Moving to next turn. Current index:", self.currentTurnIndex, 
+			"Next player:", nextPlayerID)
+	end
 
 	-- Start next player's turn
 	self:StartPlayerTurn(nextPlayerID)
@@ -315,32 +349,6 @@ function TurnSystem:SetPlayerSkipTurns(playerID, turns)
 	return true
 end
 
-function TurnSystem:SetTurnState(playerID, stateName, stateValue)
-	if not playerID or not stateName then return false end
-
-	if not self.turnStates[playerID] then
-		self.turnStates[playerID] = {}
-	end
-
-	self.turnStates[playerID][stateName] = stateValue
-
-	-- Notify player
-	local player = Players:GetPlayerByUserId(playerID)
-	if player then
-		self.remotes.turnState:FireClient(player, {
-			state = stateName,
-			value = stateValue
-		})
-	end
-
-	return true
-end
-
-function TurnSystem:GetTurnState(playerID, stateName)
-	if not playerID or not self.turnStates[playerID] then return nil end
-	return stateName and self.turnStates[playerID][stateName] or self.turnStates[playerID]
-end
-
 function TurnSystem:GetCurrentPlayerTurn()
 	return self.currentPlayerTurn
 end
@@ -353,7 +361,12 @@ function TurnSystem:HandleTurnAction(player, actionType, actionData)
 	local playerID = player.UserId
 
 	-- Check if it's player's turn
-	if not self:IsPlayerTurn(playerID) then return false end
+	if not self:IsPlayerTurn(playerID) then 
+		if self.debugMode then
+			print("[TurnSystem] Player", playerID, "attempted action", actionType, "but it's not their turn")
+		end
+		return false 
+	end
 
 	-- Handle different action types
 	if actionType == "endTurn" then
@@ -411,9 +424,9 @@ function TurnSystem:Reset()
 	return true
 end
 
--- เพิ่มโหมด Debug เพื่อช่วยในการแก้ไขปัญหา
 function TurnSystem:EnableDebugMode(enabled)
 	self.debugMode = enabled or false
+	print("[TurnSystem] Debug mode " .. (self.debugMode and "enabled" or "disabled"))
 	return self.debugMode
 end
 
