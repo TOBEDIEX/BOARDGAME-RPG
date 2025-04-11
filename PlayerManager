@@ -1,12 +1,23 @@
 -- PlayerManager.lua
 -- โมดูลจัดการข้อมูลผู้เล่นทั้งหมดในเกม
--- Version: 1.1.0 (Optimized)
+-- Version: 2.0.0 (Fixed Stats Application)
 
 local PlayerManager = {}
 PlayerManager.__index = PlayerManager
 
 -- Services
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- Debug mode
+local DEBUG_MODE = false
+
+-- Debug helper function
+local function debugLog(message)
+	if DEBUG_MODE then
+		print("[PlayerManager] " .. message)
+	end
+end
 
 function PlayerManager.new(gameManager)
 	local self = setmetatable({}, PlayerManager)
@@ -18,7 +29,35 @@ function PlayerManager.new(gameManager)
 	self.players = {}
 	self.playerCount = 0
 
+	-- Initialize remote events
+	self:InitializeRemotes()
+
 	return self
+end
+
+function PlayerManager:InitializeRemotes()
+	local remotes = ReplicatedStorage:WaitForChild("Remotes")
+	local uiRemotes = remotes:WaitForChild("UIRemotes") 
+
+	-- Ensure UpdatePlayerStats event exists
+	self.updatePlayerStatsEvent = uiRemotes:FindFirstChild("UpdatePlayerStats")
+	if not self.updatePlayerStatsEvent then
+		self.updatePlayerStatsEvent = Instance.new("RemoteEvent")
+		self.updatePlayerStatsEvent.Name = "UpdatePlayerStats"
+		self.updatePlayerStatsEvent.Parent = uiRemotes
+		debugLog("Created UpdatePlayerStats RemoteEvent")
+	end
+
+	-- Ensure StatChanged event exists for realtime updates
+	self.statChangedEvent = uiRemotes:FindFirstChild("StatChanged")
+	if not self.statChangedEvent then
+		self.statChangedEvent = Instance.new("RemoteEvent")
+		self.statChangedEvent.Name = "StatChanged"
+		self.statChangedEvent.Parent = uiRemotes
+		debugLog("Created StatChanged RemoteEvent")
+	end
+
+	debugLog("Remote events initialized")
 end
 
 function PlayerManager:RegisterPlayer(player)
@@ -37,6 +76,8 @@ function PlayerManager:RegisterPlayer(player)
 			attack = 10,
 			defense = 10,
 			magic = 10,
+			magicDefense = 10,
+			agility = 10,
 			money = 100
 		},
 		inventory = {
@@ -52,6 +93,8 @@ function PlayerManager:RegisterPlayer(player)
 	-- Increment counter
 	self.playerCount = self.playerCount + 1
 
+	debugLog("Registered player: " .. player.Name .. " (Total players: " .. self.playerCount .. ")")
+
 	return self.players[player.UserId]
 end
 
@@ -59,6 +102,7 @@ function PlayerManager:UnregisterPlayer(player)
 	if self.players[player.UserId] then
 		self.players[player.UserId] = nil
 		self.playerCount = self.playerCount - 1
+		debugLog("Unregistered player: " .. player.Name .. " (Total players: " .. self.playerCount .. ")")
 	end
 end
 
@@ -83,45 +127,212 @@ function PlayerManager:GetPlayerData(player)
 	return nil
 end
 
-function PlayerManager:SetPlayerClass(player, class)
+function PlayerManager:SetPlayerClass(player, className)
 	local playerData = self:GetPlayerData(player)
-	if not playerData then return false end
-
-	playerData.class = class
-
-	-- Apply initial class stats
-	if class == "Warrior" then
-		playerData.stats.attack = playerData.stats.attack + 5
-		playerData.stats.defense = playerData.stats.defense + 3
-		playerData.stats.maxHp = playerData.stats.maxHp + 20
-		playerData.stats.hp = playerData.stats.maxHp
-	elseif class == "Mage" then
-		playerData.stats.magic = playerData.stats.magic + 8
-		playerData.stats.maxMp = playerData.stats.maxMp + 30
-		playerData.stats.mp = playerData.stats.maxMp
-	elseif class == "Thief" then
-		playerData.stats.attack = playerData.stats.attack + 3
-		playerData.stats.defense = playerData.stats.defense + 2
-		playerData.stats.money = playerData.stats.money + 50
+	if not playerData then
+		debugLog("Player data not found for: " .. tostring(player))
+		return false
 	end
 
-	return true
+	local oldClass = playerData.class
+	playerData.class = className
+
+	-- Log class change
+	if oldClass then
+		debugLog(player.Name .. " changed class from " .. oldClass .. " to " .. className)
+	else
+		debugLog(player.Name .. " assigned class: " .. className)
+	end
+
+	-- Get class data from ClassSystem
+	local classSystem = self.gameManager and self.gameManager.classSystem
+	if classSystem then
+		debugLog("Applying class stats from ClassSystem")
+		-- ClassSystem will handle stat adjustments
+		return classSystem:UpdatePlayerStatsFromClass(player, self)
+	else
+		-- Fallback stats application if ClassSystem is not available
+		debugLog("ClassSystem not available, applying basic class stats")
+		if className == "Warrior" then
+			playerData.stats.maxHp = 145
+			playerData.stats.hp = 145
+			playerData.stats.attack = 15
+			playerData.stats.defense = 13
+		elseif className == "Mage" then
+			playerData.stats.maxHp = 85
+			playerData.stats.hp = 85
+			playerData.stats.maxMp = 120
+			playerData.stats.mp = 120
+			playerData.stats.magic = 20
+		elseif className == "Thief" then
+			playerData.stats.attack = 13
+			playerData.stats.defense = 8
+			playerData.stats.agility = 18
+			playerData.stats.money = 150
+		end
+
+		-- Send updated stats to client
+		self:SyncPlayerStats(player)
+		return true
+	end
 end
 
 function PlayerManager:UpdatePlayerStats(player, statUpdates)
 	local playerData = self:GetPlayerData(player)
 	if not playerData then return false end
 
+	debugLog("Updating stats for " .. player.Name)
+
+	-- Track which stats changed
+	local changedStats = {}
+
 	-- Update stats
 	for stat, value in pairs(statUpdates) do
 		if playerData.stats[stat] ~= nil then
+			local oldValue = playerData.stats[stat]
 			playerData.stats[stat] = value
+
+			-- Record changed stats
+			changedStats[stat] = {
+				oldValue = oldValue,
+				newValue = value
+			}
+
+			debugLog("Updated " .. stat .. " from " .. oldValue .. " to " .. value)
 		end
 	end
 
 	-- Ensure hp/mp don't exceed maximums
 	playerData.stats.hp = math.min(playerData.stats.hp, playerData.stats.maxHp)
 	playerData.stats.mp = math.min(playerData.stats.mp, playerData.stats.maxMp)
+
+	-- Send updated stats to client
+	self:SyncPlayerStats(player)
+
+	-- Notify about specific stat changes for realtime updates
+	if next(changedStats) ~= nil and self.statChangedEvent then
+		self.statChangedEvent:FireClient(player, changedStats)
+	end
+
+	return true
+end
+
+-- Modified: Sync player stats to client
+function PlayerManager:SyncPlayerStats(player)
+	local playerData = self:GetPlayerData(player)
+	if not playerData then return false end
+
+	if not self.updatePlayerStatsEvent then
+		debugLog("Cannot sync stats - UpdatePlayerStats event not found")
+		return false
+	end
+
+	-- Get player ID
+	local playerId = typeof(player) == "Instance" and player:IsA("Player") and player.UserId or player
+
+	-- Send complete stats update to client
+	self.updatePlayerStatsEvent:FireClient(player, playerId, {
+		hp = playerData.stats.hp,
+		maxHp = playerData.stats.maxHp,
+		mp = playerData.stats.mp,
+		maxMp = playerData.stats.maxMp,
+		attack = playerData.stats.attack,
+		defense = playerData.stats.defense,
+		magic = playerData.stats.magic,
+		magicDefense = playerData.stats.magicDefense,
+		agility = playerData.stats.agility,
+		level = playerData.stats.level or 1,
+		class = playerData.class,
+		money = playerData.stats.money
+	})
+
+	debugLog("Synced stats for " .. player.Name .. " - HP: " .. playerData.stats.hp .. "/" .. playerData.stats.maxHp)
+
+	return true
+end
+
+-- Modified: Update player HP directly
+function PlayerManager:UpdatePlayerHP(player, newHP)
+	local playerData = self:GetPlayerData(player)
+	if not playerData then return false end
+
+	local oldHP = playerData.stats.hp
+	playerData.stats.hp = math.min(newHP, playerData.stats.maxHp)
+
+	debugLog("Updated HP for " .. player.Name .. " from " .. oldHP .. " to " .. playerData.stats.hp)
+
+	-- Sync to client immediately
+	if self.statChangedEvent then
+		self.statChangedEvent:FireClient(player, {
+			hp = {
+				oldValue = oldHP,
+				newValue = playerData.stats.hp
+			}
+		})
+	end
+
+	-- Full sync for reliability
+	self:SyncPlayerStats(player)
+
+	-- Check if player died
+	if playerData.stats.hp <= 0 and playerData.isAlive then
+		playerData.isAlive = false
+		self:HandlePlayerDeath(player)
+	end
+
+	return true
+end
+
+-- Modified: Update player MP directly
+function PlayerManager:UpdatePlayerMP(player, newMP)
+	local playerData = self:GetPlayerData(player)
+	if not playerData then return false end
+
+	local oldMP = playerData.stats.mp
+	playerData.stats.mp = math.min(newMP, playerData.stats.maxMp)
+
+	debugLog("Updated MP for " .. player.Name .. " from " .. oldMP .. " to " .. playerData.stats.mp)
+
+	-- Sync to client immediately
+	if self.statChangedEvent then
+		self.statChangedEvent:FireClient(player, {
+			mp = {
+				oldValue = oldMP,
+				newValue = playerData.stats.mp
+			}
+		})
+	end
+
+	-- Full sync for reliability
+	self:SyncPlayerStats(player)
+
+	return true
+end
+
+-- Handle player death
+function PlayerManager:HandlePlayerDeath(player)
+	local playerData = self:GetPlayerData(player)
+	if not playerData then return false end
+
+	debugLog(player.Name .. " died")
+
+	-- Handle death logic here
+	-- For example: respawn, lose items, skip turns, etc.
+
+	-- Start respawn process
+	spawn(function()
+		wait(3)  -- Wait before respawn
+
+		-- Reset health
+		playerData.stats.hp = playerData.stats.maxHp
+		playerData.stats.mp = playerData.stats.maxMp
+		playerData.isAlive = true
+
+		-- Sync to client
+		self:SyncPlayerStats(player)
+
+		debugLog(player.Name .. " respawned")
+	end)
 
 	return true
 end
@@ -140,6 +351,12 @@ function PlayerManager:GetPlayersSortedByJoinTime()
 	end)
 
 	return sortedPlayers
+end
+
+-- Enable or disable debug mode
+function PlayerManager:SetDebugMode(enabled)
+	DEBUG_MODE = enabled
+	print("[PlayerManager] Debug mode " .. (enabled and "enabled" or "disabled"))
 end
 
 return PlayerManager
