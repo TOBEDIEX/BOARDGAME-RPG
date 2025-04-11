@@ -1,6 +1,6 @@
 -- DiceRollHandler.lua
--- จัดการหน้าทอยลูกเต๋าและเลือกเส้นทาง
--- Version: 1.2.0 (Optimized)
+-- Manages dice roll interface and path selection
+-- Version: 2.0.0 (Optimized)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -30,7 +30,7 @@ local ForwardButton = PathSelectionContainer and PathSelectionContainer:FindFirs
 local LeftButton = PathSelectionContainer and PathSelectionContainer:FindFirstChild("LeftButton")
 local RightButton = PathSelectionContainer and PathSelectionContainer:FindFirstChild("RightButton")
 
--- Validate required UI components
+-- Validate required components
 if not DiceWheel or not DiceResult or not RollButton or not PathSelectionContainer 
 	or not RemainingStepsText or not ForwardButton or not LeftButton or not RightButton then
 	warn("Some required UI elements for DiceRollUI are missing")
@@ -63,14 +63,6 @@ local canRoll = false
 local currentDiceResult = nil
 local currentPathChoices = nil
 local remainingSteps = 0
-local DEBUG_MODE = false
-
--- Debug helper function
-local function debugLog(message)
-	if DEBUG_MODE then
-		print("[DiceRollHandler] " .. message)
-	end
-end
 
 -- Show dice roll UI
 local function showDiceRollUI()
@@ -89,8 +81,6 @@ local function showDiceRollUI()
 	currentDiceResult = nil
 	currentPathChoices = nil
 	remainingSteps = 0
-
-	debugLog("Dice Roll UI shown")
 end
 
 -- Hide dice roll UI
@@ -98,7 +88,6 @@ local function hideDiceRollUI()
 	DiceRollUI.Visible = false
 	isRolling = false
 	canRoll = false
-	debugLog("Dice Roll UI hidden")
 end
 
 -- Animate dice roll
