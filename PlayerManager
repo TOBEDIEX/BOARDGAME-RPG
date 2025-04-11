@@ -1,6 +1,6 @@
--- PlayerManager.lua
--- โมดูลจัดการข้อมูลผู้เล่นทั้งหมดในเกม
--- Version: 2.0.0 (Fixed Stats Application)
+-- IntegratedPlayerManager.lua
+-- โมดูลจัดการข้อมูลผู้เล่นทั้งหมดในเกม (รวมระบบเชื่อมต่อ HP แล้ว)
+-- Version: 3.0.0 (Enhanced Health Sync)
 
 local PlayerManager = {}
 PlayerManager.__index = PlayerManager
@@ -8,9 +8,17 @@ PlayerManager.__index = PlayerManager
 -- Services
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
--- Debug mode
-local DEBUG_MODE = false
+-- เปิดโหมดดีบักเพื่อช่วยในการแก้ไขปัญหา
+local DEBUG_MODE = true
+
+-- ตั้งค่าการฟื้นฟู HP และการซิงค์
+local AUTO_HEAL_ENABLED = false  -- ปิดการฟื้นฟูอัตโนมัติ
+local AUTO_HEAL_INTERVAL = 10    -- ระยะเวลาระหว่างการฟื้นฟู (วินาที)
+local AUTO_HEAL_AMOUNT = 5       -- จำนวน HP ที่ฟื้นฟูต่อครั้ง
+local MAX_AUTO_HEAL_PERCENT = 50 -- ฟื้นฟูได้สูงสุด 50% ของ HP สูงสุด
+local HEALTH_SYNC_INTERVAL = 0.5 -- ระยะเวลาระหว่างการซิงค์ (วินาที)
 
 -- Debug helper function
 local function debugLog(message)
@@ -29,15 +37,22 @@ function PlayerManager.new(gameManager)
 	self.players = {}
 	self.playerCount = 0
 
+	-- Player health sync connections
+	self.healthSyncConnections = {}
+
 	-- Initialize remote events
 	self:InitializeRemotes()
 
+	-- Set up health request functions
+	self:SetupHealthRequestFunctions()
+
+	debugLog("PlayerManager สร้างขึ้นเรียบร้อย")
 	return self
 end
 
 function PlayerManager:InitializeRemotes()
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
-	local uiRemotes = remotes:WaitForChild("UIRemotes") 
+	local uiRemotes = remotes:WaitForChild("UIRemotes")
 
 	-- Ensure UpdatePlayerStats event exists
 	self.updatePlayerStatsEvent = uiRemotes:FindFirstChild("UpdatePlayerStats")
@@ -45,7 +60,7 @@ function PlayerManager:InitializeRemotes()
 		self.updatePlayerStatsEvent = Instance.new("RemoteEvent")
 		self.updatePlayerStatsEvent.Name = "UpdatePlayerStats"
 		self.updatePlayerStatsEvent.Parent = uiRemotes
-		debugLog("Created UpdatePlayerStats RemoteEvent")
+		debugLog("สร้าง UpdatePlayerStats RemoteEvent")
 	end
 
 	-- Ensure StatChanged event exists for realtime updates
@@ -54,13 +69,85 @@ function PlayerManager:InitializeRemotes()
 		self.statChangedEvent = Instance.new("RemoteEvent")
 		self.statChangedEvent.Name = "StatChanged"
 		self.statChangedEvent.Parent = uiRemotes
-		debugLog("Created StatChanged RemoteEvent")
+		debugLog("สร้าง StatChanged RemoteEvent")
 	end
 
-	debugLog("Remote events initialized")
+	-- สร้างโฟลเดอร์ HealthRemotes ถ้ายังไม่มี
+	local healthRemotes = remotes:FindFirstChild("HealthRemotes")
+	if not healthRemotes then
+		healthRemotes = Instance.new("Folder")
+		healthRemotes.Name = "HealthRemotes"
+		healthRemotes.Parent = remotes
+		debugLog("สร้างโฟลเดอร์ HealthRemotes")
+	end
+
+	-- สร้าง PlayerDamaged event ถ้ายังไม่มี
+	self.playerDamagedEvent = uiRemotes:FindFirstChild("PlayerDamaged")
+	if not self.playerDamagedEvent then
+		self.playerDamagedEvent = Instance.new("RemoteEvent")
+		self.playerDamagedEvent.Name = "PlayerDamaged"
+		self.playerDamagedEvent.Parent = uiRemotes
+		debugLog("สร้าง PlayerDamaged RemoteEvent")
+	end -- แก้ไข: เปลี่ยน } เป็น end
+
+	debugLog("Remote events เตรียมพร้อมแล้ว")
+end
+
+-- ตั้งค่าฟังก์ชัน RemoteFunction สำหรับจัดการการร้องขอเกี่ยวกับพลังชีวิต
+function PlayerManager:SetupHealthRequestFunctions()
+	local remotes = ReplicatedStorage:WaitForChild("Remotes")
+	local healthRemotes = remotes:FindFirstChild("HealthRemotes")
+
+	if not healthRemotes then
+		healthRemotes = Instance.new("Folder")
+		healthRemotes.Name = "HealthRemotes"
+		healthRemotes.Parent = remotes
+		debugLog("สร้างโฟลเดอร์ HealthRemotes")
+	end
+
+	-- สร้าง RemoteFunction สำหรับขอการฟื้นฟู HP แบบทันที
+	local requestHealFunction = healthRemotes:FindFirstChild("RequestHeal")
+	if not requestHealFunction then
+		requestHealFunction = Instance.new("RemoteFunction")
+		requestHealFunction.Name = "RequestHeal"
+		requestHealFunction.Parent = healthRemotes
+		debugLog("สร้าง RequestHeal RemoteFunction")
+	end
+
+	-- จัดการคำขอฟื้นฟู HP
+	requestHealFunction.OnServerInvoke = function(player, healAmount)
+		-- รับข้อมูลผู้เล่น
+		local playerData = self:GetPlayerData(player)
+		if not playerData then
+			return false, "ไม่พบข้อมูลผู้เล่น"
+		end
+
+		-- ตรวจสอบจำนวนที่ฟื้นฟู
+		healAmount = healAmount or 10
+
+		-- ตรวจสอบค่าพิเศษ "full"
+		if healAmount == "full" then
+			healAmount = playerData.stats.maxHp - playerData.stats.hp
+		else
+			healAmount = math.min(healAmount, 50) -- ป้องกันการฟื้นฟูมากเกินไป
+		end
+
+		-- อัปเดต HP
+		local newHP = math.min(playerData.stats.hp + healAmount, playerData.stats.maxHp)
+		self:UpdatePlayerHP(player, newHP)
+
+		debugLog("ฟื้นฟู HP ตามคำขอ: " .. player.Name .. " +" .. healAmount ..
+			" (" .. playerData.stats.hp .. " -> " .. newHP .. ")")
+
+		return true, "ฟื้นฟู HP จำนวน " .. healAmount .. " หน่วย"
+	end
+
+	debugLog("ตั้งค่า RemoteFunction สำหรับการฟื้นฟู HP เรียบร้อย")
 end
 
 function PlayerManager:RegisterPlayer(player)
+	debugLog("กำลังลงทะเบียนผู้เล่น: " .. player.Name)
+
 	-- Create player data structure
 	self.players[player.UserId] = {
 		player = player,
@@ -93,18 +180,208 @@ function PlayerManager:RegisterPlayer(player)
 	-- Increment counter
 	self.playerCount = self.playerCount + 1
 
-	debugLog("Registered player: " .. player.Name .. " (Total players: " .. self.playerCount .. ")")
+	debugLog("ลงทะเบียนผู้เล่นเรียบร้อย: " .. player.Name .. " (จำนวนผู้เล่นทั้งหมด: " .. self.playerCount .. ")")
+
+	-- ตั้งค่าการเชื่อมต่อค่าพลังชีวิต
+	self:ConnectPlayerHealth(player)
 
 	return self.players[player.UserId]
 end
 
 function PlayerManager:UnregisterPlayer(player)
 	if self.players[player.UserId] then
+		debugLog("กำลังยกเลิกการลงทะเบียนผู้เล่น: " .. player.Name)
+
+		-- ยกเลิกการเชื่อมต่อการซิงค์พลังชีวิต
+		self:DisconnectPlayerHealth(player)
+
 		self.players[player.UserId] = nil
 		self.playerCount = self.playerCount - 1
-		debugLog("Unregistered player: " .. player.Name .. " (Total players: " .. self.playerCount .. ")")
+		debugLog("ยกเลิกการลงทะเบียนผู้เล่นเรียบร้อย: " .. player.Name .. " (จำนวนผู้เล่นทั้งหมด: " .. self.playerCount .. ")")
 	end
 end
+
+-- เชื่อมต่อค่า HP ระหว่างระบบสถิติกับ Humanoid
+function PlayerManager:ConnectPlayerHealth(player)
+	if not player then return end
+
+	-- ยกเลิกการเชื่อมต่อเดิมก่อน (ถ้ามี)
+	self:DisconnectPlayerHealth(player)
+
+	-- ตรวจสอบว่าผู้เล่นมีตัวละครหรือไม่
+	if not player.Character then
+		-- รอการสร้างตัวละคร
+		player.CharacterAdded:Connect(function(character)
+			self:SetupCharacterHealth(player, character)
+		end)
+		return
+	end
+
+	-- ตั้งค่าการเชื่อมต่อพลังชีวิตสำหรับตัวละครปัจจุบัน
+	self:SetupCharacterHealth(player, player.Character)
+
+	debugLog("เชื่อมต่อพลังชีวิตสำหรับผู้เล่น: " .. player.Name)
+end -- แก้ไข: เปลี่ยน } เป็น end
+
+-- ตั้งค่าการเชื่อมต่อพลังชีวิตสำหรับตัวละคร
+function PlayerManager:SetupCharacterHealth(player, character)
+	if not player or not character then return end
+
+	local humanoid = character:FindFirstChild("Humanoid")
+	if not humanoid then
+		warn("ไม่พบ Humanoid ของผู้เล่น: " .. player.Name)
+		return
+	end -- แก้ไข: เปลี่ยน } เป็น end
+
+	-- รับข้อมูลผู้เล่น
+	local playerData = self:GetPlayerData(player)
+	if not playerData then
+		warn("ไม่พบข้อมูลผู้เล่น: " .. player.Name)
+		return
+	end -- แก้ไข: เปลี่ยน } เป็น end
+
+	-- บันทึกค่า HP ปัจจุบัน
+	local statsHP = playerData.stats.hp
+	local statsMaxHP = playerData.stats.maxHp
+
+	debugLog("เชื่อมต่อค่า HP ของผู้เล่น: " .. player.Name)
+	debugLog("ค่า HP ในระบบสถิติ: " .. statsHP .. "/" .. statsMaxHP)
+	debugLog("ค่า Health ของ Humanoid: " .. humanoid.Health .. "/" .. humanoid.MaxHealth)
+
+	-- ปรับค่า MaxHealth ของ Humanoid ให้ตรงกับค่า maxHp ในระบบสถิติ
+	humanoid.MaxHealth = statsMaxHP
+
+	-- ปรับค่า Health ของ Humanoid ให้ตรงกับค่า hp ในระบบสถิติ
+	humanoid.Health = math.min(statsHP, statsMaxHP)
+
+	debugLog("ปรับค่า Health ของ Humanoid เป็น: " .. humanoid.Health .. "/" .. humanoid.MaxHealth)
+
+	-- ป้องกันการฟื้นฟู HP อัตโนมัติของ Humanoid
+	if humanoid:FindFirstChild("HealthRegen") then
+		humanoid.HealthRegen.Disabled = true
+	end -- แก้ไข: เปลี่ยน } เป็น end
+
+	-- เชื่อมต่อเมื่อ Humanoid ได้รับความเสียหาย
+	local healthChangedConnection = humanoid.HealthChanged:Connect(function(newHealth)
+		-- ตรวจสอบว่าเป็นความเสียหายหรือไม่
+		if newHealth < humanoid.Health then
+			local damage = humanoid.Health - newHealth
+
+			-- อัปเดตค่า HP ในระบบสถิติ
+			local currentPlayerData = self:GetPlayerData(player)
+			if currentPlayerData then
+				local newStatsHP = math.max(0, currentPlayerData.stats.hp - damage)
+				self:UpdatePlayerHP(player, newStatsHP)
+
+				debugLog("Humanoid ได้รับความเสียหาย " .. damage .. " หน่วย")
+				debugLog("อัปเดตค่า HP ในระบบสถิติเป็น " .. newStatsHP)
+
+				-- แจ้งเตือนไคลเอนต์เกี่ยวกับความเสียหาย
+				if self.playerDamagedEvent then
+					self.playerDamagedEvent:FireClient(player, {
+						oldHP = currentPlayerData.stats.hp + damage,
+						newHP = newStatsHP,
+						maxHP = currentPlayerData.stats.maxHp,
+						damage = damage,
+						source = "Humanoid"
+					})
+				end -- แก้ไข: เปลี่ยน } เป็น end
+			end -- แก้ไข: เปลี่ยน } เป็น end
+		end -- แก้ไข: เปลี่ยน } เป็น end
+	end)
+
+	-- เริ่มการซิงค์ HP
+	local syncConnection = spawn(function()
+		while player and player.Parent and character and character.Parent do
+			-- รับข้อมูลผู้เล่นล่าสุด
+			local currentPlayerData = self:GetPlayerData(player)
+			if currentPlayerData then
+				local currentStatsHP = currentPlayerData.stats.hp
+				local currentStatsMaxHP = currentPlayerData.stats.maxHp
+
+				-- ตรวจสอบว่าตัวละครยังมีอยู่หรือไม่
+				if not character or not character:FindFirstChild("Humanoid") then
+					break
+				end -- แก้ไข: เปลี่ยน } เป็น end
+
+				local currentHumanoid = character:FindFirstChild("Humanoid")
+
+				-- ซิงค์ค่า MaxHealth
+				if currentStatsMaxHP ~= currentHumanoid.MaxHealth then
+					currentHumanoid.MaxHealth = currentStatsMaxHP
+					debugLog("ซิงค์ค่า MaxHealth เป็น " .. currentStatsMaxHP)
+				end -- แก้ไข: เปลี่ยน } เป็น end
+
+				-- ซิงค์ค่า Health (จาก stats ไป Humanoid)
+				if math.abs(currentStatsHP - currentHumanoid.Health) > 0.5 then
+					currentHumanoid.Health = math.min(currentStatsHP, currentStatsMaxHP)
+					debugLog("ซิงค์ค่า Health เป็น " .. currentHumanoid.Health)
+				end -- แก้ไข: เปลี่ยน } เป็น end
+			end -- แก้ไข: เปลี่ยน } เป็น end
+
+			wait(HEALTH_SYNC_INTERVAL)
+		end -- แก้ไข: เปลี่ยน } เป็น end
+
+		debugLog("หยุดการซิงค์ค่า HP ของผู้เล่น: " .. player.Name)
+	end)
+
+	-- ฟังก์ชันฟื้นฟู HP อัตโนมัติ
+	local healConnection = nil
+	if AUTO_HEAL_ENABLED then
+		healConnection = spawn(function()
+			while player and player.Parent and character and character.Parent do
+				-- รับข้อมูลผู้เล่นล่าสุด
+				local currentPlayerData = self:GetPlayerData(player)
+				if currentPlayerData then
+					local currentStatsHP = currentPlayerData.stats.hp
+					local currentStatsMaxHP = currentPlayerData.stats.maxHp
+
+					-- คำนวณค่า HP สูงสุดที่สามารถฟื้นฟูได้
+					local maxHealHP = currentStatsMaxHP * (MAX_AUTO_HEAL_PERCENT / 100)
+
+					-- ฟื้นฟู HP ถ้า HP ปัจจุบันน้อยกว่าค่าสูงสุดที่ฟื้นฟูได้
+					if currentStatsHP < maxHealHP then
+						local newHP = math.min(currentStatsHP + AUTO_HEAL_AMOUNT, maxHealHP)
+						self:UpdatePlayerHP(player, newHP)
+
+						debugLog("ฟื้นฟู HP อัตโนมัติ: " .. currentStatsHP .. " -> " .. newHP ..
+							" (สูงสุด " .. maxHealHP .. ")")
+					end -- แก้ไข: เปลี่ยน } เป็น end
+				end -- แก้ไข: เปลี่ยน } เป็น end
+
+				wait(AUTO_HEAL_INTERVAL)
+			end -- แก้ไข: เปลี่ยน } เป็น end
+
+			debugLog("หยุดการฟื้นฟู HP อัตโนมัติของผู้เล่น: " .. player.Name)
+		end)
+	end -- แก้ไข: เปลี่ยน } เป็น end
+
+	-- เก็บการเชื่อมต่อทั้งหมดสำหรับยกเลิกในภายหลัง
+	self.healthSyncConnections[player.UserId] = {
+		healthChanged = healthChangedConnection,
+		sync = syncConnection,
+		heal = healConnection
+	}
+end -- แก้ไข: เปลี่ยน } เป็น end
+
+-- ยกเลิกการเชื่อมต่อพลังชีวิตของผู้เล่น
+function PlayerManager:DisconnectPlayerHealth(player)
+	if not player then return end
+
+	local connections = self.healthSyncConnections[player.UserId]
+	if connections then
+		-- ยกเลิกการเชื่อมต่อทั้งหมด
+		if connections.healthChanged then
+			connections.healthChanged:Disconnect()
+		end -- แก้ไข: เปลี่ยน } เป็น end
+
+		connections.sync = nil
+		connections.heal = nil
+
+		self.healthSyncConnections[player.UserId] = nil
+		debugLog("ยกเลิกการเชื่อมต่อพลังชีวิตของผู้เล่น: " .. player.Name)
+	end -- แก้ไข: เปลี่ยน } เป็น end
+end -- แก้ไข: เปลี่ยน } เป็น end
 
 function PlayerManager:GetPlayerCount()
 	return self.playerCount
@@ -127,61 +404,102 @@ function PlayerManager:GetPlayerData(player)
 	return nil
 end
 
+-- ปรับปรุงฟังก์ชันกำหนดคลาสให้แสดงค่าสถานะละเอียดยิ่งขึ้น
 function PlayerManager:SetPlayerClass(player, className)
 	local playerData = self:GetPlayerData(player)
 	if not playerData then
-		debugLog("Player data not found for: " .. tostring(player))
+		warn("[PlayerManager] ไม่พบข้อมูลผู้เล่นสำหรับ: " .. tostring(player))
 		return false
 	end
 
 	local oldClass = playerData.class
 	playerData.class = className
 
-	-- Log class change
+	-- แสดงข้อมูลการเปลี่ยนคลาสในบันทึก
 	if oldClass then
-		debugLog(player.Name .. " changed class from " .. oldClass .. " to " .. className)
+		debugLog(player.Name .. " เปลี่ยนคลาสจาก " .. oldClass .. " เป็น " .. className)
 	else
-		debugLog(player.Name .. " assigned class: " .. className)
+		debugLog(player.Name .. " ได้รับการกำหนดคลาส: " .. className)
 	end
 
-	-- Get class data from ClassSystem
+	-- แสดงค่าสถานะเริ่มต้นก่อนการอัปเดต
+	debugLog("ค่าสถานะเริ่มต้น - HP: " .. playerData.stats.hp .. "/" .. playerData.stats.maxHp ..
+		" MP: " .. playerData.stats.mp .. "/" .. playerData.stats.maxMp)
+
+	-- รับข้อมูลคลาสจาก ClassSystem
 	local classSystem = self.gameManager and self.gameManager.classSystem
 	if classSystem then
-		debugLog("Applying class stats from ClassSystem")
-		-- ClassSystem will handle stat adjustments
-		return classSystem:UpdatePlayerStatsFromClass(player, self)
-	else
-		-- Fallback stats application if ClassSystem is not available
-		debugLog("ClassSystem not available, applying basic class stats")
-		if className == "Warrior" then
-			playerData.stats.maxHp = 145
-			playerData.stats.hp = 145
-			playerData.stats.attack = 15
-			playerData.stats.defense = 13
-		elseif className == "Mage" then
-			playerData.stats.maxHp = 85
-			playerData.stats.hp = 85
-			playerData.stats.maxMp = 120
-			playerData.stats.mp = 120
-			playerData.stats.magic = 20
-		elseif className == "Thief" then
-			playerData.stats.attack = 13
-			playerData.stats.defense = 8
-			playerData.stats.agility = 18
-			playerData.stats.money = 150
-		end
+		debugLog("กำลังใช้ ClassSystem เพื่ออัปเดตค่าสถานะตามคลาส")
+		-- ClassSystem จะจัดการปรับค่าสถานะ
+		local success = classSystem:UpdatePlayerStatsFromClass(player, self)
 
-		-- Send updated stats to client
-		self:SyncPlayerStats(player)
-		return true
+		if success then
+			debugLog("อัปเดตสถานะจาก ClassSystem สำเร็จ")
+			debugLog("ค่าสถานะหลังอัปเดต - HP: " .. playerData.stats.hp .. "/" .. playerData.stats.maxHp ..
+				" MP: " .. playerData.stats.mp .. "/" .. playerData.stats.maxMp)
+
+			-- ส่งอัปเดตไปยังไคลเอนต์แล้วผ่าน UpdatePlayerStatsFromClass ไม่ต้องส่งซ้ำ
+			return true
+		else
+			warn("[PlayerManager] อัปเดตสถานะจาก ClassSystem ล้มเหลว กำลังใช้การอัปเดตสำรอง")
+		end
+	else
+		debugLog("ไม่พบ ClassSystem กำลังใช้การอัปเดตสำรอง")
 	end
+
+	-- ฟังก์ชันสำรองในกรณีที่ ClassSystem ไม่พร้อมใช้งาน
+	debugLog("กำลังใช้ฟังก์ชันสำรองเพื่ออัปเดตสถานะตามคลาส")
+
+	-- ทำการอัปเดตค่าสถานะตามคลาสแบบ hardcode (เป็นตัวสำรอง)
+	if className == "Warrior" then
+		debugLog("กำลังกำหนดค่าสถานะสำหรับ Warrior")
+		playerData.stats.maxHp = 125
+		playerData.stats.hp = 125
+		playerData.stats.maxMp = 50
+		playerData.stats.mp = 50
+		playerData.stats.attack = 15
+		playerData.stats.defense = 13
+	elseif className == "Mage" then
+		debugLog("กำลังกำหนดค่าสถานะสำหรับ Mage")
+		playerData.stats.maxHp = 85
+		playerData.stats.hp = 85
+		playerData.stats.maxMp = 120
+		playerData.stats.mp = 120
+		playerData.stats.magic = 20
+	elseif className == "Thief" then
+		debugLog("กำลังกำหนดค่าสถานะสำหรับ Thief")
+		playerData.stats.maxHp = 100
+		playerData.stats.hp = 100
+		playerData.stats.maxMp = 60
+		playerData.stats.mp = 60
+		playerData.stats.attack = 13
+		playerData.stats.defense = 8
+		playerData.stats.agility = 18
+		playerData.stats.money = 150
+	end
+
+	debugLog("ค่าสถานะหลังอัปเดตสำรอง - HP: " .. playerData.stats.hp .. "/" .. playerData.stats.maxHp ..
+		" MP: " .. playerData.stats.mp .. "/" .. playerData.stats.maxMp)
+
+	-- ซิงค์ค่า HP กับ Humanoid
+	if player.Character and player.Character:FindFirstChild("Humanoid") then
+		local humanoid = player.Character:FindFirstChild("Humanoid")
+		humanoid.MaxHealth = playerData.stats.maxHp
+		humanoid.Health = playerData.stats.hp
+		debugLog("ซิงค์ค่า HP กับ Humanoid: " .. playerData.stats.hp .. "/" .. playerData.stats.maxHp)
+	end -- แก้ไข: เพิ่ม end ที่หายไป
+
+	-- ส่งอัปเดตไปยังไคลเอนต์
+	self:SyncPlayerStats(player)
+	return true
 end
 
+-- ปรับปรุงฟังก์ชัน UpdatePlayerStats ให้ส่งข้อมูลสถานะไปยังไคลเอนต์ได้ดีขึ้น
 function PlayerManager:UpdatePlayerStats(player, statUpdates)
 	local playerData = self:GetPlayerData(player)
 	if not playerData then return false end
 
-	debugLog("Updating stats for " .. player.Name)
+	debugLog("กำลังอัปเดตสถานะสำหรับ " .. player.Name)
 
 	-- Track which stats changed
 	local changedStats = {}
@@ -198,7 +516,7 @@ function PlayerManager:UpdatePlayerStats(player, statUpdates)
 				newValue = value
 			}
 
-			debugLog("Updated " .. stat .. " from " .. oldValue .. " to " .. value)
+			debugLog("อัปเดต " .. stat .. " จาก " .. oldValue .. " เป็น " .. value)
 		end
 	end
 
@@ -217,21 +535,21 @@ function PlayerManager:UpdatePlayerStats(player, statUpdates)
 	return true
 end
 
--- Modified: Sync player stats to client
+-- ปรับปรุงฟังก์ชัน SyncPlayerStats ให้ส่งข้อมูลครอบคลุมมากขึ้น
 function PlayerManager:SyncPlayerStats(player)
 	local playerData = self:GetPlayerData(player)
 	if not playerData then return false end
 
 	if not self.updatePlayerStatsEvent then
-		debugLog("Cannot sync stats - UpdatePlayerStats event not found")
+		warn("[PlayerManager] ไม่พบ UpdatePlayerStats event ไม่สามารถซิงค์ข้อมูลได้")
 		return false
 	end
 
 	-- Get player ID
 	local playerId = typeof(player) == "Instance" and player:IsA("Player") and player.UserId or player
 
-	-- Send complete stats update to client
-	self.updatePlayerStatsEvent:FireClient(player, playerId, {
+	-- ข้อมูลที่จะส่งไปยังไคลเอนต์
+	local statsToSync = {
 		hp = playerData.stats.hp,
 		maxHp = playerData.stats.maxHp,
 		mp = playerData.stats.mp,
@@ -244,24 +562,28 @@ function PlayerManager:SyncPlayerStats(player)
 		level = playerData.stats.level or 1,
 		class = playerData.class,
 		money = playerData.stats.money
-	})
+	}
 
-	debugLog("Synced stats for " .. player.Name .. " - HP: " .. playerData.stats.hp .. "/" .. playerData.stats.maxHp)
+	-- Send complete stats update to client (แก้ไขตรงนี้ให้ส่งไปที่ผู้เล่นทุกคน)
+	self.updatePlayerStatsEvent:FireClient(player, playerId, statsToSync)
+
+	debugLog("ซิงค์สถานะสำหรับ " .. player.Name .. " - HP: " .. playerData.stats.hp .. "/" .. playerData.stats.maxHp)
 
 	return true
 end
 
--- Modified: Update player HP directly
+-- ปรับปรุงฟังก์ชัน UpdatePlayerHP ให้ทำงานได้ถูกต้องยิ่งขึ้น
 function PlayerManager:UpdatePlayerHP(player, newHP)
 	local playerData = self:GetPlayerData(player)
 	if not playerData then return false end
 
 	local oldHP = playerData.stats.hp
 	playerData.stats.hp = math.min(newHP, playerData.stats.maxHp)
+	playerData.stats.hp = math.max(0, playerData.stats.hp) -- ป้องกันไม่ให้ HP ติดลบ
 
-	debugLog("Updated HP for " .. player.Name .. " from " .. oldHP .. " to " .. playerData.stats.hp)
+	debugLog("อัปเดต HP สำหรับ " .. player.Name .. " จาก " .. oldHP .. " เป็น " .. playerData.stats.hp)
 
-	-- Sync to client immediately
+	-- แจ้งเตือนไคลเอนต์เกี่ยวกับการเปลี่ยนแปลงทันที
 	if self.statChangedEvent then
 		self.statChangedEvent:FireClient(player, {
 			hp = {
@@ -271,10 +593,17 @@ function PlayerManager:UpdatePlayerHP(player, newHP)
 		})
 	end
 
-	-- Full sync for reliability
+	-- ซิงค์ข้อมูลแบบเต็มเพื่อความแน่นอน
 	self:SyncPlayerStats(player)
 
-	-- Check if player died
+	-- ซิงค์ค่า HP กับ Humanoid ทันที
+	if player.Character and player.Character:FindFirstChild("Humanoid") then
+		local humanoid = player.Character:FindFirstChild("Humanoid")
+		humanoid.Health = playerData.stats.hp
+		debugLog("ซิงค์ค่า HP กับ Humanoid ทันที: " .. playerData.stats.hp)
+	end -- แก้ไข: เพิ่ม end ที่หายไป
+
+	-- ตรวจสอบว่าผู้เล่นตายหรือไม่
 	if playerData.stats.hp <= 0 and playerData.isAlive then
 		playerData.isAlive = false
 		self:HandlePlayerDeath(player)
@@ -283,17 +612,18 @@ function PlayerManager:UpdatePlayerHP(player, newHP)
 	return true
 end
 
--- Modified: Update player MP directly
+-- ปรับปรุงฟังก์ชัน UpdatePlayerMP ให้ทำงานได้ถูกต้องยิ่งขึ้น
 function PlayerManager:UpdatePlayerMP(player, newMP)
 	local playerData = self:GetPlayerData(player)
 	if not playerData then return false end
 
 	local oldMP = playerData.stats.mp
 	playerData.stats.mp = math.min(newMP, playerData.stats.maxMp)
+	playerData.stats.mp = math.max(0, playerData.stats.mp) -- ป้องกันไม่ให้ MP ติดลบ
 
-	debugLog("Updated MP for " .. player.Name .. " from " .. oldMP .. " to " .. playerData.stats.mp)
+	debugLog("อัปเดต MP สำหรับ " .. player.Name .. " จาก " .. oldMP .. " เป็น " .. playerData.stats.mp)
 
-	-- Sync to client immediately
+	-- แจ้งเตือนไคลเอนต์เกี่ยวกับการเปลี่ยนแปลงทันที
 	if self.statChangedEvent then
 		self.statChangedEvent:FireClient(player, {
 			mp = {
@@ -303,18 +633,18 @@ function PlayerManager:UpdatePlayerMP(player, newMP)
 		})
 	end
 
-	-- Full sync for reliability
+	-- ซิงค์ข้อมูลแบบเต็มเพื่อความแน่นอน
 	self:SyncPlayerStats(player)
 
 	return true
 end
 
--- Handle player death
+-- จัดการการตายของผู้เล่น
 function PlayerManager:HandlePlayerDeath(player)
 	local playerData = self:GetPlayerData(player)
 	if not playerData then return false end
 
-	debugLog(player.Name .. " died")
+	debugLog(player.Name .. " ตายแล้ว")
 
 	-- Handle death logic here
 	-- For example: respawn, lose items, skip turns, etc.
@@ -331,12 +661,19 @@ function PlayerManager:HandlePlayerDeath(player)
 		-- Sync to client
 		self:SyncPlayerStats(player)
 
-		debugLog(player.Name .. " respawned")
+		-- ฟื้นฟู Humanoid.Health
+		if player.Character and player.Character:FindFirstChild("Humanoid") then
+			local humanoid = player.Character:FindFirstChild("Humanoid")
+			humanoid.Health = playerData.stats.maxHp
+		end -- แก้ไข: เพิ่ม end ที่หายไป
+
+		debugLog(player.Name .. " ฟื้นคืนชีพแล้ว")
 	end)
 
 	return true
 end
 
+-- รับผู้เล่นเรียงตามเวลาที่เข้าร่วม
 function PlayerManager:GetPlayersSortedByJoinTime()
 	local sortedPlayers = {}
 
@@ -353,10 +690,68 @@ function PlayerManager:GetPlayersSortedByJoinTime()
 	return sortedPlayers
 end
 
--- Enable or disable debug mode
+-- ทำความเสียหายโดยตรงกับผู้เล่น (สำหรับการทดสอบหรือกลไกเกม)
+function PlayerManager:DamagePlayer(player, damageAmount, source)
+	local playerData = self:GetPlayerData(player)
+	if not playerData then return false end
+
+	-- ตรวจสอบจำนวนความเสียหาย
+	damageAmount = math.max(0, damageAmount)
+	source = source or "GameMechanic"
+
+	-- บันทึก HP เดิม
+	local oldHP = playerData.stats.hp
+
+	-- คำนวณ HP ใหม่
+	local newHP = math.max(0, oldHP - damageAmount)
+
+	debugLog("ทำความเสียหาย " .. damageAmount .. " หน่วยกับผู้เล่น " .. player.Name ..
+		" (จาก " .. oldHP .. " เป็น " .. newHP .. ")")
+
+	-- อัปเดต HP
+	self:UpdatePlayerHP(player, newHP)
+
+	-- แจ้งเตือนไคลเอนต์
+	if self.playerDamagedEvent then
+		self.playerDamagedEvent:FireClient(player, {
+			oldHP = oldHP,
+			newHP = newHP,
+			maxHP = playerData.stats.maxHp,
+			damage = damageAmount,
+			source = source
+		})
+	end -- แก้ไข: เปลี่ยน } เป็น end
+
+	return true
+end -- แก้ไข: เปลี่ยน } เป็น end
+
+-- เปิด/ปิดโหมดดีบัก
 function PlayerManager:SetDebugMode(enabled)
 	DEBUG_MODE = enabled
 	print("[PlayerManager] Debug mode " .. (enabled and "enabled" or "disabled"))
 end
+
+-- ปรับการตั้งค่าการฟื้นฟู HP
+function PlayerManager:SetAutoHealSettings(enabled, interval, amount, maxPercent)
+	AUTO_HEAL_ENABLED = enabled or false
+
+	if interval then
+		AUTO_HEAL_INTERVAL = math.max(1, interval)
+	end -- แก้ไข: เปลี่ยน } เป็น end
+
+	if amount then
+		AUTO_HEAL_AMOUNT = math.max(1, amount)
+	end -- แก้ไข: เปลี่ยน } เป็น end
+
+	if maxPercent then
+		MAX_AUTO_HEAL_PERCENT = math.clamp(maxPercent, 0, 100)
+	end -- แก้ไข: เปลี่ยน } เป็น end
+
+	debugLog("ปรับการตั้งค่าการฟื้นฟู HP: " ..
+		"เปิดใช้งาน=" .. tostring(AUTO_HEAL_ENABLED) .. ", " ..
+		"ความถี่=" .. AUTO_HEAL_INTERVAL .. "วินาที, " ..
+		"จำนวน=" .. AUTO_HEAL_AMOUNT .. ", " ..
+		"สูงสุด=" .. MAX_AUTO_HEAL_PERCENT .. "%")
+end -- แก้ไข: เปลี่ยน } เป็น end
 
 return PlayerManager
