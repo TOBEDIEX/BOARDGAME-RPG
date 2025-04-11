@@ -1,6 +1,6 @@
--- Init.server.lua
--- สคริปต์เริ่มต้นเกม ทำหน้าที่เริ่มต้นระบบทั้งหมด
--- Version: 2.1.0 (Optimized)
+-- InitGame.server.lua
+-- Script to initialize all game systems
+-- Version: 3.0.0 (Optimized)
 
 -- Services
 local ServerStorage = game:GetService("ServerStorage")
@@ -240,14 +240,6 @@ local function loadServices()
 	if not Services then
 		warn("Services folder not found")
 		return
-	end
-
-	-- List services for debugging
-	print("Found services:")
-	for _, service in pairs(Services:GetChildren()) do
-		if service:IsA("Script") then
-			print(" - " .. service.Name)
-		end
 	end
 
 	-- Server scripts execute automatically
