@@ -1,0 +1,288 @@
+-- SimpleCameraSystem.lua
+-- ระบบกล้องอย่างง่าย: ล็อคผู้เล่นและเปลี่ยนเป็น FreeCam ได้
+-- วางใน StarterPlayerScripts
+
+local CameraSystem = {}
+
+-- Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+-- Local variables
+local player = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
+local currentMode = "LockPlayer" -- LockPlayer or FreeCam
+local connections = {}
+local currentTurnPlayerId = nil
+local freeCamPosition = Vector3.new(0, 0, 0)
+local freeCamHeight = 40
+local moveSpeed = 1 -- ปรับค่านี้เพื่อเปลี่ยนความเร็วพื้นฐาน
+local freeCamMoveSpeedMultiplier = 2.5 -- เพิ่มตัวคูณความเร็วเล็กน้อย
+local cameraOffset = Vector3.new(0, 8, 16)
+
+-- Debug function
+local function debug(message)
+	print("[CameraSystem] " .. message)
+end
+
+-- Show message on screen (โค้ดเดิม ไม่เปลี่ยนแปลง)
+local function showMessage(text, subText)
+	debug(text .. " - " .. (subText or ""))
+	local PlayerGui = player:WaitForChild("PlayerGui")
+	local messageGui = PlayerGui:FindFirstChild("CameraMessage")
+	if not messageGui then
+		messageGui = Instance.new("ScreenGui")
+		messageGui.Name = "CameraMessage"
+		messageGui.Parent = PlayerGui
+		messageGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+		local frame = Instance.new("Frame")
+		frame.Name = "MessageFrame"
+		frame.Size = UDim2.new(0, 300, 0, 80)
+		frame.Position = UDim2.new(0.5, -150, 0.1, 0)
+		frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+		frame.BackgroundTransparency = 0.3
+		frame.BorderSizePixel = 0
+		frame.Parent = messageGui
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 8)
+		corner.Parent = frame
+		local mainText = Instance.new("TextLabel")
+		mainText.Name = "MainText"
+		mainText.Size = UDim2.new(1, -20, 0.6, 0)
+		mainText.Position = UDim2.new(0, 10, 0, 0)
+		mainText.BackgroundTransparency = 1
+		mainText.Font = Enum.Font.GothamBold
+		mainText.TextColor3 = Color3.fromRGB(255, 255, 255)
+		mainText.TextSize = 18
+		mainText.TextXAlignment = Enum.TextXAlignment.Left
+		mainText.Parent = frame
+		local subTextLabel = Instance.new("TextLabel")
+		subTextLabel.Name = "SubText"
+		subTextLabel.Size = UDim2.new(1, -20, 0.4, 0)
+		subTextLabel.Position = UDim2.new(0, 10, 0.6, 0)
+		subTextLabel.BackgroundTransparency = 1
+		subTextLabel.Font = Enum.Font.Gotham
+		subTextLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+		subTextLabel.TextSize = 14
+		subTextLabel.TextXAlignment = Enum.TextXAlignment.Left
+		subTextLabel.Parent = frame
+	end
+	local frame = messageGui.MessageFrame
+	local mainText = frame:FindFirstChild("MainText")
+	local subTextLabel = frame:FindFirstChild("SubText")
+	if mainText and subTextLabel then
+		mainText.Text = text
+		subTextLabel.Text = subText or ""
+	end
+	frame.Visible = true
+	frame.BackgroundTransparency = 0.3
+	if mainText then mainText.TextTransparency = 0 end
+	if subTextLabel then subTextLabel.TextTransparency = 0 end
+	task.delay(3.5, function()
+		if frame and frame.Parent then
+			TweenService:Create(frame, TweenInfo.new(0.5), {BackgroundTransparency = 1}):Play()
+			if mainText then TweenService:Create(mainText, TweenInfo.new(0.5), {TextTransparency = 1}):Play() end
+			if subTextLabel then TweenService:Create(subTextLabel, TweenInfo.new(0.5), {TextTransparency = 1}):Play() end
+		end
+	end)
+	task.delay(4, function()
+		if frame and frame.Parent then
+			frame.Visible = false
+			frame.BackgroundTransparency = 0.3
+			if mainText then mainText.TextTransparency = 0 end
+			if subTextLabel then subTextLabel.TextTransparency = 0 end
+		end
+	end)
+end
+
+
+-- Find current turn player (โค้ดเดิม ไม่เปลี่ยนแปลง)
+local function findCurrentTurnPlayer()
+	if not currentTurnPlayerId then return nil end
+	local targetPlayer = Players:GetPlayerByUserId(currentTurnPlayerId)
+	if not targetPlayer then return nil end
+	local character = targetPlayer.Character
+	if not character then return nil end
+	local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+	if not humanoidRootPart then return nil end
+	return {player = targetPlayer, character = character, rootPart = humanoidRootPart, position = humanoidRootPart.Position, lookVector = humanoidRootPart.CFrame.LookVector}
+end
+
+-- Find center of board (โค้ดเดิม ไม่เปลี่ยนแปลง)
+local function findBoardCenter()
+	local tilesFolder = Workspace:FindFirstChild("BoardTiles")
+	if not tilesFolder then debug("BoardTiles not found, using default position"); return Vector3.new(0, 0, 0) end
+	local totalPos = Vector3.new(0, 0, 0)
+	local count = 0
+	for _, tile in ipairs(tilesFolder:GetChildren()) do
+		if tile:IsA("BasePart") then totalPos = totalPos + tile.Position; count = count + 1 end
+	end
+	return if count > 0 then totalPos / count else Vector3.new(0, 0, 0)
+end
+
+-- Update in lock player mode (โค้ดเดิม ไม่เปลี่ยนแปลง)
+local function updateLockPlayerCamera()
+	local playerInfo = findCurrentTurnPlayer()
+	local targetCFrame
+	if playerInfo then
+		local targetPos = playerInfo.position
+		local lookVector = playerInfo.lookVector
+		local cameraPos = targetPos - (lookVector * cameraOffset.Z) + Vector3.new(0, cameraOffset.Y, 0)
+		local lookAtPos = targetPos + Vector3.new(0, 2, 0)
+		targetCFrame = CFrame.lookAt(cameraPos, lookAtPos)
+	else
+		local boardCenter = findBoardCenter()
+		local cameraPos = boardCenter + Vector3.new(0, freeCamHeight, 20)
+		targetCFrame = CFrame.lookAt(cameraPos, boardCenter)
+	end
+	local tweenInfo = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local tween = TweenService:Create(camera, tweenInfo, {CFrame = targetCFrame})
+	tween:Play()
+end
+
+-- *** Update free cam (แก้ไขใหม่) ***
+local function updateFreeCam(deltaTime)
+	local cameraCFrame = camera.CFrame
+	local moveInput = Vector3.new(0, 0, 0) -- เก็บ Input WASD ดิบๆ
+
+	-- รับ Input WASD
+	if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+		moveInput = moveInput + Vector3.new(0, 0, -1) -- Forward
+	end
+	if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+		moveInput = moveInput + Vector3.new(0, 0, 1) -- Backward
+	end
+	if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+		moveInput = moveInput + Vector3.new(-1, 0, 0) -- Left
+	end
+	if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+		moveInput = moveInput + Vector3.new(1, 0, 0) -- Right
+	end
+
+	-- ปรับความสูงด้วย Q/E
+	local heightChange = 0
+	if UserInputService:IsKeyDown(Enum.KeyCode.Q) then
+		heightChange = -1 -- ลง
+	end
+	if UserInputService:IsKeyDown(Enum.KeyCode.E) then
+		heightChange = 1 -- ขึ้น
+	end
+
+	-- คำนวณความเร็วในการเคลื่อนที่และความสูง
+	local currentMoveSpeed = moveSpeed * freeCamMoveSpeedMultiplier * deltaTime * 60
+	local currentHeightSpeed = moveSpeed * freeCamMoveSpeedMultiplier * deltaTime * 60 -- ใช้ความเร็วเดียวกันหรือปรับแยกก็ได้
+
+	-- Clamp height
+	freeCamHeight = math.clamp(freeCamHeight + heightChange * currentHeightSpeed, 10, 150)
+
+	-- คำนวณทิศทางการเคลื่อนที่จริง โดยอิงจาก Camera CFrame
+	local moveDirection = Vector3.new(0,0,0)
+	if moveInput.Magnitude > 0.01 then
+		-- แปลง Input Vector (ที่สัมพันธ์กับหน้าจอ/กล้อง) ให้เป็น World Space Vector
+		-- โดยไม่สนใจแกน Y ของ Camera CFrame เพื่อให้เคลื่อนที่ขนานกับพื้น
+		local directionRelativeToCamera = cameraCFrame:VectorToWorldSpace(moveInput)
+		local moveDirectionXZ = Vector3.new(directionRelativeToCamera.X, 0, directionRelativeToCamera.Z)
+
+		-- Normalize ทิศทางถ้ามีการเคลื่อนที่
+		if moveDirectionXZ.Magnitude > 0.01 then
+			moveDirection = moveDirectionXZ.Unit
+		end
+	end
+
+	-- Apply movement ถ้ามีทิศทาง
+	if moveDirection.Magnitude > 0.01 then
+		freeCamPosition = freeCamPosition + moveDirection * currentMoveSpeed
+	end
+
+	-- Update camera position and orientation
+	local cameraPos = Vector3.new(freeCamPosition.X, freeCamHeight, freeCamPosition.Z)
+	local lookAtPos = freeCamPosition -- กล้องมองไปที่จุดบนพื้นเสมอ
+
+	-- ใช้ LookAt เพื่อให้แน่ใจว่ากล้องมองไปยังจุดที่ถูกต้อง
+	camera.CFrame = CFrame.lookAt(cameraPos, lookAtPos)
+end
+
+
+-- Toggle camera mode (โค้ดเดิม ไม่เปลี่ยนแปลง)
+local function toggleCameraMode()
+	if currentMode == "LockPlayer" then
+		currentMode = "FreeCam"
+		local playerInfo = findCurrentTurnPlayer()
+		if playerInfo then
+			freeCamPosition = Vector3.new(playerInfo.position.X, 0, playerInfo.position.Z)
+			freeCamHeight = math.clamp(camera.CFrame.Position.Y, 20, 80)
+		else
+			freeCamPosition = findBoardCenter()
+			freeCamHeight = 40
+		end
+		freeCamHeight = math.clamp(freeCamHeight, 10, 150)
+		camera.CameraType = Enum.CameraType.Scriptable
+		camera.CameraSubject = nil
+		showMessage("โหมดกล้องอิสระ", "WASD เคลื่อนที่, QE ปรับความสูง, V สลับโหมด")
+		debug("Switched to Free Cam mode")
+	else
+		currentMode = "LockPlayer"
+		camera.CameraType = Enum.CameraType.Scriptable
+		showMessage("โหมดล็อคผู้เล่น", "กล้องล็อคตามผู้เล่น, V สลับโหมด")
+		debug("Switched to Lock Player mode")
+		updateLockPlayerCamera()
+	end
+end
+
+-- Connect to turn system (โค้ดเดิม ไม่เปลี่ยนแปลง)
+local function connectToTurnSystem()
+	local remotes = ReplicatedStorage:WaitForChild("Remotes")
+	if not remotes then debug("Remotes folder not found"); return end
+	local gameRemotes = remotes:FindFirstChild("GameRemotes")
+	if not gameRemotes then debug("GameRemotes folder not found"); return end
+	local updateTurnEvent = gameRemotes:FindFirstChild("UpdateTurn")
+	if not updateTurnEvent then debug("UpdateTurn event not found"); return end
+	connections.turnUpdate = updateTurnEvent.OnClientEvent:Connect(function(playerId)
+		debug("Turn changed to player: " .. tostring(playerId))
+		currentTurnPlayerId = playerId
+		if currentMode == "LockPlayer" then
+			updateLockPlayerCamera()
+		end
+	end)
+end
+
+-- Clean up connections (โค้ดเดิม ไม่เปลี่ยนแปลง)
+local function cleanup()
+	debug("Cleaning up CameraSystem connections...")
+	for name, connection in pairs(connections) do
+		if connection then connection:Disconnect(); connections[name] = nil end
+	end
+end
+
+-- Initialize camera system (โค้ดเดิม ไม่เปลี่ยนแปลง)
+local function initCameraSystem()
+	debug("Initializing camera system...")
+	if not player.Character then player.CharacterAdded:Wait() end
+	player.Character:WaitForChild("HumanoidRootPart")
+	connectToTurnSystem()
+	camera.CameraType = Enum.CameraType.Scriptable
+	connections.inputBegan = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+		if gameProcessed then return end
+		if input.KeyCode == Enum.KeyCode.V then toggleCameraMode() end
+	end)
+	connections.renderStepped = RunService.RenderStepped:Connect(function(deltaTime)
+		if currentMode == "LockPlayer" then
+			updateLockPlayerCamera()
+		elseif currentMode == "FreeCam" then
+			updateFreeCam(deltaTime)
+		end
+	end)
+	player.CharacterRemoving:Connect(cleanup)
+	script.Destroying:Connect(cleanup)
+	showMessage("ระบบกล้อง", "กด V เพื่อสลับโหมดกล้อง")
+	debug("Camera system initialized")
+end
+
+-- Start
+initCameraSystem()
+
+return CameraSystem
