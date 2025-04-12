@@ -23,81 +23,16 @@ local freeCamHeight = 40
 local moveSpeed = 1 -- ปรับค่านี้เพื่อเปลี่ยนความเร็วพื้นฐาน
 local freeCamMoveSpeedMultiplier = 2.5 -- เพิ่มตัวคูณความเร็วเล็กน้อย
 local cameraOffset = Vector3.new(0, 8, 16)
+local freeCamDirection = Vector3.new(0, -0.8, -1).Unit -- มุมเอียงแบบ MOBA มองลงมาจากด้านบน
+local cameraAngle = math.rad(45) -- มุมกล้องเอียง 45 องศา (แบบ MOBA)
+local cameraDistance = 30 -- ระยะห่างของกล้องจากตำแหน่งเป้าหมาย
 
 -- Debug function
 local function debug(message)
 	print("[CameraSystem] " .. message)
 end
 
--- Show message on screen (โค้ดเดิม ไม่เปลี่ยนแปลง)
-local function showMessage(text, subText)
-	debug(text .. " - " .. (subText or ""))
-	local PlayerGui = player:WaitForChild("PlayerGui")
-	local messageGui = PlayerGui:FindFirstChild("CameraMessage")
-	if not messageGui then
-		messageGui = Instance.new("ScreenGui")
-		messageGui.Name = "CameraMessage"
-		messageGui.Parent = PlayerGui
-		messageGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-		local frame = Instance.new("Frame")
-		frame.Name = "MessageFrame"
-		frame.Size = UDim2.new(0, 300, 0, 80)
-		frame.Position = UDim2.new(0.5, -150, 0.1, 0)
-		frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-		frame.BackgroundTransparency = 0.3
-		frame.BorderSizePixel = 0
-		frame.Parent = messageGui
-		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(0, 8)
-		corner.Parent = frame
-		local mainText = Instance.new("TextLabel")
-		mainText.Name = "MainText"
-		mainText.Size = UDim2.new(1, -20, 0.6, 0)
-		mainText.Position = UDim2.new(0, 10, 0, 0)
-		mainText.BackgroundTransparency = 1
-		mainText.Font = Enum.Font.GothamBold
-		mainText.TextColor3 = Color3.fromRGB(255, 255, 255)
-		mainText.TextSize = 18
-		mainText.TextXAlignment = Enum.TextXAlignment.Left
-		mainText.Parent = frame
-		local subTextLabel = Instance.new("TextLabel")
-		subTextLabel.Name = "SubText"
-		subTextLabel.Size = UDim2.new(1, -20, 0.4, 0)
-		subTextLabel.Position = UDim2.new(0, 10, 0.6, 0)
-		subTextLabel.BackgroundTransparency = 1
-		subTextLabel.Font = Enum.Font.Gotham
-		subTextLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-		subTextLabel.TextSize = 14
-		subTextLabel.TextXAlignment = Enum.TextXAlignment.Left
-		subTextLabel.Parent = frame
-	end
-	local frame = messageGui.MessageFrame
-	local mainText = frame:FindFirstChild("MainText")
-	local subTextLabel = frame:FindFirstChild("SubText")
-	if mainText and subTextLabel then
-		mainText.Text = text
-		subTextLabel.Text = subText or ""
-	end
-	frame.Visible = true
-	frame.BackgroundTransparency = 0.3
-	if mainText then mainText.TextTransparency = 0 end
-	if subTextLabel then subTextLabel.TextTransparency = 0 end
-	task.delay(3.5, function()
-		if frame and frame.Parent then
-			TweenService:Create(frame, TweenInfo.new(0.5), {BackgroundTransparency = 1}):Play()
-			if mainText then TweenService:Create(mainText, TweenInfo.new(0.5), {TextTransparency = 1}):Play() end
-			if subTextLabel then TweenService:Create(subTextLabel, TweenInfo.new(0.5), {TextTransparency = 1}):Play() end
-		end
-	end)
-	task.delay(4, function()
-		if frame and frame.Parent then
-			frame.Visible = false
-			frame.BackgroundTransparency = 0.3
-			if mainText then mainText.TextTransparency = 0 end
-			if subTextLabel then subTextLabel.TextTransparency = 0 end
-		end
-	end)
-end
+
 
 
 -- Find current turn player (โค้ดเดิม ไม่เปลี่ยนแปลง)
@@ -112,10 +47,10 @@ local function findCurrentTurnPlayer()
 	return {player = targetPlayer, character = character, rootPart = humanoidRootPart, position = humanoidRootPart.Position, lookVector = humanoidRootPart.CFrame.LookVector}
 end
 
--- Find center of board (โค้ดเดิม ไม่เปลี่ยนแปลง)
+-- Find center of board
 local function findBoardCenter()
 	local tilesFolder = Workspace:FindFirstChild("BoardTiles")
-	if not tilesFolder then debug("BoardTiles not found, using default position"); return Vector3.new(0, 0, 0) end
+	if not tilesFolder then return Vector3.new(0, 0, 0) end
 	local totalPos = Vector3.new(0, 0, 0)
 	local count = 0
 	for _, tile in ipairs(tilesFolder:GetChildren()) do
@@ -144,11 +79,35 @@ local function updateLockPlayerCamera()
 	tween:Play()
 end
 
--- *** Update free cam (แก้ไขใหม่) ***
+-- *** Update free cam (แก้ไขใหม่สำหรับมุมมอง MOBA) ***
 local function updateFreeCam(deltaTime)
-	local cameraCFrame = camera.CFrame
-	local moveInput = Vector3.new(0, 0, 0) -- เก็บ Input WASD ดิบๆ
-
+	-- รับข้อมูลเมาส์สำหรับหมุนกล้อง
+	local mouseMovement = UserInputService:GetMouseDelta()
+	
+	-- ตั้งค่าความเร็วหมุนกล้อง
+	local rotationSpeed = 0.005
+	
+	-- หมุนกล้องตามการเคลื่อนไหวของเมาส์ (ถ้าผู้ใช้กดปุ่มเมาส์ขวา)
+	if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+		-- หมุนรอบแกน Y (หมุนซ้าย-ขวา) เท่านั้น เพื่อรักษามุมเอียงแบบ MOBA
+		local rotationY = -mouseMovement.X * rotationSpeed
+		
+		-- สร้าง CFrame สำหรับหมุน
+		local rotationCF = CFrame.Angles(0, rotationY, 0)
+		
+		-- เวกเตอร์ทิศทางหลักในแนวระนาบ XZ
+		local horizontalDir = Vector3.new(freeCamDirection.X, 0, freeCamDirection.Z).Unit
+		
+		-- หมุนเฉพาะส่วนแนวระนาบ
+		local newHorizontalDir = (rotationCF * horizontalDir)
+		
+		-- ประกอบกลับเป็นทิศทางใหม่ โดยคงมุมในแนวดิ่ง (เอียงลงมา)
+		freeCamDirection = Vector3.new(newHorizontalDir.X, -math.sin(cameraAngle), newHorizontalDir.Z).Unit
+	end
+	
+	-- เก็บค่า Input การเคลื่อนที่
+	local moveInput = Vector3.new(0, 0, 0)
+	
 	-- รับ Input WASD
 	if UserInputService:IsKeyDown(Enum.KeyCode.W) then
 		moveInput = moveInput + Vector3.new(0, 0, -1) -- Forward
@@ -162,8 +121,8 @@ local function updateFreeCam(deltaTime)
 	if UserInputService:IsKeyDown(Enum.KeyCode.D) then
 		moveInput = moveInput + Vector3.new(1, 0, 0) -- Right
 	end
-
-	-- ปรับความสูงด้วย Q/E
+	
+	-- ปรับความสูงด้วย Q/E (จะปรับความสูงของพื้นที่มอง)
 	local heightChange = 0
 	if UserInputService:IsKeyDown(Enum.KeyCode.Q) then
 		heightChange = -1 -- ลง
@@ -171,78 +130,105 @@ local function updateFreeCam(deltaTime)
 	if UserInputService:IsKeyDown(Enum.KeyCode.E) then
 		heightChange = 1 -- ขึ้น
 	end
-
+	
+	-- ปรับระยะซูมด้วยล้อเมาส์ (สำหรับปรับระยะห่างของกล้อง)
+	local zoomChange = 0
+	if UserInputService:IsKeyDown(Enum.KeyCode.Z) then
+		zoomChange = -1 -- ซูมเข้า
+	end
+	if UserInputService:IsKeyDown(Enum.KeyCode.X) then
+		zoomChange = 1 -- ซูมออก
+	end
+	
 	-- คำนวณความเร็วในการเคลื่อนที่และความสูง
 	local currentMoveSpeed = moveSpeed * freeCamMoveSpeedMultiplier * deltaTime * 60
-	local currentHeightSpeed = moveSpeed * freeCamMoveSpeedMultiplier * deltaTime * 60 -- ใช้ความเร็วเดียวกันหรือปรับแยกก็ได้
-
-	-- Clamp height
+	local currentHeightSpeed = moveSpeed * freeCamMoveSpeedMultiplier * deltaTime * 60
+	local currentZoomSpeed = moveSpeed * freeCamMoveSpeedMultiplier * deltaTime * 60 * 2
+	
+	-- ปรับความสูงและระยะซูม
 	freeCamHeight = math.clamp(freeCamHeight + heightChange * currentHeightSpeed, 10, 150)
-
-	-- คำนวณทิศทางการเคลื่อนที่จริง โดยอิงจาก Camera CFrame
-	local moveDirection = Vector3.new(0,0,0)
+	cameraDistance = math.clamp(cameraDistance + zoomChange * currentZoomSpeed, 10, 100)
+	
+	-- คำนวณทิศทางการเคลื่อนที่
 	if moveInput.Magnitude > 0.01 then
-		-- แปลง Input Vector (ที่สัมพันธ์กับหน้าจอ/กล้อง) ให้เป็น World Space Vector
-		-- โดยไม่สนใจแกน Y ของ Camera CFrame เพื่อให้เคลื่อนที่ขนานกับพื้น
-		local directionRelativeToCamera = cameraCFrame:VectorToWorldSpace(moveInput)
-		local moveDirectionXZ = Vector3.new(directionRelativeToCamera.X, 0, directionRelativeToCamera.Z)
-
-		-- Normalize ทิศทางถ้ามีการเคลื่อนที่
-		if moveDirectionXZ.Magnitude > 0.01 then
-			moveDirection = moveDirectionXZ.Unit
+		-- สร้าง CFrame จากทิศทางกล้องปัจจุบัน แต่ปรับให้อยู่ในแนวระนาบ
+		local horizontalDir = Vector3.new(freeCamDirection.X, 0, freeCamDirection.Z).Unit
+		local cameraCFrame = CFrame.lookAt(Vector3.new(0, 0, 0), horizontalDir)
+		
+		-- แปลง Input Vector เป็น World Space
+		local moveDirection = cameraCFrame:VectorToWorldSpace(moveInput)
+		
+		-- เราต้องการให้เคลื่อนที่บนระนาบ XZ เท่านั้น
+		moveDirection = Vector3.new(moveDirection.X, 0, moveDirection.Z)
+		
+		-- ทำให้เป็นหนึ่งหน่วย เพื่อให้ความเร็วคงที่
+		if moveDirection.Magnitude > 0.01 then
+			moveDirection = moveDirection.Unit
+			
+			-- อัพเดทตำแหน่งกล้อง
+			freeCamPosition = freeCamPosition + moveDirection * currentMoveSpeed
 		end
 	end
-
-	-- Apply movement ถ้ามีทิศทาง
-	if moveDirection.Magnitude > 0.01 then
-		freeCamPosition = freeCamPosition + moveDirection * currentMoveSpeed
-	end
-
-	-- Update camera position and orientation
-	local cameraPos = Vector3.new(freeCamPosition.X, freeCamHeight, freeCamPosition.Z)
-	local lookAtPos = freeCamPosition -- กล้องมองไปที่จุดบนพื้นเสมอ
-
-	-- ใช้ LookAt เพื่อให้แน่ใจว่ากล้องมองไปยังจุดที่ถูกต้อง
-	camera.CFrame = CFrame.lookAt(cameraPos, lookAtPos)
+	
+	-- คำนวณตำแหน่งเป้าหมายที่กล้องมอง (พื้นที่เล่น)
+	local targetPosition = Vector3.new(freeCamPosition.X, 0, freeCamPosition.Z)
+	
+	-- คำนวณเวกเตอร์ทิศทางในแนวระนาบ XZ
+	local horizontalDirection = Vector3.new(freeCamDirection.X, 0, freeCamDirection.Z).Unit
+	
+	-- คำนวณตำแหน่งกล้องด้วยระยะห่างและมุมเอียง
+	local offsetX = -horizontalDirection.X * cameraDistance * math.cos(cameraAngle)
+	local offsetY = cameraDistance * math.sin(cameraAngle)
+	local offsetZ = -horizontalDirection.Z * cameraDistance * math.cos(cameraAngle)
+	
+	local cameraOffset = Vector3.new(offsetX, offsetY, offsetZ)
+	local cameraPosition = targetPosition + cameraOffset
+	
+	-- อัพเดทกล้อง
+	camera.CFrame = CFrame.lookAt(cameraPosition, targetPosition)
 end
 
-
--- Toggle camera mode (โค้ดเดิม ไม่เปลี่ยนแปลง)
+-- Toggle camera mode
 local function toggleCameraMode()
 	if currentMode == "LockPlayer" then
 		currentMode = "FreeCam"
 		local playerInfo = findCurrentTurnPlayer()
 		if playerInfo then
 			freeCamPosition = Vector3.new(playerInfo.position.X, 0, playerInfo.position.Z)
-			freeCamHeight = math.clamp(camera.CFrame.Position.Y, 20, 80)
+			freeCamHeight = 30 -- ความสูงเริ่มต้นที่เหมาะสมสำหรับมุมมอง MOBA
+			
+			-- เก็บทิศทางกล้องเริ่มต้นจากผู้เล่น แต่ปรับให้เป็นมุมเอียงแบบ MOBA
+			local horizontalDir = Vector3.new(playerInfo.lookVector.X, 0, playerInfo.lookVector.Z).Unit
+			freeCamDirection = Vector3.new(horizontalDir.X, -math.sin(cameraAngle), horizontalDir.Z).Unit
 		else
 			freeCamPosition = findBoardCenter()
 			freeCamHeight = 40
+			-- ทิศทางเริ่มต้นแบบ MOBA มองจากด้านบนในมุมเอียง
+			freeCamDirection = Vector3.new(0, -math.sin(cameraAngle), -math.cos(cameraAngle)).Unit
 		end
+		
+		-- ตั้งค่าระยะกล้องและความสูงให้อยู่ในช่วงที่เหมาะสม
+		cameraDistance = 30 -- ระยะห่างเริ่มต้นที่เหมาะสม
 		freeCamHeight = math.clamp(freeCamHeight, 10, 150)
+		
 		camera.CameraType = Enum.CameraType.Scriptable
 		camera.CameraSubject = nil
-		showMessage("โหมดกล้องอิสระ", "WASD เคลื่อนที่, QE ปรับความสูง, V สลับโหมด")
-		debug("Switched to Free Cam mode")
 	else
 		currentMode = "LockPlayer"
 		camera.CameraType = Enum.CameraType.Scriptable
-		showMessage("โหมดล็อคผู้เล่น", "กล้องล็อคตามผู้เล่น, V สลับโหมด")
-		debug("Switched to Lock Player mode")
 		updateLockPlayerCamera()
 	end
 end
 
--- Connect to turn system (โค้ดเดิม ไม่เปลี่ยนแปลง)
+-- Connect to turn system
 local function connectToTurnSystem()
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
-	if not remotes then debug("Remotes folder not found"); return end
+	if not remotes then return end
 	local gameRemotes = remotes:FindFirstChild("GameRemotes")
-	if not gameRemotes then debug("GameRemotes folder not found"); return end
+	if not gameRemotes then return end
 	local updateTurnEvent = gameRemotes:FindFirstChild("UpdateTurn")
-	if not updateTurnEvent then debug("UpdateTurn event not found"); return end
+	if not updateTurnEvent then return end
 	connections.turnUpdate = updateTurnEvent.OnClientEvent:Connect(function(playerId)
-		debug("Turn changed to player: " .. tostring(playerId))
 		currentTurnPlayerId = playerId
 		if currentMode == "LockPlayer" then
 			updateLockPlayerCamera()
@@ -250,17 +236,15 @@ local function connectToTurnSystem()
 	end)
 end
 
--- Clean up connections (โค้ดเดิม ไม่เปลี่ยนแปลง)
+-- Clean up connections
 local function cleanup()
-	debug("Cleaning up CameraSystem connections...")
 	for name, connection in pairs(connections) do
 		if connection then connection:Disconnect(); connections[name] = nil end
 	end
 end
 
--- Initialize camera system (โค้ดเดิม ไม่เปลี่ยนแปลง)
+-- Initialize camera system
 local function initCameraSystem()
-	debug("Initializing camera system...")
 	if not player.Character then player.CharacterAdded:Wait() end
 	player.Character:WaitForChild("HumanoidRootPart")
 	connectToTurnSystem()
@@ -278,8 +262,6 @@ local function initCameraSystem()
 	end)
 	player.CharacterRemoving:Connect(cleanup)
 	script.Destroying:Connect(cleanup)
-	showMessage("ระบบกล้อง", "กด V เพื่อสลับโหมดกล้อง")
-	debug("Camera system initialized")
 end
 
 -- Start
