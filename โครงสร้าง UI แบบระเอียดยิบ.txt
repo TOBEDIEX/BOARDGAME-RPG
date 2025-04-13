@@ -133,93 +133,6 @@ Frame (ชื่อ "DiceRollUI")
         ├── ImageLabel (ชื่อ "RightArrow")
         └── TextLabel (ชื่อ "RightText")
 
-5. หน้าต่อสู้ (Combat Screen)
-Frame (ชื่อ "CombatUI")
-├── UICorner
-├── UIStroke
-├── Frame (ชื่อ "PlayerCombatInfo")
-│   ├── UICorner
-│   ├── UIStroke
-│   ├── ImageLabel (ชื่อ "PlayerCharacter")
-│   ├── TextLabel (ชื่อ "PlayerName")
-│   ├── Frame (ชื่อ "PlayerHPBar")
-│   │   ├── Frame (ชื่อ "HPFill")
-│   │   └── TextLabel (ชื่อ "HPText")
-│   └── Frame (ชื่อ "PlayerMPBar")
-│       ├── Frame (ชื่อ "MPFill")
-│       └── TextLabel (ชื่อ "MPText")
-├── Frame (ชื่อ "EnemyCombatInfo")
-│   ├── UICorner
-│   ├── UIStroke
-│   ├── ImageLabel (ชื่อ "EnemyCharacter")
-│   ├── TextLabel (ชื่อ "EnemyName")
-│   ├── Frame (ชื่อ "EnemyHPBar")
-│   │   ├── Frame (ชื่อ "HPFill")
-│   │   └── TextLabel (ชื่อ "HPText")
-│   └── Frame (ชื่อ "EnemyMPBar")
-│       ├── Frame (ชื่อ "MPFill")
-│       └── TextLabel (ชื่อ "MPText")
-├── Frame (ชื่อ "TurnIndicator")
-│   ├── UICorner
-│   ├── UIStroke
-│   └── TextLabel (ชื่อ "TurnText")
-├── TextButton (ชื่อ "AttackMenuButton")
-│   ├── UICorner
-│   ├── UIStroke
-│   └── TextLabel (ชื่อ "AttackText")
-├── Frame (ชื่อ "AttackMenu")
-│   ├── UICorner
-│   ├── UIStroke
-│   ├── TextButton (ชื่อ "NormalAttackButton")
-│   │   ├── UICorner
-│   │   ├── UIStroke
-│   │   └── TextLabel (ชื่อ "NormalAttackText")
-│   ├── TextButton (ชื่อ "StrikeButton")
-│   │   ├── UICorner
-│   │   ├── UIStroke
-│   │   └── TextLabel (ชื่อ "StrikeText")
-│   ├── TextButton (ชื่อ "SpellButton")
-│   │   ├── UICorner
-│   │   ├── UIStroke
-│   │   └── TextLabel (ชื่อ "SpellText")
-│   └── TextButton (ชื่อ "PowerUpButton")
-│       ├── UICorner
-│       ├── UIStroke
-│       └── TextLabel (ชื่อ "PowerUpText")
-├── TextButton (ชื่อ "DefendMenuButton")
-│   ├── UICorner
-│   ├── UIStroke
-│   └── TextLabel (ชื่อ "DefendText")
-├── Frame (ชื่อ "DefendMenu")
-│   ├── UICorner
-│   ├── UIStroke
-│   ├── TextButton (ชื่อ "DefendButton")
-│   │   ├── UICorner
-│   │   ├── UIStroke
-│   │   └── TextLabel (ชื่อ "DefendText")
-│   ├── TextButton (ชื่อ "CounterButton")
-│   │   ├── UICorner
-│   │   ├── UIStroke
-│   │   └── TextLabel (ชื่อ "CounterText")
-│   ├── TextButton (ชื่อ "MagicDefendButton")
-│   │   ├── UICorner
-│   │   ├── UIStroke
-│   │   └── TextLabel (ชื่อ "MagicDefendText")
-│   └── TextButton (ชื่อ "GiveUpButton")
-│       ├── UICorner
-│       ├── UIStroke
-│       └── TextLabel (ชื่อ "GiveUpText")
-├── Frame (ชื่อ "TimerFrame")
-│   ├── UICorner
-│   ├── UIStroke
-│   └── TextLabel (ชื่อ "TimerText")
-└── Frame (ชื่อ "CombatLog")
-    ├── UICorner
-    ├── UIStroke
-    ├── UIScrollingFrame
-    │   ├── UIListLayout
-    │   └── TextLabel (ชื่อ "LogEntry") [จะถูกโคลนสำหรับแต่ละข้อความ]
-
 6. หน้าร้านค้า (Shop Screen)
 Frame (ชื่อ "ShopUI")
 ├── UICorner
@@ -337,6 +250,31 @@ Frame (ชื่อ "InventoryUI")
     ├── UICorner
     ├── UIStroke
     └── TextLabel (ชื่อ "CloseText")
+|-- EquipmentSlotsContainer (Frame) [NEW]
+|   |-- HeaderLabel (TextLabel)
+|   |-- Slot_WEAPON (Frame)
+|   |   |-- IconFrame (Frame)
+|   |   |   |-- IconImage (ImageLabel)
+|   |   |-- SlotNameLabel (TextLabel)
+|   |   |-- ItemNameLabel (TextLabel)
+|   |   |-- SlotStroke (UIStroke)
+|   |
+|   |-- Slot_HELMET (Frame) [Same structure as Slot_WEAPON]
+|   |-- Slot_ARMOR (Frame) [Same structure as Slot_WEAPON]
+|   |-- Slot_GLOVES (Frame) [Same structure as Slot_WEAPON]
+|
+|-- SkillSlotsContainer (Frame) [NEW]
+    |-- SkillHeader (TextLabel)
+    |-- SkillSlot_1 (Frame)
+    |   |-- IconFrame (Frame)
+    |   |   |-- IconImage (ImageLabel)
+    |   |-- SkillNameLabel (TextLabel)
+    |
+    |-- SkillSlot_2 (Frame) [Same structure as SkillSlot_1]
+    |-- SkillSlot_3 (Frame) [Same structure as SkillSlot_1]
+    |-- SkillSlot_4 (Frame) [Same structure as SkillSlot_1]
+
+
 
 8. หน้าแสดงเควส (Quest Screen)
 Frame (ชื่อ "QuestUI")
