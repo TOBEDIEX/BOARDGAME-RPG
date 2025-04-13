@@ -1,6 +1,6 @@
--- InventorySystem.lua
+-- InventorySystem.lua (Updated)
 -- Core module for inventory management
--- Version: 2.0.0 (Optimized)
+-- Version: 2.1.0 (Optimized with Equipment UI Support)
 
 local InventorySystem = {}
 InventorySystem.__index = InventorySystem
@@ -330,11 +330,28 @@ function InventorySystem:GetEquippedItems()
 	for slot, inventoryId in pairs(self.equippedItems) do
 		local item = self:FindItemByInventoryId(inventoryId)
 		if item then
+			-- Add slot information to the item for UI
+			item.equippedSlot = slot
 			result[slot] = item
 		end
 	end
 
 	return result
+end
+
+-- Get item equipped in a specific slot
+function InventorySystem:GetEquippedItemInSlot(slotType)
+	local inventoryId = self.equippedItems[slotType]
+	if not inventoryId then
+		return nil
+	end
+
+	return self:FindItemByInventoryId(inventoryId)
+end
+
+-- Check if slot has equipment
+function InventorySystem:HasEquippedItemInSlot(slotType)
+	return self.equippedItems[slotType] ~= nil
 end
 
 -- Get all items
@@ -368,13 +385,23 @@ function InventorySystem:CalculateEquipmentStats()
 		evasion = 0
 	}
 
-	for _, inventoryId in pairs(self.equippedItems) do
+	for slotType, inventoryId in pairs(self.equippedItems) do
 		local item = self:FindItemByInventoryId(inventoryId)
 		if item and item.stats then
 			for statName, statValue in pairs(item.stats) do
 				if stats[statName] ~= nil then
 					stats[statName] = stats[statName] + statValue
+				else
+					-- If it's a new stat, add it
+					stats[statName] = statValue
 				end
+			end
+
+			-- Store slot-specific stats if needed
+			if slotType == EQUIPMENT_SLOTS.WEAPON and item.stats.attack then
+				stats.weaponAttack = item.stats.attack
+			elseif slotType == EQUIPMENT_SLOTS.ARMOR and item.stats.defense then
+				stats.armorDefense = item.stats.defense
 			end
 		end
 	end
