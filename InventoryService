@@ -1,12 +1,11 @@
--- InventoryService.server.lua
+-- InventoryService.server.lua (Updated)
 -- บริการจัดการระบบ Inventory ฝั่งเซิร์ฟเวอร์ (ไม่ใช้ DataStore)
--- Version: 1.0.0
+-- Version: 1.1.0 (With Equipment UI Support)
 
 -- Services
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 -- Load dependencies
 local Modules = ServerStorage:WaitForChild("Modules")
@@ -34,7 +33,8 @@ local remoteEvents = {
 	"SortInventory",
 	"DropItem",
 	"TransferItem",
-	"InspectItem"
+	"InspectItem",
+	"EquipmentSlotClicked" -- เพิ่มใหม่สำหรับจัดการการคลิกที่ช่องอุปกรณ์
 }
 
 -- Create required RemoteEvents
@@ -119,7 +119,7 @@ function InventoryService.SendInventoryToClient(player)
 	-- คัดกรองข้อมูลที่จำเป็นสำหรับไคลเอนต์
 	local clientData = {
 		items = inventory:GetAllItems(),
-		equippedItems = inventory:GetEquippedItems(),
+		equippedItems = inventory:GetEquippedItems(), -- ส่งข้อมูลเกี่ยวกับอุปกรณ์ที่สวมใส่
 		maxSize = inventory.maxSize
 	}
 
@@ -228,6 +228,26 @@ function InventoryService.UnequipItemForPlayer(player, slotType)
 	end
 
 	return success, message
+end
+
+-- Handle equipment slot clicks (new)
+function InventoryService.HandleEquipmentSlotClick(player, slotType)
+	local inventory = InventoryService.GetPlayerInventory(player)
+	if not inventory then
+		return false, "Failed to get player inventory"
+	end
+
+	-- ตรวจสอบว่ามีอุปกรณ์ในช่องนี้หรือไม่
+	local item = inventory:GetEquippedItemInSlot(slotType)
+	if not item then
+		return false, "No item equipped in this slot"
+	end
+
+	-- ส่งข้อมูลของอุปกรณ์ไปแสดงในหน้ารายละเอียดไอเทม
+	local inspectEvent = inventoryRemotes:WaitForChild("InspectItem")
+	inspectEvent:FireClient(player, item)
+
+	return true, "Equipment inspection successful"
 end
 
 -- Handle using items
@@ -387,6 +407,12 @@ local function setupRemoteEvents()
 		InventoryService.UseItemForPlayer(player, inventoryId)
 	end)
 
+	-- Equipment Slot Clicked (new)
+	local slotClickEvent = inventoryRemotes:WaitForChild("EquipmentSlotClicked")
+	slotClickEvent.OnServerEvent:Connect(function(player, slotType)
+		InventoryService.HandleEquipmentSlotClick(player, slotType)
+	end)
+
 	-- Drop Item (อาจจะเพิ่มระบบวางไอเทมบนกระดาน)
 	local dropItemEvent = inventoryRemotes:WaitForChild("DropItem")
 	dropItemEvent.OnServerEvent:Connect(function(player, inventoryId, quantity)
@@ -402,8 +428,7 @@ local function setupRemoteEvents()
 		local item = inventory:FindItemByInventoryId(inventoryId)
 		if item then
 			-- ส่งข้อมูลไอเทมไปแสดงในหน้าต่างรายละเอียด
-			local updateEvent = inventoryRemotes:WaitForChild("InspectItem")
-			updateEvent:FireClient(player, item)
+			inspectItemEvent:FireClient(player, item)
 		end
 	end)
 end
