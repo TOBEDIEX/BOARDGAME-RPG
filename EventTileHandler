@@ -1,12 +1,20 @@
 -- EventTileHandler.client.lua
 -- Manages special tile events on the client side
--- Version: 8.0.0 (Optimized)
+-- Version: 8.2.0 (แก้ไขปัญหาการแสดง UI และการสุ่มไอเทม)
 
 -- Services
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
+
+-- DEBUG MODE ตั้งเป็น true เพื่อแสดงข้อความ debug
+local DEBUG_MODE = true
+local function debugLog(message)
+	if DEBUG_MODE then
+		print("[EventTileHandler] " .. message)
+	end
+end
 
 -- Constants
 local MONEY_COLOR = Color3.fromRGB(255, 215, 0)
@@ -25,6 +33,7 @@ local PlayerGui = player:WaitForChild("PlayerGui")
 -- State variables
 local state = {
 	pendingMoneyTile = false,
+	pendingItemTile = false, -- เพิ่มสถานะสำหรับช่องไอเทม
 	moneyAmount = 0,
 	lastTileId = nil,
 	lastTileType = nil,
@@ -35,10 +44,11 @@ local state = {
 }
 
 -- Remote events (initialized in initRemotes function)
-local remotes, eventTileRemotes, moneyEventRemote
+local remotes, eventTileRemotes, moneyEventRemote, inventoryRemote
 local uiRemotes, statChangedEvent
 local boardRemotes, tileTriggerEvent, playerArrivedAtTile, movementVisualizationComplete
 local showPathSelection, startPlayerMovementPath, activityComplete
+local inventoryRemotes
 
 -- Helper functions
 local function tweenUI(obj, duration, properties, style, direction, onComplete)
@@ -46,8 +56,8 @@ local function tweenUI(obj, duration, properties, style, direction, onComplete)
 	direction = direction or Enum.EasingDirection.Out
 
 	local tween = TweenService:Create(
-		obj, 
-		TweenInfo.new(duration, style, direction), 
+		obj,
+		TweenInfo.new(duration, style, direction),
 		properties
 	)
 
@@ -67,6 +77,8 @@ end
 
 -- Initialize all remote events
 local function initRemotes()
+	debugLog("กำลังเชื่อมต่อ Remote Events...")
+
 	-- Event Tile Remotes
 	remotes = ReplicatedStorage:WaitForChild("Remotes")
 	eventTileRemotes = remotes:FindFirstChild("EventTileRemotes")
@@ -74,6 +86,7 @@ local function initRemotes()
 		eventTileRemotes = Instance.new("Folder")
 		eventTileRemotes.Name = "EventTileRemotes"
 		eventTileRemotes.Parent = remotes
+		debugLog("สร้าง EventTileRemotes เนื่องจากไม่พบใน Remotes")
 	end
 
 	moneyEventRemote = eventTileRemotes:FindFirstChild("MoneyEvent")
@@ -81,6 +94,26 @@ local function initRemotes()
 		moneyEventRemote = Instance.new("RemoteEvent")
 		moneyEventRemote.Name = "MoneyEvent"
 		moneyEventRemote.Parent = eventTileRemotes
+		debugLog("สร้าง MoneyEvent เนื่องจากไม่พบใน EventTileRemotes")
+	end
+
+	-- เพิ่ม InventoryRemote Event สำหรับเพิ่มไอเทม
+	inventoryRemote = eventTileRemotes:FindFirstChild("InventoryRemote")
+	if not inventoryRemote then
+		inventoryRemote = Instance.new("RemoteEvent")
+		inventoryRemote.Name = "InventoryRemote"
+		inventoryRemote.Parent = eventTileRemotes
+		debugLog("สร้าง InventoryRemote เนื่องจากไม่พบใน EventTileRemotes")
+	end
+
+	-- เพิ่มการเชื่อมต่อกับ InventoryRemotes (การเพิ่มของใหม่)
+	inventoryRemotes = remotes:FindFirstChild("InventoryRemotes")
+	if not inventoryRemotes then
+		-- ถ้าหาไม่เจอใน Remotes ให้สร้างใหม่
+		inventoryRemotes = Instance.new("Folder")
+		inventoryRemotes.Name = "InventoryRemotes"
+		inventoryRemotes.Parent = remotes
+		debugLog("สร้าง InventoryRemotes เนื่องจากไม่พบใน Remotes")
 	end
 
 	-- UI Remotes
@@ -95,6 +128,8 @@ local function initRemotes()
 	showPathSelection = boardRemotes:FindFirstChild("ShowPathSelection")
 	startPlayerMovementPath = boardRemotes:WaitForChild("StartPlayerMovementPath")
 	activityComplete = boardRemotes:FindFirstChild("ActivityComplete")
+
+	debugLog("เชื่อมต่อ Remote Events สำเร็จ")
 end
 
 -- Create notification
@@ -103,7 +138,7 @@ local function createNotification(message, duration, color)
 	color = color or MONEY_COLOR
 
 	local notification = Instance.new("Frame")
-	notification.Name = "MoneyNotification"
+	notification.Name = "EventNotification"
 	notification.Size = UDim2.new(0, 280, 0, 60)
 	notification.Position = UDim2.new(0.5, 0, -0.2, 0)
 	notification.AnchorPoint = Vector2.new(0.5, 0)
@@ -141,13 +176,197 @@ local function createNotification(message, duration, color)
 	tweenUI(notification, 0.5, {Position = UDim2.new(0.5, 0, 0.05, 0)}, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 
 	task.delay(duration, function()
-		tweenUI(notification, 0.5, {Position = UDim2.new(0.5, 0, -0.2, 0)}, Enum.EasingStyle.Quad, Enum.EasingDirection.In, 
-		function() 
-			notification:Destroy() 
+		tweenUI(notification, 0.5, {Position = UDim2.new(0.5, 0, -0.2, 0)}, Enum.EasingStyle.Quad, Enum.EasingDirection.In,
+		function()
+			notification:Destroy()
 		end)
 	end)
 
 	return notification
+end
+
+-- สร้าง UI การ์ดไอเทมใหม่เนื่องจากไม่พบ UI เดิม
+local function createItemCardUI()
+	debugLog("กำลังสร้าง UI การ์ดไอเทมใหม่...")
+
+	-- สร้าง ScreenGui
+	local itemCardGui = Instance.new("ScreenGui")
+	itemCardGui.Name = "ItemCardGui"
+	itemCardGui.ResetOnSpawn = false
+	itemCardGui.DisplayOrder = 100
+	itemCardGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	itemCardGui.Enabled = false
+
+	-- สร้าง Backdrop
+	local backdrop = Instance.new("Frame")
+	backdrop.Name = "Backdrop"
+	backdrop.Size = UDim2.fromScale(1, 1)
+	backdrop.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	backdrop.BackgroundTransparency = 0.6
+	backdrop.Parent = itemCardGui
+
+	-- สร้าง MainFrame
+	local mainFrame = Instance.new("Frame")
+	mainFrame.Name = "MainFrame"
+	mainFrame.Size = UDim2.fromOffset(350, 450)
+	mainFrame.Position = UDim2.fromScale(0.5, 0.5)
+	mainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+	mainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+	mainFrame.Parent = itemCardGui
+
+	-- สร้าง UICorner สำหรับ MainFrame
+	local mainCorner = Instance.new("UICorner")
+	mainCorner.CornerRadius = UDim.new(0, 12)
+	mainCorner.Parent = mainFrame
+
+	-- สร้าง UIStroke สำหรับ MainFrame
+	local mainStroke = Instance.new("UIStroke")
+	mainStroke.Color = Color3.fromRGB(255, 215, 0)
+	mainStroke.Thickness = 3
+	mainStroke.Parent = mainFrame
+
+	-- สร้าง HeaderFrame
+	local headerFrame = Instance.new("Frame")
+	headerFrame.Name = "HeaderFrame"
+	headerFrame.Size = UDim2.new(1, 0, 0.15, 0)
+	headerFrame.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+	headerFrame.Parent = mainFrame
+
+	-- สร้าง UICorner สำหรับ HeaderFrame
+	local headerCorner = Instance.new("UICorner")
+	headerCorner.CornerRadius = UDim.new(0, 8)
+	headerCorner.Parent = headerFrame
+
+	-- สร้าง TitleText
+	local titleText = Instance.new("TextLabel")
+	titleText.Name = "TitleText"
+	titleText.Size = UDim2.fromScale(1, 1)
+	titleText.BackgroundTransparency = 1
+	titleText.Font = Enum.Font.GothamBold
+	titleText.TextColor3 = Color3.fromRGB(255, 255, 255)
+	titleText.TextSize = 24
+	titleText.Text = "ไอเทมพิเศษ"
+	titleText.Parent = headerFrame
+
+	-- สร้าง IconFrame
+	local iconFrame = Instance.new("Frame")
+	iconFrame.Name = "IconFrame"
+	iconFrame.Size = UDim2.new(0.6, 0, 0.4, 0)
+	iconFrame.Position = UDim2.new(0.5, 0, 0.3, 0) -- Adjusted position
+	iconFrame.AnchorPoint = Vector2.new(0.5, 0) -- Adjusted anchor point
+	iconFrame.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+	iconFrame.Parent = mainFrame
+
+	-- สร้าง UICorner สำหรับ IconFrame
+	local iconCorner = Instance.new("UICorner")
+	iconCorner.CornerRadius = UDim.new(0, 8)
+	iconCorner.Parent = iconFrame
+
+	-- สร้าง ItemIcon
+	local itemIcon = Instance.new("ImageLabel")
+	itemIcon.Name = "ItemIcon"
+	itemIcon.Size = UDim2.fromScale(0.8, 0.8)
+	itemIcon.Position = UDim2.fromScale(0.5, 0.5)
+	itemIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+	itemIcon.BackgroundTransparency = 1
+	itemIcon.Image = "rbxassetid://6732233429"
+	itemIcon.Parent = iconFrame
+
+	-- สร้าง RarityFrame
+	local rarityFrame = Instance.new("Frame")
+	rarityFrame.Name = "RarityFrame"
+	rarityFrame.Size = UDim2.new(0.8, 0, 0.08, 0)
+	rarityFrame.Position = UDim2.new(0.5, 0, 0.55, 0) -- Adjusted position
+	rarityFrame.AnchorPoint = Vector2.new(0.5, 0) -- Adjusted anchor point
+	rarityFrame.BackgroundColor3 = Color3.fromRGB(100, 255, 100)
+	rarityFrame.Parent = mainFrame
+
+	-- สร้าง UICorner สำหรับ RarityFrame
+	local rarityCorner = Instance.new("UICorner")
+	rarityCorner.CornerRadius = UDim.new(0, 6)
+	rarityCorner.Parent = rarityFrame
+
+	-- สร้าง RarityText
+	local rarityText = Instance.new("TextLabel")
+	rarityText.Name = "RarityText"
+	rarityText.Size = UDim2.fromScale(1, 1)
+	rarityText.BackgroundTransparency = 1
+	rarityText.Font = Enum.Font.GothamSemibold
+	rarityText.TextColor3 = Color3.fromRGB(50, 50, 50)
+	rarityText.TextSize = 18
+	rarityText.Text = "ไม่ธรรมดา"
+	rarityText.Parent = rarityFrame
+
+	-- สร้าง DescriptionFrame
+	local descriptionFrame = Instance.new("Frame")
+	descriptionFrame.Name = "DescriptionFrame"
+	descriptionFrame.Size = UDim2.new(0.9, 0, 0.2, 0)
+	descriptionFrame.Position = UDim2.new(0.5, 0, 0.65, 0) -- Adjusted position
+	descriptionFrame.AnchorPoint = Vector2.new(0.5, 0) -- Adjusted anchor point
+	descriptionFrame.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+	descriptionFrame.BackgroundTransparency = 0.5
+	descriptionFrame.Parent = mainFrame
+
+	-- สร้าง UICorner สำหรับ DescriptionFrame
+	local descCorner = Instance.new("UICorner")
+	descCorner.CornerRadius = UDim.new(0, 6)
+	descCorner.Parent = descriptionFrame
+
+	-- สร้าง DescriptionText
+	local descriptionText = Instance.new("TextLabel")
+	descriptionText.Name = "DescriptionText"
+	descriptionText.Size = UDim2.fromScale(0.9, 0.9)
+	descriptionText.Position = UDim2.fromScale(0.5, 0.5)
+	descriptionText.AnchorPoint = Vector2.new(0.5, 0.5)
+	descriptionText.BackgroundTransparency = 1
+	descriptionText.Font = Enum.Font.Gotham
+	descriptionText.TextColor3 = Color3.fromRGB(230, 230, 230)
+	descriptionText.TextSize = 16
+	descriptionText.Text = "คำอธิบายไอเทม"
+	descriptionText.TextWrapped = true
+	descriptionText.Parent = descriptionFrame
+
+	-- สร้างปุ่ม KeepButton (เก็บไอเทม)
+	local keepButton = Instance.new("TextButton")
+	keepButton.Name = "KeepButton"
+	keepButton.Size = UDim2.new(0.4, 0, 0.08, 0)
+	keepButton.Position = UDim2.new(0.3, 0, 0.9, 0) -- Adjusted position
+	keepButton.AnchorPoint = Vector2.new(0.5, 0.5)
+	keepButton.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+	keepButton.Font = Enum.Font.GothamBold
+	keepButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+	keepButton.TextSize = 18
+	keepButton.Text = "เก็บไอเทม"
+	keepButton.Parent = mainFrame
+
+	-- สร้าง UICorner สำหรับ KeepButton
+	local keepCorner = Instance.new("UICorner")
+	keepCorner.CornerRadius = UDim.new(0, 6)
+	keepCorner.Parent = keepButton
+
+	-- สร้างปุ่ม DiscardButton (ทิ้งไอเทม)
+	local discardButton = Instance.new("TextButton")
+	discardButton.Name = "DiscardButton"
+	discardButton.Size = UDim2.new(0.4, 0, 0.08, 0)
+	discardButton.Position = UDim2.new(0.7, 0, 0.9, 0) -- Adjusted position
+	discardButton.AnchorPoint = Vector2.new(0.5, 0.5)
+	discardButton.BackgroundColor3 = Color3.fromRGB(150, 50, 50)
+	discardButton.Font = Enum.Font.GothamBold
+	discardButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+	discardButton.TextSize = 18
+	discardButton.Text = "ทิ้งไอเทม"
+	discardButton.Parent = mainFrame
+
+	-- สร้าง UICorner สำหรับ DiscardButton
+	local discardCorner = Instance.new("UICorner")
+	discardCorner.CornerRadius = UDim.new(0, 6)
+	discardCorner.Parent = discardButton
+
+	-- เพิ่มไปยัง PlayerGui
+	itemCardGui.Parent = PlayerGui
+	debugLog("สร้าง UI การ์ดไอเทมใหม่เรียบร้อย")
+
+	return itemCardGui
 end
 
 -- Find UI MedievalMoneyRandomizer
@@ -173,11 +392,46 @@ local function findMoneyRandomizerUI()
 	return nil
 end
 
+-- ค้นหา UI ItemCardGui
+local function findItemCardUI()
+	debugLog("กำลังค้นหา UI การ์ดไอเทม...")
+
+	-- ค้นหาโดยตรงใน PlayerGui
+	local itemUI = PlayerGui:FindFirstChild("ItemCardGui")
+	if itemUI then
+		debugLog("พบ ItemCardGui ใน PlayerGui")
+		return itemUI
+	end
+
+	-- ค้นหาใน ScreenGuis
+	for _, gui in pairs(PlayerGui:GetChildren()) do
+		if gui:IsA("ScreenGui") then
+			itemUI = gui:FindFirstChild("ItemCardGui")
+			if itemUI then
+				debugLog("พบ ItemCardGui ใน " .. gui.Name)
+				return itemUI
+			end
+
+			-- ค้นหาใน Descendants
+			for _, child in pairs(gui:GetDescendants()) do
+				if child.Name == "ItemCardGui" then
+					debugLog("พบ ItemCardGui ใน descendants ของ " .. gui.Name)
+					return child
+				end
+			end
+		end
+	end
+
+	debugLog("ไม่พบ UI การ์ดไอเทม กำลังสร้างใหม่...")
+	-- ถ้าไม่พบ ให้สร้างใหม่
+	return createItemCardUI()
+end -- <<< SYNTAX FIX: Replaced } with end
+
 -- Play card reveal animation
 local function playCardRevealAnimation(frame, onComplete)
-	if not frame then 
+	if not frame then
 		if onComplete then onComplete() end
-		return 
+		return
 	end
 
 	-- Store original values
@@ -368,8 +622,8 @@ local function showMoneyAnimation(amount)
 	else
 		for _, child in pairs(mainFrame:GetDescendants()) do
 			if child:IsA("TextLabel") and (
-				child.Name == "CoinAmount" or 
-					child.Name:find("Amount") or 
+				child.Name == "CoinAmount" or
+					child.Name:find("Amount") or
 					child.Name:find("Money") or
 					child.Name:find("Coin")
 				) then
@@ -389,8 +643,8 @@ local function showMoneyAnimation(amount)
 	local closeButton
 	for _, child in pairs(mainFrame:GetDescendants()) do
 		if child:IsA("TextButton") and (
-			child.Name:find("Close") or 
-				child.Name:find("Accept") or 
+			child.Name:find("Close") or
+				child.Name:find("Accept") or
 				child.Name:find("OK") or
 				child.Name:find("Button") or
 				child.Name:find("Confirm")
@@ -447,7 +701,7 @@ local function showMoneyAnimation(amount)
 				-- Auto close if no close button
 				if not closeButton then
 					task.delay(5, function()
-						mainFrame.Visible = false
+						moneyUI.Enabled = false
 					end)
 				end
 			end
@@ -457,30 +711,358 @@ local function showMoneyAnimation(amount)
 	-- Close UI when button clicked
 	if closeButton and not closeButton:GetAttribute("Connected") then
 		closeButton.MouseButton1Click:Connect(function()
-			mainFrame.Visible = false
+			moneyUI.Enabled = false
 		end)
 		closeButton:SetAttribute("Connected", true)
 	end
 end
 
+-- แสดง ItemCard UI สำหรับแสดงไอเทมที่ได้รับ
+local function showItemCardUI(itemId)
+	debugLog("กำลังแสดงการ์ดไอเทม สำหรับไอเทม: " .. tostring(itemId))
+
+	-- พยายามหา ItemData
+	local ItemData
+	if _G.ItemData then
+		ItemData = _G.ItemData
+	else
+		-- พยายามค้นหาและโหลด ItemData จากที่ต่างๆ
+		local success = false
+
+		-- ลอง ReplicatedStorage
+		if ReplicatedStorage:FindFirstChild("SharedModules") and
+			ReplicatedStorage.SharedModules:FindFirstChild("ItemData") then
+			success = pcall(function()
+				ItemData = require(ReplicatedStorage.SharedModules.ItemData)
+			end)
+		end
+
+		-- ลอง ItemData ใน ReplicatedStorage โดยตรง
+		if not success and ReplicatedStorage:FindFirstChild("ItemData") then
+			success = pcall(function()
+				ItemData = require(ReplicatedStorage.ItemData)
+			end)
+		end
+
+		-- ถ้ายังไม่ได้ ให้สร้างเอง
+		if not success then
+			debugLog("ไม่พบโมดูล ItemData ใช้ข้อมูลไอเทมอย่างง่าย")
+
+			ItemData = {
+				Items = {
+					dice_bonus_1 = {
+						id = "dice_bonus_1",
+						name = "Dice Bonus +1",
+						description = "เพิ่มแต้มลูกเต๋า +1 ในตาถัดไป",
+						rarity = 2,
+						iconId = "rbxassetid://6732233429"
+					},
+					dice_bonus_2 = {
+						id = "dice_bonus_2",
+						name = "Dice Bonus +2",
+						description = "เพิ่มแต้มลูกเต๋า +2 ในตาถัดไป",
+						rarity = 3,
+						iconId = "rbxassetid://6732233532"
+					}
+				},
+				GetItemById = function(self, id)
+					return self.Items[id]
+				end
+			}
+		end
+	end
+
+	-- ดึงข้อมูลไอเทม
+	local itemData
+	if type(ItemData.GetItemById) == "function" then
+		itemData = ItemData:GetItemById(itemId)
+	elseif ItemData.Items and ItemData.Items[itemId] then
+		itemData = ItemData.Items[itemId]
+	end
+
+	if not itemData then
+		debugLog("ไม่พบข้อมูลไอเทม: " .. tostring(itemId))
+		createNotification("คุณได้รับไอเทมพิเศษ!", NOTIFY_DURATION, ITEM_COLOR)
+
+		-- ใช้ inventoryRemote หรือ AddItem ใน InventoryRemotes ขึ้นอยู่กับว่าอะไรใช้ได้
+		if inventoryRemote then
+			inventoryRemote:FireServer("addItem", itemId, 1)
+		elseif inventoryRemotes and inventoryRemotes:FindFirstChild("AddItem") then
+			inventoryRemotes.AddItem:FireServer(itemId, 1)
+		end
+		return false
+	end
+
+	-- ค้นหา ItemCardGui
+	local itemCardGui = findItemCardUI()
+	if not itemCardGui then
+		debugLog("ไม่สามารถหาหรือสร้าง UI การ์ดไอเทมได้")
+		createNotification("คุณได้รับ " .. itemData.name .. "!", NOTIFY_DURATION, ITEM_COLOR)
+
+		-- ใช้ inventoryRemote หรือ AddItem ใน InventoryRemotes ขึ้นอยู่กับว่าอะไรใช้ได้
+		if inventoryRemote then
+			inventoryRemote:FireServer("addItem", itemId, 1)
+		elseif inventoryRemotes and inventoryRemotes:FindFirstChild("AddItem") then
+			inventoryRemotes.AddItem:FireServer(itemId, 1)
+		end
+		return false
+	end
+
+	debugLog("พบ/สร้าง UI การ์ดไอเทมแล้ว")
+
+	-- หา MainFrame
+	local mainFrame
+	if itemCardGui:IsA("Frame") then
+		mainFrame = itemCardGui
+	else
+		mainFrame = itemCardGui:FindFirstChild("MainFrame")
+		if not mainFrame then
+			for _, child in pairs(itemCardGui:GetDescendants()) do
+				if child:IsA("Frame") and child.Name == "MainFrame" then
+					mainFrame = child
+					break
+				end
+			end
+		end
+	end
+
+	if not mainFrame then
+		debugLog("ไม่พบ MainFrame ใน ItemCardGui")
+		createNotification("คุณได้รับ " .. itemData.name .. "!", NOTIFY_DURATION, ITEM_COLOR)
+
+		-- ใช้ inventoryRemote หรือ AddItem ใน InventoryRemotes ขึ้นอยู่กับว่าอะไรใช้ได้
+		if inventoryRemote then
+			inventoryRemote:FireServer("addItem", itemId, 1)
+		elseif inventoryRemotes and inventoryRemotes:FindFirstChild("AddItem") then
+			inventoryRemotes.AddItem:FireServer(itemId, 1)
+		end
+		return false
+	end -- <<< SYNTAX FIX: Replaced } with end
+
+	debugLog("พบ MainFrame ใน ItemCardGui")
+
+	-- หาและอัพเดต TitleText (ชื่อไอเทม)
+	local titleText
+	for _, child in pairs(mainFrame:GetDescendants()) do
+		if child:IsA("TextLabel") and child.Name == "TitleText" then
+			titleText = child
+			break
+		end
+	end
+
+	if titleText then
+		titleText.Text = itemData.name or "ไอเทมพิเศษ"
+		debugLog("อัพเดตชื่อไอเทมเป็น: " .. titleText.Text)
+	else
+		debugLog("ไม่พบ TitleText ใน MainFrame")
+	end
+
+	-- หาและอัพเดต ItemIcon (ไอคอนไอเทม)
+	local itemIcon
+	for _, child in pairs(mainFrame:GetDescendants()) do
+		if child:IsA("ImageLabel") and child.Name == "ItemIcon" then
+			itemIcon = child
+			break
+		end
+	end
+
+	if itemIcon then
+		itemIcon.Image = itemData.iconId or ""
+		debugLog("อัพเดตไอคอนไอเทมเป็น: " .. itemIcon.Image)
+	else
+		debugLog("ไม่พบ ItemIcon ใน MainFrame")
+	end
+
+	-- หาและอัพเดต RarityText (ความหายาก)
+	local rarityText
+	for _, child in pairs(mainFrame:GetDescendants()) do
+		if child:IsA("TextLabel") and child.Name == "RarityText" then
+			rarityText = child
+			break
+		end
+	end
+
+	if rarityText then
+		local rarityNames = {"ธรรมดา", "ไม่ธรรมดา", "หายาก", "หายากมาก", "ตำนาน"}
+		rarityText.Text = rarityNames[itemData.rarity or 1] or "ธรรมดา"
+		debugLog("อัพเดตความหายากเป็น: " .. rarityText.Text)
+	else
+		debugLog("ไม่พบ RarityText ใน MainFrame")
+	end
+
+	-- หาและอัพเดต DescriptionText (คำอธิบาย)
+	local descriptionText
+	for _, child in pairs(mainFrame:GetDescendants()) do
+		if child:IsA("TextLabel") and child.Name == "DescriptionText" then
+			descriptionText = child
+			break
+		end
+	end
+
+	if descriptionText then
+		descriptionText.Text = itemData.description or ""
+		debugLog("อัพเดตคำอธิบายเป็น: " .. descriptionText.Text)
+	else
+		debugLog("ไม่พบ DescriptionText ใน MainFrame")
+	end
+
+	-- หาและตั้งค่าปุ่ม KeepButton (เก็บไอเทม)
+	local keepButton
+	for _, child in pairs(mainFrame:GetDescendants()) do
+		if child:IsA("TextButton") and child.Name == "KeepButton" then
+			keepButton = child
+			break
+		end
+	end
+
+	if keepButton then
+		debugLog("พบปุ่ม KeepButton")
+
+		-- ล้างการเชื่อมต่อเก่า
+		local oldConns = {}
+		if keepButton.MouseButton1Click then -- Check if event exists
+			for _, conn in pairs(getconnections(keepButton.MouseButton1Click)) do
+				table.insert(oldConns, conn)
+			end
+		end
+
+		for _, conn in ipairs(oldConns) do
+			conn:Disconnect()
+		end
+
+		-- เพิ่มการเชื่อมต่อใหม่
+		keepButton.MouseButton1Click:Connect(function()
+			debugLog("คลิกปุ่ม KeepButton - เก็บไอเทม " .. itemId)
+
+			-- เพิ่มไอเทมเข้าคลัง - ลองใช้ทั้ง inventoryRemote และ AddItem ใน InventoryRemotes
+			if inventoryRemote then
+				debugLog("ส่งคำสั่งผ่าน inventoryRemote")
+				inventoryRemote:FireServer("addItem", itemId, 1)
+			elseif inventoryRemotes and inventoryRemotes:FindFirstChild("AddItem") then
+				debugLog("ส่งคำสั่งผ่าน inventoryRemotes.AddItem")
+				inventoryRemotes.AddItem:FireServer(itemId, 1)
+			end
+
+			-- แสดงการแจ้งเตือน
+			createNotification("เพิ่ม " .. itemData.name .. " เข้าในคลังแล้ว!", NOTIFY_DURATION, ITEM_COLOR)
+
+			-- ซ่อน UI
+			itemCardGui.Enabled = false
+		end)
+	else
+		debugLog("ไม่พบปุ่ม KeepButton ใน MainFrame")
+	end
+
+	-- หาและตั้งค่าปุ่ม DiscardButton (ทิ้งไอเทม)
+	local discardButton
+	for _, child in pairs(mainFrame:GetDescendants()) do
+		if child:IsA("TextButton") and child.Name == "DiscardButton" then
+			discardButton = child
+			break
+		end
+	end
+
+	if discardButton then
+		debugLog("พบปุ่ม DiscardButton")
+
+		-- ล้างการเชื่อมต่อเก่า
+		local oldConns = {}
+		if discardButton.MouseButton1Click then -- Check if event exists
+			for _, conn in pairs(getconnections(discardButton.MouseButton1Click)) do
+				table.insert(oldConns, conn)
+			end
+		end
+
+		for _, conn in ipairs(oldConns) do
+			conn:Disconnect()
+		end
+
+		-- เพิ่มการเชื่อมต่อใหม่
+		discardButton.MouseButton1Click:Connect(function()
+			debugLog("คลิกปุ่ม DiscardButton - ทิ้งไอเทม " .. itemId)
+
+			-- แค่ซ่อน UI โดยไม่เพิ่มไอเทม
+			createNotification("คุณเลือกที่จะทิ้ง " .. itemData.name, NOTIFY_DURATION, ITEM_COLOR)
+			itemCardGui.Enabled = false
+		end)
+	else
+		debugLog("ไม่พบปุ่ม DiscardButton ใน MainFrame")
+	end
+
+	-- แสดง UI
+	itemCardGui.Enabled = true
+	debugLog("เปิดใช้งาน ItemCardGui")
+
+	-- เล่นแอนิเมชันเปิดการ์ด
+	playCardRevealAnimation(mainFrame)
+
+	return true
+end
+
+-- ฟังก์ชันสำหรับการมอบไอเทมสุ่ม
+local function awardRandomItem()
+	debugLog("กำลังสุ่มมอบไอเทม...")
+
+	-- กำหนดไอเทมที่เป็นไปได้
+	local possibleItems = {"dice_bonus_1", "dice_bonus_2"}
+
+	-- สุ่มเลือกไอเทม
+	local selectedItemId = possibleItems[math.random(1, #possibleItems)]
+	debugLog("สุ่มได้ไอเทม: " .. selectedItemId)
+
+	-- พยายามแสดง UI การ์ดไอเทม
+	local uiShown = showItemCardUI(selectedItemId)
+
+	-- หาก UI ไม่สามารถแสดงได้ ให้ใช้การแจ้งเตือนแทน
+	if not uiShown then
+		debugLog("ไม่สามารถแสดง UI การ์ดได้ แสดงการแจ้งเตือนแทน")
+		if selectedItemId == "dice_bonus_1" then
+			createNotification("คุณได้รับ Dice Bonus +1!", NOTIFY_DURATION, ITEM_COLOR)
+		else
+			createNotification("คุณได้รับ Dice Bonus +2!", NOTIFY_DURATION, ITEM_COLOR)
+		end
+
+		-- เพิ่มไอเทมผ่าน RemoteEvent - ลองใช้ทั้ง inventoryRemote และ AddItem ใน InventoryRemotes
+		if inventoryRemote then
+			debugLog("ส่งคำสั่งเพิ่มไอเทมผ่าน inventoryRemote")
+			inventoryRemote:FireServer("addItem", selectedItemId, 1)
+		elseif inventoryRemotes and inventoryRemotes:FindFirstChild("AddItem") then
+			debugLog("ส่งคำสั่งเพิ่มไอเทมผ่าน inventoryRemotes.AddItem")
+			inventoryRemotes.AddItem:FireServer(selectedItemId, 1)
+		end
+	end
+
+	state.pendingItemTile = false
+end -- <<< SYNTAX FIX: Replaced } with end
+
 -- Check if reached end tile
 local function checkEndTile()
+	debugLog("ตรวจสอบถึงช่องสุดท้ายหรือไม่ - isProcessingEvent: " .. tostring(state.isProcessingEvent) ..
+		", isMoving: " .. tostring(state.isMoving) ..
+		", hasReachedEndTile: " .. tostring(state.hasReachedEndTile) ..
+		", pendingMoneyTile: " .. tostring(state.pendingMoneyTile) ..
+		", pendingItemTile: " .. tostring(state.pendingItemTile))
+
 	-- Prevent processing overlap
-	if state.isProcessingEvent then 
-		return 
+	if state.isProcessingEvent then
+		debugLog("กำลังประมวลผลอีเวนต์อยู่แล้ว ข้ามการตรวจสอบ")
+		return
 	end
 
 	-- Check conditions
 	if state.isMoving then
+		debugLog("ยังเคลื่อนที่อยู่ ข้ามการตรวจสอบ")
 		return
 	end
 
 	if not state.hasReachedEndTile then
+		debugLog("ยังไม่ถึงช่องสุดท้าย ข้ามการตรวจสอบ")
 		return
 	end
 
 	-- Process pending money tile
 	if state.pendingMoneyTile then
+		debugLog("มีรายการรอประมวลผลช่องเงิน เริ่มแสดง UI")
 		state.isProcessingEvent = true
 		state.pendingMoneyTile = false
 
@@ -488,10 +1070,24 @@ local function checkEndTile()
 		state.moneyAmount = getRandomMoneyAmount()
 
 		-- Show notification and UI
-		createNotification("Reached end tile! Received " .. state.moneyAmount .. " coins", NOTIFY_DURATION)
+		createNotification("ถึงช่องสุดท้ายแล้ว! ได้รับ " .. state.moneyAmount .. " เหรียญ", NOTIFY_DURATION)
 
 		task.delay(DELAY_BEFORE_UI, function()
 			showMoneyAnimation(state.moneyAmount)
+			state.isProcessingEvent = false
+		end)
+	end
+
+	-- ประมวลผลช่องไอเทม
+	if state.pendingItemTile then
+		debugLog("มีรายการรอประมวลผลช่องไอเทม เริ่มแสดง UI")
+		state.isProcessingEvent = true
+
+		-- แสดงการแจ้งเตือน
+		createNotification("ถึงช่องสุดท้ายแล้ว! กำลังสุ่มไอเทม...", NOTIFY_DURATION, ITEM_COLOR)
+
+		task.delay(DELAY_BEFORE_UI, function()
+			awardRandomItem()
 			state.isProcessingEvent = false
 		end)
 	end
@@ -501,10 +1097,12 @@ end
 
 -- Set up event connections
 local function setupConnections()
+	debugLog("ตั้งค่าการเชื่อมต่อกับเหตุการณ์ต่างๆ")
+
 	-- Money event
 	moneyEventRemote.OnClientEvent:Connect(function(amount)
 		if amount and amount > 0 then
-			createNotification("Received " .. amount .. " coins", NOTIFY_DURATION, MONEY_COLOR)
+			createNotification("ได้รับ " .. amount .. " เหรียญ", NOTIFY_DURATION, MONEY_COLOR)
 			showMoneyAnimation(amount)
 		end
 	end)
@@ -513,6 +1111,7 @@ local function setupConnections()
 	startPlayerMovementPath.OnClientEvent:Connect(function(playerId, movementData)
 		if playerId ~= player.UserId then return end
 
+		debugLog("ได้รับสัญญาณเริ่มการเคลื่อนที่")
 		state.isMoving = true
 		state.hasReachedEndTile = false
 	end)
@@ -521,6 +1120,7 @@ local function setupConnections()
 	playerArrivedAtTile.OnClientEvent:Connect(function(playerId, finalTileId)
 		if playerId ~= player.UserId then return end
 
+		debugLog("ได้รับสัญญาณถึงช่องที่ " .. tostring(finalTileId))
 		state.lastTileId = finalTileId
 		state.isMakingPathChoice = false
 	end)
@@ -528,6 +1128,7 @@ local function setupConnections()
 	-- Path selection
 	if showPathSelection then
 		showPathSelection.OnClientEvent:Connect(function()
+			debugLog("ได้รับสัญญาณเลือกเส้นทาง")
 			state.isMakingPathChoice = true
 		end)
 	end
@@ -535,6 +1136,7 @@ local function setupConnections()
 	-- Movement complete
 	if movementVisualizationComplete then
 		movementVisualizationComplete.OnClientEvent:Connect(function(finalTileId)
+			debugLog("ได้รับสัญญาณการเคลื่อนที่เสร็จสิ้น ที่ช่อง " .. tostring(finalTileId))
 			state.lastTileId = finalTileId
 			state.isMoving = false
 			state.hasReachedEndTile = true
@@ -547,37 +1149,43 @@ local function setupConnections()
 	-- Activity complete
 	if activityComplete then
 		activityComplete.OnClientEvent:Connect(function(activityType)
+			debugLog("ได้รับสัญญาณกิจกรรมเสร็จสิ้น: " .. tostring(activityType))
 			if activityType == "movement" or activityType == "turn" then
 				state.isMoving = false
 				state.hasReachedEndTile = true
 				checkEndTile()
 			end
 		end)
-	end
+	end -- <<< SYNTAX FIX: Replaced } with end
 
 	-- Tile trigger
 	tileTriggerEvent.OnClientEvent:Connect(function(playerId, tileId, tileType)
 		if playerId ~= player.UserId then return end
 
+		debugLog("ได้รับสัญญาณกระตุ้นช่อง: " .. tostring(tileType) .. " ที่ช่อง " .. tostring(tileId))
 		state.lastTileId = tileId
 		state.lastTileType = tileType
 
 		if state.isMakingPathChoice then
+			debugLog("กำลังเลือกเส้นทางอยู่ ข้ามการประมวลผลช่อง")
 			return
 		end
 
 		-- Show notifications based on tile type
 		if tileType == "money" then
-			createNotification("You landed on a money tile! Coins will be awarded when you reach the end tile", 2, MONEY_COLOR)
+			createNotification("คุณตกที่ช่องเงิน! จะได้รับเหรียญเมื่อเดินครบกำหนด", 2, MONEY_COLOR)
 			state.pendingMoneyTile = true
+			debugLog("ตั้งค่า pendingMoneyTile เป็น true")
 		elseif tileType == "shop" then
-			createNotification("You landed on a shop tile", 2, SHOP_COLOR)
+			createNotification("คุณตกที่ช่องร้านค้า", 2, SHOP_COLOR)
 		elseif tileType == "battle" then
-			createNotification("You landed on a battle tile! Prepare to fight", 2, BATTLE_COLOR)
+			createNotification("คุณตกที่ช่องต่อสู้! เตรียมพร้อมสำหรับการต่อสู้", 2, BATTLE_COLOR)
 		elseif tileType == "casino" then
-			createNotification("You landed on a casino tile! Try your luck?", 2, CASINO_COLOR)
+			createNotification("คุณตกที่ช่องคาสิโน! ลองเสี่ยงโชคดูไหม?", 2, CASINO_COLOR)
 		elseif tileType == "item" then
-			createNotification("You landed on an item tile! Getting random item...", 2, ITEM_COLOR)
+			createNotification("คุณตกที่ช่องไอเทม! ไอเทมพิเศษจะถูกมอบให้เมื่อเดินครบกำหนด", 2, ITEM_COLOR)
+			state.pendingItemTile = true
+			debugLog("ตั้งค่า pendingItemTile เป็น true")
 		end
 	end)
 
@@ -591,6 +1199,7 @@ local function setupConnections()
 				local PathSelectionContainer = DiceRollUI:WaitForChild("PathSelectionContainer", 10)
 				if PathSelectionContainer then
 					PathSelectionContainer:GetPropertyChangedSignal("Visible"):Connect(function()
+						debugLog("สถานะการมองเห็น PathSelectionContainer เปลี่ยนเป็น: " .. tostring(PathSelectionContainer.Visible))
 						state.isMakingPathChoice = PathSelectionContainer.Visible
 					end)
 				end
@@ -610,15 +1219,18 @@ local function setupConnections()
 				-- Check movement state
 				if humanoid.MoveDirection.Magnitude > 0 then
 					if not state.isMoving then
+						debugLog("ตรวจพบการเคลื่อนที่ของผู้เล่น")
 						state.isMoving = true
 						state.hasReachedEndTile = false
 					end
 				else
 					if state.isMoving then
+						debugLog("ผู้เล่นหยุดเคลื่อนที่")
 						state.isMoving = false
 
 						task.delay(DELAY_BEFORE_UI, function()
-							if state.pendingMoneyTile and not state.isMoving then
+							if (state.pendingMoneyTile or state.pendingItemTile) and not state.isMoving then
+								debugLog("ตรวจพบว่าผู้เล่นหยุดเคลื่อนที่และมีการรอประมวลผลช่องพิเศษ")
 								state.hasReachedEndTile = true
 								checkEndTile()
 							end
@@ -628,12 +1240,16 @@ local function setupConnections()
 			end
 		end
 	end)
+
+	debugLog("ตั้งค่าการเชื่อมต่อกับเหตุการณ์เสร็จสิ้น")
 end
 
 -- Initialize system
 local function initialize()
+	debugLog("กำลังเริ่มต้นระบบ EventTileHandler...")
 	initRemotes()
 	setupConnections()
+	debugLog("เริ่มต้นระบบ EventTileHandler เรียบร้อยแล้ว")
 end
 
 -- Start system
