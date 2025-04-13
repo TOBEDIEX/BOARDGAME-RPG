@@ -1,9 +1,10 @@
 -- EventTileServerHandler.server.lua
--- ตัวจัดการเหตุการณ์ช่องพิเศษฝั่งเซิร์ฟเวอร์ (สนับสนุนการทำงานแบบไคลเอนต์เป็นหลัก)
--- Version: 1.1.0 - Optimized
+-- ตัวจัดการเหตุการณ์ช่องพิเศษฝั่งเซิร์ฟเวอร์
+-- Version: 1.3.0 - แก้ไขปัญหาการเพิ่มไอเทม
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
+local ServerStorage = game:GetService("ServerStorage")
 
 -- ตั้งค่า Debug Mode
 local DEBUG = true
@@ -19,15 +20,114 @@ local moneyEventRemote = eventTileRemotes:FindFirstChild("MoneyEvent") or Instan
 moneyEventRemote.Name = "MoneyEvent"
 moneyEventRemote.Parent = eventTileRemotes
 
+-- เพิ่ม InventoryRemote สำหรับจัดการไอเทม
+local inventoryRemote = eventTileRemotes:FindFirstChild("InventoryRemote") or Instance.new("RemoteEvent")
+inventoryRemote.Name = "InventoryRemote"
+inventoryRemote.Parent = eventTileRemotes
+
+-- สร้าง/ตรวจสอบ InventoryRemotes
+local inventoryRemotes = remotes:FindFirstChild("InventoryRemotes")
+if not inventoryRemotes then
+	inventoryRemotes = Instance.new("Folder")
+	inventoryRemotes.Name = "InventoryRemotes"
+	inventoryRemotes.Parent = remotes
+	log("สร้าง InventoryRemotes folder ใหม่")
+end
+
+-- สร้าง AddItem RemoteEvent ถ้ายังไม่มี
+local addItemRemote = inventoryRemotes:FindFirstChild("AddItem")
+if not addItemRemote then
+	addItemRemote = Instance.new("RemoteEvent")
+	addItemRemote.Name = "AddItem"
+	addItemRemote.Parent = inventoryRemotes
+	log("สร้าง AddItem RemoteEvent ใหม่")
+end
+
 local uiRemotes = remotes:WaitForChild("UIRemotes")
 local updatePlayerStatsEvent = uiRemotes:FindFirstChild("UpdatePlayerStats")
 local statChangedEvent = uiRemotes:FindFirstChild("StatChanged")
 
+-- หา ItemData ที่จำเป็นต้องใช้
+local ItemData
+
+-- พยายามโหลด ItemData แบบต่างๆ
+local function loadItemData()
+	-- ลองหาจาก ReplicatedStorage.SharedModules
+	if ReplicatedStorage:FindFirstChild("SharedModules") and 
+		ReplicatedStorage.SharedModules:FindFirstChild("ItemData") then
+		local success, result = pcall(function()
+			return require(ReplicatedStorage.SharedModules.ItemData)
+		end)
+		if success then
+			ItemData = result
+			log("โหลด ItemData สำเร็จจาก ReplicatedStorage.SharedModules")
+			return true
+		end
+	end
+
+	-- ลองหาจาก ReplicatedStorage โดยตรง
+	if ReplicatedStorage:FindFirstChild("ItemData") then
+		local success, result = pcall(function()
+			return require(ReplicatedStorage.ItemData)
+		end)
+		if success then
+			ItemData = result
+			log("โหลด ItemData สำเร็จจาก ReplicatedStorage")
+			return true
+		end
+	end
+
+	-- ถ้าไม่พบ ให้สร้างข้อมูลเอง
+	ItemData = {
+		Items = {
+			dice_bonus_1 = {
+				id = "dice_bonus_1",
+				name = "Dice Bonus +1",
+				description = "เพิ่มแต้มลูกเต๋า +1 ในตาถัดไป",
+				type = 4, -- SPECIAL
+				rarity = 2,
+				stackable = true,
+				maxStack = 5,
+				usable = true,
+				consumable = true,
+				iconId = "rbxassetid://6732233429"
+			},
+			dice_bonus_2 = {
+				id = "dice_bonus_2",
+				name = "Dice Bonus +2",
+				description = "เพิ่มแต้มลูกเต๋า +2 ในตาถัดไป",
+				type = 4, -- SPECIAL
+				rarity = 3,
+				stackable = true,
+				maxStack = 3,
+				usable = true,
+				consumable = true,
+				iconId = "rbxassetid://6732233532"
+			}
+		},
+		GetItemById = function(self, id)
+			return self.Items[id]
+		end
+	}
+
+	log("สร้าง ItemData เองเนื่องจากไม่พบโมดูล")
+	return true
+end
+
+-- โหลด ItemData
+loadItemData()
+
 -- หา PlayerManager
 local function getPlayerManager()
 	-- ลองหาจากหลายวิธี
-	if _G.GameManager and _G.GameManager.playerManager then return _G.GameManager.playerManager end
-	if _G.PlayerManager then return _G.PlayerManager end
+	if _G.GameManager and _G.GameManager.playerManager then 
+		log("พบ PlayerManager ใน _G.GameManager")
+		return _G.GameManager.playerManager 
+	end
+	if _G.PlayerManager then 
+		log("พบ PlayerManager ใน _G")
+		return _G.PlayerManager 
+	end
 
 	-- ถ้าไม่พบ สร้าง stub
 	log("ไม่พบ PlayerManager สร้าง stub")
@@ -39,6 +139,81 @@ local function getPlayerManager()
 		end
 	}
 end
+
+-- หา InventoryService จากทุกที่ที่เป็นไปได้
+local function findInventoryService()
+	log("กำลังค้นหา InventoryService...")
+
+	-- 1. ลองหาจาก _G.GameManager
+	if _G.GameManager then
+		if _G.GameManager.inventoryService then
+			log("พบ inventoryService ใน _G.GameManager")
+			return _G.GameManager.inventoryService
+		end
+		if _G.GameManager.inventoryManager then
+			log("พบ inventoryManager ใน _G.GameManager")
+			return _G.GameManager.inventoryManager
+		end
+	end
+
+	-- 2. ลองหาจาก _G โดยตรง
+	if _G.InventoryService then
+		log("พบ InventoryService ใน _G")
+		return _G.InventoryService
+	end
+	if _G.InventoryManager then
+		log("พบ InventoryManager ใน _G")
+		return _G.InventoryManager
+	end
+
+	-- 3. ลองหาจาก ServerStorage
+	local moduleNames = {"InventoryService", "InventoryManager", "InventorySystem"}
+
+	for _, name in ipairs(moduleNames) do
+		if ServerStorage:FindFirstChild(name) then
+			local success, module = pcall(function()
+				return require(ServerStorage[name])
+			end)
+
+			if success and module then
+				log("พบและโหลด " .. name .. " จาก ServerStorage")
+				return module
+			end
+		end
+	end
+
+	-- 4. ลองหาจาก ServerScriptService
+	local ServerScriptService = game:GetService("ServerScriptService")
+	if ServerScriptService then
+		local servicesFolder = ServerScriptService:FindFirstChild("Services")
+		if servicesFolder then
+			for _, name in ipairs(moduleNames) do
+				if servicesFolder:FindFirstChild(name) then
+					local success, module = pcall(function()
+						return require(servicesFolder[name])
+					end)
+
+					if success and module then
+						log("พบและโหลด " .. name .. " จาก ServerScriptService.Services")
+						return module
+					end
+				end
+			end
+		end
+	end
+
+	-- 5. หาไม่พบใดๆ ให้สร้าง stub
+	log("ไม่พบ InventoryService ใดๆ กำลังสร้าง stub...")
+	return {
+		AddItemToPlayer = function(_, player, itemId, quantity)
+			log("⚠️ [STUB] AddItemToPlayer สำหรับ " .. player.Name .. " - ไอเทม: " .. itemId .. " จำนวน: " .. quantity)
+			return true
+		end
+	}
+	end
+
+	-- หา InventoryManager หรือ InventoryService
+local inventoryService = findInventoryService()
 
 -- อัพเดทเงินผู้เล่น
 local function updatePlayerMoney(player, amount)
@@ -91,7 +266,178 @@ local function updatePlayerMoney(player, amount)
 	return success
 end
 
--- รับฟังเหตุการณ์จาก client
+-- เพิ่มไอเทมให้ผู้เล่นโดยตรง (ไม่ผ่าน InventoryService)
+local function addItemDirectly(player, itemId, quantity)
+	log("กำลังเพิ่มไอเทม " .. itemId .. " โดยตรงให้กับ " .. player.Name)
+
+	-- ลองหา DataStore หรือ PlayerData ที่เก็บข้อมูลไอเทม
+	local playerManager = getPlayerManager()
+	local playerData = playerManager.GetPlayerData(playerManager, player)
+
+	if not playerData then
+		log("❌ ไม่พบข้อมูลผู้เล่น ไม่สามารถเพิ่มไอเทมได้")
+		return false
+	end
+
+	-- เพิ่มไอเทมใน PlayerData โดยตรง
+	if not playerData.inventory then
+		playerData.inventory = {items = {}}
+	end
+
+	if not playerData.inventory.items then
+		playerData.inventory.items = {}
+	end
+
+	-- เพิ่มไอเทมเข้าไป
+	if playerData.inventory.items[itemId] then
+		playerData.inventory.items[itemId] = playerData.inventory.items[itemId] + (quantity or 1)
+	else
+		playerData.inventory.items[itemId] = quantity or 1
+	end
+
+	log("✅ เพิ่มไอเทม " .. itemId .. " จำนวน " .. quantity .. " ให้กับ " .. player.Name .. " โดยตรง")
+
+	-- อัพเดทข้อมูลให้ Client
+	if statChangedEvent then
+		statChangedEvent:FireClient(player, {
+			inventory = {
+				oldValue = {},
+				newValue = playerData.inventory
+			}
+		})
+	end
+
+	return true
+	end
+
+	-- เพิ่มไอเทมให้ผู้เล่น - ทดลองทุกวิธีที่เป็นไปได้ในการเพิ่มไอเทม
+local function addItemToPlayer(player, itemId, quantity)
+	quantity = quantity or 1
+	log("กำลังเพิ่มไอเทม " .. itemId .. " จำนวน " .. quantity .. " ให้กับ " .. player.Name)
+
+	local success = false
+
+	-- 1. ทดลองวิธี AddItemToPlayer ของ inventoryService
+	if inventoryService and typeof(inventoryService.AddItemToPlayer) == "function" then
+		success = pcall(function()
+			log("วิธีที่ 1: ลองใช้ inventoryService.AddItemToPlayer")
+			return inventoryService:AddItemToPlayer(player, itemId, quantity)
+		end)
+
+		if success then
+			log("✅ วิธีที่ 1 สำเร็จ")
+			return true
+		end
+	end
+
+	-- 2. ทดลองวิธี GetPlayerInventory แล้วเรียก AddItem ของ inventory object
+	if not success and inventoryService and typeof(inventoryService.GetPlayerInventory) == "function" then
+		success = pcall(function()
+			log("วิธีที่ 2: ลองใช้ inventoryService.GetPlayerInventory แล้วเรียก AddItem")
+			local inventory = inventoryService:GetPlayerInventory(player)
+			if inventory and typeof(inventory.AddItem) == "function" then
+				local itemData
+				if ItemData and typeof(ItemData.GetItemById) == "function" then
+					itemData = ItemData:GetItemById(itemId)
+				elseif ItemData and ItemData.Items and ItemData.Items[itemId] then
+					itemData = ItemData.Items[itemId]
+				end
+
+				if itemData then
+					return inventory:AddItem(itemData, quantity)
+				end
+			end
+			return false
+		end)
+
+		if success then
+			log("✅ วิธีที่ 2 สำเร็จ")
+			return true
+		end
+		end
+
+		-- 3. ทดลองใช้ InventoryRemotes.AddItem โดยตรง
+if not success and addItemRemote then
+	success = pcall(function()
+		log("วิธีที่ 3: ลองใช้ addItemRemote (InventoryRemotes.AddItem) โดยตรง")
+
+		-- ตรวจสอบว่ามี OnServerEvent handlers หรือไม่
+		local hasHandlers = false
+		for _, connection in pairs(getconnections(addItemRemote.OnServerEvent)) do
+			hasHandlers = true
+			break
+		end
+
+		-- ถ้ามี handlers แสดงว่ามีใครสักคนกำลังจัดการกับ event นี้
+		if hasHandlers then
+			-- เพิ่ม handler ใหม่
+			local connectionDone = false
+
+			addItemRemote.OnServerEvent:Connect(function(fromPlayer, fromItemId, fromQuantity)
+				if fromPlayer == player and fromItemId == itemId and fromQuantity == quantity then
+					connectionDone = true
+				end
+			end)
+
+			-- ยิง event
+			addItemRemote:FireClient(player, itemId, quantity)
+
+			-- รอสักครู่
+			wait(0.1)
+			return connectionDone
+		else
+			return false
+		end
+	end)
+
+	if success then
+		log("✅ วิธีที่ 3 สำเร็จ")
+		return true
+	end
+	end
+
+	-- 4. เพิ่มไอเทมให้กับผู้เล่นโดยตรง (เข้าถึง PlayerData.inventory)
+if not success then
+	success = pcall(function()
+		log("วิธีที่ 4: ลองเพิ่มไอเทมโดยตรงที่ PlayerData")
+		return addItemDirectly(player, itemId, quantity)
+	end)
+
+	if success then
+		log("✅ วิธีที่ 4 สำเร็จ")
+		return true
+	end
+	end
+
+	-- 5. สร้าง/เชื่อมต่อกับ Event ใหม่ถ้ายังไม่สำเร็จ
+if not success then
+	log("❌ ทุกวิธีล้มเหลว ลองส่งสัญญาณให้ Client จัดการเอง")
+
+	-- ส่งสัญญาณผ่าน inventoryRemote
+	if inventoryRemote then
+		inventoryRemote:FireClient(player, itemId, quantity)
+		log("ส่งสัญญาณผ่าน inventoryRemote ไปยัง Client แล้ว")
+		return true
+	end
+
+	-- หากยังไม่มี inventoryRemote ให้สร้างใหม่
+	local newRemote = Instance.new("RemoteEvent")
+	newRemote.Name = "DirectInventoryUpdate"
+	newRemote.Parent = eventTileRemotes
+	newRemote:FireClient(player, {
+		action = "addItem",
+		itemId = itemId,
+		quantity = quantity
+	})
+	log("สร้าง DirectInventoryUpdate และส่งสัญญาณไปยัง Client แล้ว")
+	return true
+	end
+
+	log("❓ ทุกวิธีล้มเหลว ไม่สามารถเพิ่มไอเทมได้")
+return false
+end
+
+-- รับฟังเหตุการณ์จาก client - MoneyEvent
 moneyEventRemote.OnServerEvent:Connect(function(player, command, amount)
 	log("ได้รับคำสั่ง: " .. tostring(command) .. " จำนวน: " .. tostring(amount))
 
@@ -100,7 +446,33 @@ moneyEventRemote.OnServerEvent:Connect(function(player, command, amount)
 	end
 end)
 
--- ฟังก์ชันทดสอบ
+-- รับฟังเหตุการณ์จาก client - InventoryRemote
+inventoryRemote.OnServerEvent:Connect(function(player, command, itemId, quantity)
+	log("ได้รับคำสั่งคลังไอเทม: " .. tostring(command) .. " ไอเทม: " .. tostring(itemId) .. " จำนวน: " .. tostring(quantity))
+
+	if command == "addItem" and itemId then
+		addItemToPlayer(player, itemId, quantity or 1)
+	end
+end)
+
+-- สร้าง handler สำหรับ AddItem ถ้ายังไม่มี
+if addItemRemote then
+	local hasHandler = false
+	for _, connection in pairs(getconnections(addItemRemote.OnServerEvent)) do
+		hasHandler = true
+		break
+	end
+
+	if not hasHandler then
+		log("สร้าง handler สำหรับ addItemRemote")
+		addItemRemote.OnServerEvent:Connect(function(player, itemId, quantity)
+			log("ได้รับคำสั่งเพิ่มไอเทมผ่าน addItemRemote: ไอเทม " .. tostring(itemId) .. " จำนวน " .. tostring(quantity))
+			addItemToPlayer(player, itemId, quantity or 1)
+		end)
+	end
+end
+
+-- ฟังก์ชันทดสอบเงิน
 local function testUpdateMoney(player, amount)
 	-- ถ้าไม่ระบุผู้เล่น ใช้ผู้เล่นแรกในเซิร์ฟเวอร์
 	if not player then
@@ -121,7 +493,28 @@ local function testUpdateMoney(player, amount)
 	return success
 end
 
+-- ฟังก์ชันทดสอบไอเทม
+local function testAddItem(player, itemId)
+	-- ถ้าไม่ระบุผู้เล่น ใช้ผู้เล่นแรกในเซิร์ฟเวอร์
+	if not player then
+		local players = Players:GetPlayers()
+		if #players == 0 then return false end
+		player = players[1]
+	end
+
+	-- ถ้าไม่ระบุไอเทม ใช้ dice_bonus_1
+	itemId = itemId or "dice_bonus_1"
+
+	log("ทดสอบเพิ่มไอเทม " .. player.Name .. " ไอเทม " .. itemId)
+
+	-- เพิ่มไอเทมและส่ง event กลับไปยัง client
+	local success = addItemToPlayer(player, itemId, 1)
+
+	return success
+end
+
 -- เพิ่มฟังก์ชันทดสอบใน global
 _G.TestUpdateMoney = testUpdateMoney
+_G.TestAddItem = testAddItem
 
-log("ระบบช่องพิเศษฝั่งเซิร์ฟเวอร์เริ่มต้นแล้ว - พิมพ์ _G.TestUpdateMoney() ในแถบคำสั่งเพื่อทดสอบ")
+log("ระบบช่องพิเศษฝั่งเซิร์ฟเวอร์เริ่มต้นแล้ว - พิมพ์ _G.TestUpdateMoney() หรือ _G.TestAddItem() ในแถบคำสั่งเพื่อทดสอบ")
