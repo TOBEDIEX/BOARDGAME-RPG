@@ -1,6 +1,6 @@
 -- ItemData.lua
 -- ข้อมูลไอเทมทั้งหมดในเกม (เวอร์ชันทดสอบ)
--- Version: 1.2.0 - เพิ่ม UseHandlers สำหรับไอเทม DiceBonus
+-- Version: 1.0.0
 
 -- Constants
 local ITEM_TYPES = {
@@ -22,97 +22,11 @@ local EQUIPMENT_SLOTS = {
 local ItemData = {}
 
 -- ฟังก์ชันใช้ไอเทม (จะถูกกำหนดโดย InventoryService)
-ItemData.UseHandlers = {
-	-- ฟังก์ชันใช้งาน DiceBonus+1
-	dice_bonus_1 = function(player, itemData)
-		local Players = game:GetService("Players")
-		local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
-		-- ตรวจสอบว่ามี GameManager หรือไม่
-		if _G.GameManager then
-			-- ถ้ามี DiceManager ให้บันทึกโบนัสลงไป
-			if _G.GameManager.diceManager then
-				local success = pcall(function()
-					_G.GameManager.diceManager:AddDiceBonus(player.UserId, 1)
-				end)
-
-				if success then
-					return true, "เพิ่มโบนัสลูกเต๋า +1 สำหรับการทอยครั้งถัดไป"
-				end
-			end
-
-			-- ถ้ามี PlayerManager ให้บันทึกโบนัสลงใน PlayerData
-			if _G.GameManager.playerManager then
-				local playerData = _G.GameManager.playerManager:GetPlayerData(player)
-				if playerData then
-					-- สร้างหรืออัพเดท diceBonus ในข้อมูลผู้เล่น
-					playerData.diceBonus = (playerData.diceBonus or 0) + 1
-
-					-- แจ้งเตือนผู้เล่น
-					local uiRemotes = ReplicatedStorage:FindFirstChild("Remotes") and 
-						ReplicatedStorage.Remotes:FindFirstChild("UIRemotes")
-
-					if uiRemotes and uiRemotes:FindFirstChild("NotifyDiceBonus") then
-						uiRemotes.NotifyDiceBonus:FireClient(player, playerData.diceBonus)
-					end
-
-					return true, "เพิ่มโบนัสลูกเต๋า +1 สำหรับการทอยครั้งถัดไป"
-				end
-			end
-		end
-
-		-- ถ้าไม่พบ GameManager หรือวิธีบันทึกโบนัส ให้บันทึกใน attribute ของผู้เล่น
-		player:SetAttribute("DiceBonus", (player:GetAttribute("DiceBonus") or 0) + 1)
-		return true, "เพิ่มโบนัสลูกเต๋า +1 สำหรับการทอยครั้งถัดไป"
-	end,
-
-	-- ฟังก์ชันใช้งาน DiceBonus+2
-	dice_bonus_2 = function(player, itemData)
-		local Players = game:GetService("Players")
-		local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
-		-- ตรวจสอบว่ามี GameManager หรือไม่
-		if _G.GameManager then
-			-- ถ้ามี DiceManager ให้บันทึกโบนัสลงไป
-			if _G.GameManager.diceManager then
-				local success = pcall(function()
-					_G.GameManager.diceManager:AddDiceBonus(player.UserId, 2)
-				end)
-
-				if success then
-					return true, "เพิ่มโบนัสลูกเต๋า +2 สำหรับการทอยครั้งถัดไป"
-				end
-			end
-
-			-- ถ้ามี PlayerManager ให้บันทึกโบนัสลงใน PlayerData
-			if _G.GameManager.playerManager then
-				local playerData = _G.GameManager.playerManager:GetPlayerData(player)
-				if playerData then
-					-- สร้างหรืออัพเดท diceBonus ในข้อมูลผู้เล่น
-					playerData.diceBonus = (playerData.diceBonus or 0) + 2
-
-					-- แจ้งเตือนผู้เล่น
-					local uiRemotes = ReplicatedStorage:FindFirstChild("Remotes") and 
-						ReplicatedStorage.Remotes:FindFirstChild("UIRemotes")
-
-					if uiRemotes and uiRemotes:FindFirstChild("NotifyDiceBonus") then
-						uiRemotes.NotifyDiceBonus:FireClient(player, playerData.diceBonus)
-					end
-
-					return true, "เพิ่มโบนัสลูกเต๋า +2 สำหรับการทอยครั้งถัดไป"
-				end
-			end
-		end
-
-		-- ถ้าไม่พบ GameManager หรือวิธีบันทึกโบนัส ให้บันทึกใน attribute ของผู้เล่น
-		player:SetAttribute("DiceBonus", (player:GetAttribute("DiceBonus") or 0) + 2)
-		return true, "เพิ่มโบนัสลูกเต๋า +2 สำหรับการทอยครั้งถัดไป"
-	end
-}
+ItemData.UseHandlers = {}
 
 -- ไอเทมสำหรับทดสอบ
 ItemData.Items = {
-	-- ไอเทมทดสอบ
+	-- ไอเทมทดสอบ		
 	test_item = {
 		id = "test_item",
 		name = "Test Item",
@@ -129,40 +43,6 @@ ItemData.Items = {
 		stats = {
 			hp = 50
 		}
-	},
-
-	-- เพิ่ม DiceBonus+1
-	dice_bonus_1 = {
-		id = "dice_bonus_1",
-		name = "Dice Bonus +1",
-		description = "เพิ่มแต้มลูกเต๋า +1 ในตาถัดไป",
-		type = ITEM_TYPES.SPECIAL,
-		rarity = 2,
-		stackable = true,
-		maxStack = 5,
-		sellPrice = 100,
-		buyPrice = 300,
-		usable = true,
-		consumable = true,
-		iconId = "rbxassetid://106756897158809", -- เปลี่ยน ID ตามที่ต้องการ
-		stats = {}
-	},
-
-	-- เพิ่ม DiceBonus+2
-	dice_bonus_2 = {
-		id = "dice_bonus_2",
-		name = "Dice Bonus +2",
-		description = "เพิ่มแต้มลูกเต๋า +2 ในตาถัดไป",
-		type = ITEM_TYPES.SPECIAL,
-		rarity = 3,
-		stackable = true,
-		maxStack = 3,
-		sellPrice = 200,
-		buyPrice = 600,
-		usable = true,
-		consumable = true,
-		iconId = "rbxassetid://106756897158809", -- เปลี่ยน ID ตามที่ต้องการ
-		stats = {}
 	}
 }
 
