@@ -1,6 +1,6 @@
--- InventoryUIHandler.lua
--- ตัวจัดการ UI ของระบบ Inventory (แบบกระชับ)
--- Version: 1.2.0
+-- InventoryUIHandler.lua (Updated)
+-- ตัวจัดการ UI ของระบบ Inventory (แบบกระชับพร้อมช่องอุปกรณ์)
+-- Version: 1.3.0
 
 -- Services
 local Players = game:GetService("Players")
@@ -16,6 +16,26 @@ local ITEM_TYPES = {
 	EQUIPMENT = 2,
 	SKILL = 3,
 	SPECIAL = 4
+}
+
+-- Equipment slots
+local EQUIPMENT_SLOTS = {
+	WEAPON = 1,
+	HELMET = 2,
+	ARMOR = 3,
+	GLOVES = 4,
+	BOOTS = 5,
+	ACCESSORY = 6
+}
+
+-- Equipment slot names
+local EQUIPMENT_SLOT_NAMES = {
+	[1] = "WEAPON",
+	[2] = "HELMET",
+	[3] = "ARMOR",
+	[4] = "GLOVES",
+	[5] = "BOOTS",
+	[6] = "ACCESSORY"
 }
 
 -- Rarity colors
@@ -42,6 +62,11 @@ local categoryTabs = InventoryUI:FindFirstChild("CategoryTabs")
 local itemDetails = InventoryUI:FindFirstChild("ItemDetails")
 local actionButtons = InventoryUI:FindFirstChild("ActionButtons")
 local closeButton = InventoryUI:FindFirstChild("CloseButton") or InventoryUI:FindFirstChild("Close")
+
+-- Equipment slots container (new)
+local equipmentSlotsContainer = InventoryUI:FindFirstChild("EquipmentSlotsContainer")
+-- Skill slots container (new)
+local skillSlotsContainer = InventoryUI:FindFirstChild("SkillSlotsContainer")
 
 -- Remote events
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -336,6 +361,16 @@ local function filterItemsByCategory(category)
 			end
 		end
 	end
+
+	-- Show/hide equipment slots container
+	if equipmentSlotsContainer then
+		equipmentSlotsContainer.Visible = (category == ITEM_TYPES.EQUIPMENT)
+	end
+
+	-- Show/hide skill slots container
+	if skillSlotsContainer then
+		skillSlotsContainer.Visible = (category == ITEM_TYPES.SKILL)
+	end
 end
 
 -- Update inventory display
@@ -372,7 +407,158 @@ local function updateInventoryDisplay()
 	end
 end
 
--- Handle inventory updates from server
+	-- Update equipment slots UI (new)
+local function updateEquipmentSlotsUI()
+	if not equipmentSlotsContainer then return end
+
+	-- Check if we have equipped items
+	if not currentInventory.equippedItems then return end
+
+	-- Update each equipment slot
+	for slotType, item in pairs(currentInventory.equippedItems) do
+		local slotName = EQUIPMENT_SLOT_NAMES[slotType]
+		if not slotName then continue end
+
+		local slotFrame = equipmentSlotsContainer:FindFirstChild("Slot_" .. slotName)
+		if not slotFrame then continue end
+
+		-- Find UI elements
+		local itemNameLabel = slotFrame:FindFirstChild("ItemNameLabel")
+		local iconFrame = slotFrame:FindFirstChild("IconFrame")
+		local slotStroke = slotFrame:FindFirstChild("SlotStroke")
+
+		if itemNameLabel then
+			-- Update item name and color
+			itemNameLabel.Text = item.name or "Unknown Item"
+			itemNameLabel.TextColor3 = RARITY_COLORS[item.rarity or 1] or Color3.fromRGB(200, 200, 200)
+		end
+
+		-- Update icon
+		if iconFrame then
+			local iconImage = iconFrame:FindFirstChild("IconImage")
+			if iconImage and item.iconId then
+				iconImage.Image = item.iconId
+			end
+		end
+
+		-- Update border color
+		if slotStroke then
+			slotStroke.Color = RARITY_COLORS[item.rarity or 1] or Color3.fromRGB(180, 150, 100)
+		end
+	end
+
+	-- Reset empty slots
+	for _, slotName in ipairs({"WEAPON", "HELMET", "ARMOR", "GLOVES", "BOOTS", "ACCESSORY"}) do
+		local slotType = nil
+		for type, name in pairs(EQUIPMENT_SLOT_NAMES) do
+			if name == slotName then
+				slotType = type
+				break
+			end
+		end
+
+		if not slotType then continue end
+
+		-- If slot is empty
+		if not currentInventory.equippedItems[slotType] then
+			local slotFrame = equipmentSlotsContainer:FindFirstChild("Slot_" .. slotName)
+			if not slotFrame then continue end
+
+			local itemNameLabel = slotFrame:FindFirstChild("ItemNameLabel")
+			if itemNameLabel then
+				itemNameLabel.Text = "None"
+				itemNameLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+			end
+
+			local slotStroke = slotFrame:FindFirstChild("SlotStroke")
+			if slotStroke then
+				slotStroke.Color = Color3.fromRGB(180, 150, 100)
+			end
+
+			-- Reset icon to default
+			local iconFrame = slotFrame:FindFirstChild("IconFrame")
+			if iconFrame then
+				local iconImage = iconFrame:FindFirstChild("IconImage")
+				if iconImage then
+					local defaultIcons = {
+						["WEAPON"] = "rbxassetid://6442677274",
+						["HELMET"] = "rbxassetid://6442677747",
+						["ARMOR"] = "rbxassetid://6442678135",
+						["GLOVES"] = "rbxassetid://6442678539",
+						["BOOTS"] = "rbxassetid://6442678968",
+						["ACCESSORY"] = "rbxassetid://6442679364"
+					}
+					iconImage.Image = defaultIcons[slotName] or ""
+					iconImage.ImageColor3 = Color3.fromRGB(210, 210, 210)
+				end
+			end
+		end
+	end
+end
+
+-- Setup equipment slot click event (new)
+local function setupEquipmentSlotEvents()
+	if not equipmentSlotsContainer then return end
+
+	for _, slotName in ipairs({"WEAPON", "HELMET", "ARMOR", "GLOVES", "BOOTS", "ACCESSORY"}) do
+		local slotFrame = equipmentSlotsContainer:FindFirstChild("Slot_" .. slotName)
+		if not slotFrame then continue end
+
+		-- Skip if already connected
+		if slotFrame:GetAttribute("Connected") then continue end
+
+		-- Find slot type
+		local slotType = nil
+		for type, name in pairs(EQUIPMENT_SLOT_NAMES) do
+			if name == slotName then
+				slotType = type
+				break
+			end
+		end
+
+		if not slotType then continue end
+
+		-- Connect click event
+		slotFrame.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or
+				input.UserInputType == Enum.UserInputType.Touch then
+
+				-- Find equipped item for this slot
+				local equippedItem = nil
+				if currentInventory.equippedItems and currentInventory.equippedItems[slotType] then
+					equippedItem = currentInventory.equippedItems[slotType]
+				end
+
+				if equippedItem then
+					-- Select the equipped item
+					selectItem(equippedItem)
+
+					-- Highlight slot
+					tween(slotFrame, {BackgroundColor3 = Color3.fromRGB(80, 120, 200)})
+
+					-- Also notify server
+					if inventoryRemotes:FindFirstChild("EquipmentSlotClicked") then
+						inventoryRemotes.EquipmentSlotClicked:FireServer(slotType)
+					end
+
+					playSound("ItemSelect")
+				end
+			end
+		end)
+
+		slotFrame.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or
+				input.UserInputType == Enum.UserInputType.Touch then
+
+				tween(slotFrame, {BackgroundColor3 = Color3.fromRGB(60, 45, 30)})
+			end
+		end)
+
+		slotFrame:SetAttribute("Connected", true)
+	end
+end
+
+	-- Handle inventory updates from server
 local function handleInventoryUpdate(clientData)
 	currentInventory.items = clientData.items or {}
 	currentInventory.equippedItems = clientData.equippedItems or {}
@@ -380,12 +566,15 @@ local function handleInventoryUpdate(clientData)
 
 	updateInventoryDisplay()
 
+	-- Update equipment slots UI
+	updateEquipmentSlotsUI()
+
 	-- Reset selection
 	currentInventory.selectedItem = nil
 	updateItemDetails(nil)
 end
 
--- Initialize category tabs
+	-- Initialize category tabs
 local function initCategoryTabs()
 	if not categoryTabs then return end
 
@@ -455,7 +644,7 @@ local function initCategoryTabs()
 	filterItemsByCategory(ITEM_TYPES.GENERAL)
 end
 
--- Initialize action buttons
+	-- Initialize action buttons
 local function initActionButtons()
 	if not actionButtons then return end
 
@@ -536,7 +725,7 @@ local function initActionButtons()
 	end
 end
 
--- Initialize close button
+	-- Initialize close button
 local function initCloseButton()
 	if not closeButton then return end
 
@@ -549,7 +738,7 @@ local function initCloseButton()
 	end
 end
 
--- Initialize inventory UI
+	-- Initialize inventory UI
 local function init()
 	-- Initial UI setup
 	if InventoryUI then
@@ -574,6 +763,15 @@ local function init()
 			if template then
 				template.Visible = false
 			end
+		end
+
+		-- Hide equipment and skill containers initially
+		if equipmentSlotsContainer then
+			equipmentSlotsContainer.Visible = false
+		end
+
+		if skillSlotsContainer then
+			skillSlotsContainer.Visible = false
 		end
 	end
 
@@ -605,6 +803,9 @@ local function init()
 	initActionButtons()
 	initCloseButton()
 
+	-- Initialize equipment slot events
+	setupEquipmentSlotEvents()
+
 	-- Connect to remote events
 	local updateEvent = inventoryRemotes:WaitForChild("UpdateInventory")
 	if updateEvent then
@@ -625,9 +826,9 @@ local function init()
 			end
 		end)
 	end
-end
+	end
 
--- Initialize on script load
+	-- Initialize on script load
 init()
 
 return InventoryUIHandler
