@@ -1,6 +1,6 @@
--- FixedMainGameUIHandler.lua
--- แก้ไขสำหรับแสดงผลค่าสถานะระหว่างเล่นเกมอย่างถูกต้อง และซ่อน Main UI เมื่อเปิด Inventory
--- Version: 3.2.0 (Inventory Hides Main UI)
+-- MainGameUIHandler.lua (ปรับแก้สำหรับ UI แบบใหม่)
+-- จัดการการแสดงผลค่าสถานะระหว่างเล่นเกมอย่างถูกต้อง และรองรับการย่อ/ขยาย UI
+-- Version: 4.0.0 (Medieval Fantasy Style UI)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -39,8 +39,12 @@ local CLASS_COLORS = {
 	Default = Color3.fromRGB(150, 150, 150)     -- สีกลาง
 }
 
+-- สีเฉดทองสำหรับ UI ใหม่
+local GOLD_COLOR = Color3.fromRGB(212, 175, 55)
+
 -- Variables
 local myStatusBar = nil
+local statusExpanded = true -- เริ่มต้นในโหมดขยาย
 local InventoryButton = MainGameUI:FindFirstChild("InventoryButton")
 local QuestButton = MainGameUI:FindFirstChild("QuestButton")
 local EndTurnButton = MainGameUI:FindFirstChild("EndTurnButton")
@@ -107,81 +111,102 @@ local function createTween(object, properties, duration, style, direction)
 	return tween
 end
 
--- Setup player status bar
-local function setupPlayerStatusBar()
-	-- Get template
-	local template = StatusBarContainer:FindFirstChild("PlayerStatusBar")
-	if not template then return nil end
+-- ฟังก์ชันสร้าง notification สำหรับแจ้งเตือนต่างๆ
+local function createNotification(text, color, duration)
+	local notificationTemplate = MainGameUI:FindFirstChild("NotificationSystem")
+	if not notificationTemplate then
+		-- สร้าง NotificationSystem ถ้าไม่มี
+		notificationTemplate = Instance.new("Frame")
+		notificationTemplate.Name = "NotificationSystem"
+		notificationTemplate.Size = UDim2.new(0.4, 0, 0.1, 0)
+		notificationTemplate.Position = UDim2.new(0.5, 0, -0.15, 0)
+		notificationTemplate.AnchorPoint = Vector2.new(0.5, 0)
+		notificationTemplate.BackgroundColor3 = color or Color3.fromRGB(60, 60, 60)
+		notificationTemplate.BackgroundTransparency = 0.2
+		notificationTemplate.Visible = false
 
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0.1, 0)
+		corner.Parent = notificationTemplate
+
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = GOLD_COLOR
+		stroke.Thickness = 2
+		stroke.Parent = notificationTemplate
+
+		local notifText = Instance.new("TextLabel")
+		notifText.Name = "NotificationText"
+		notifText.Size = UDim2.new(0.95, 0, 0.8, 0)
+		notifText.Position = UDim2.new(0.5, 0, 0.5, 0)
+		notifText.AnchorPoint = Vector2.new(0.5, 0.5)
+		notifText.BackgroundTransparency = 1
+		notifText.Font = Enum.Font.GothamBold
+		notifText.TextColor3 = Color3.fromRGB(255, 255, 255)
+		notifText.TextSize = 18
+		notifText.TextWrapped = true
+		notifText.Parent = notificationTemplate
+
+		notificationTemplate.Parent = MainGameUI
+	end
+
+	local notification = notificationTemplate:Clone()
+	notification.Name = "ActiveNotification"
+	notification.BackgroundColor3 = color or Color3.fromRGB(60, 60, 80)
+	notification.Visible = true
+
+	if notification:FindFirstChild("NotificationText") then
+		notification.NotificationText.Text = text
+	end
+
+	notification.Parent = MainGameUI
+
+	-- แสดงการแจ้งเตือนด้วยทวีน
+	notification:TweenPosition(
+		UDim2.new(0.5, 0, 0.1, 0),
+		Enum.EasingDirection.Out,
+		Enum.EasingStyle.Back,
+		0.5,
+		true
+	)
+
+	-- ซ่อนหลังจากระยะเวลาที่กำหนด
+	delay(duration or 3, function()
+		if notification and notification.Parent then
+			notification:TweenPosition(
+				UDim2.new(0.5, 0, -0.15, 0),
+				Enum.EasingDirection.In,
+				Enum.EasingStyle.Quad,
+				0.5,
+				true,
+				function()
+					if notification and notification.Parent then
+						notification:Destroy()
+					end
+				end
+			)
+		end
+	end)
+
+	return notification
+end
+
+-- Setup player status bar for new UI
+local function setupPlayerStatusBar()
 	-- Check if my status bar already exists
 	local existingStatusBar = StatusBarContainer:FindFirstChild("MyPlayerStatusBar")
 	if existingStatusBar then return existingStatusBar end
 
-	-- Create status bar for local player
-	local myStatusBar = template:Clone()
-	myStatusBar.Name = "MyPlayerStatusBar"
-	myStatusBar.Visible = true
-	myStatusBar.Parent = StatusBarContainer
+	-- สร้าง status bar ถ้าไม่มี (หรือใช้เทมเพลต)
+	-- หมายเหตุ: ถ้าใช้โค้ดสร้าง UI แล้ว ควรจะมี MyPlayerStatusBar อยู่แล้ว
 
-	-- Set initial values
-	if myStatusBar:FindFirstChild("PlayerName") then
-		myStatusBar.PlayerName.Text = player.Name
-	end
-	if myStatusBar:FindFirstChild("PlayerClass") then
-		myStatusBar.PlayerClass.Text = "Unknown"
-	end
-	if myStatusBar:FindFirstChild("PlayerLevel") then
-		myStatusBar.PlayerLevel.Text = "Lv.1"
-	end
-
-	-- Initialize HP and MP bars
-	if myStatusBar:FindFirstChild("HPBar") and myStatusBar.HPBar:FindFirstChild("HPFill") then
-		myStatusBar.HPBar.HPFill.Size = UDim2.new(1, 0, 1, 0)
-		if myStatusBar.HPBar:FindFirstChild("HPText") then
-			myStatusBar.HPBar.HPText.Text = "100/100"
-		end
-	end
-	if myStatusBar:FindFirstChild("MPBar") and myStatusBar.MPBar:FindFirstChild("MPFill") then
-		myStatusBar.MPBar.MPFill.Size = UDim2.new(1, 0, 1, 0)
-		if myStatusBar.MPBar:FindFirstChild("MPText") then
-			myStatusBar.MPBar.MPText.Text = "50/50"
-		end
-	end
-
-	-- Initialize money
-	if myStatusBar:FindFirstChild("MoneyContainer") and myStatusBar.MoneyContainer:FindFirstChild("MoneyAmount") then
-		myStatusBar.MoneyContainer.MoneyAmount.Text = "100"
-	end
-
-	-- Initialize ExpBar if it exists
-	if myStatusBar:FindFirstChild("ExpBar") and myStatusBar.ExpBar:FindFirstChild("ExpFill") then
-		myStatusBar.ExpBar.ExpFill.Size = UDim2.new(0, 0, 1, 0)
-		if myStatusBar.ExpBar:FindFirstChild("ExpText") then
-			myStatusBar.ExpBar.ExpText.Text = "EXP: 0/100"
-		end
-	end
-
-	-- Highlight player status bar
-	myStatusBar.BackgroundColor3 = Color3.fromRGB(60, 80, 100)
-
-	-- Add stroke if missing
-	if not myStatusBar:FindFirstChild("UIStroke") then
-		local stroke = Instance.new("UIStroke")
-		stroke.Color = Color3.fromRGB(100, 150, 200)
-		stroke.Thickness = 2
-		stroke.Parent = myStatusBar
-	end
-
-	-- Hide template
-	template.Visible = false
-
-	return myStatusBar
+	warn("ไม่พบ MyPlayerStatusBar ใน UI ใหม่!")
+	return nil
 end
 
--- Update player status bar with stats
+-- อัปเดต StatusBar แบบ UI ใหม่
 local function updateMyStatusBar(stats)
 	if not myStatusBar then
-		myStatusBar = setupPlayerStatusBar()
+		myStatusBar = StatusBarContainer:FindFirstChild("MyPlayerStatusBar")
 		if not myStatusBar then return end
 	end
 
@@ -192,24 +217,28 @@ local function updateMyStatusBar(stats)
 		end
 	end
 
+	-- อัปเดตชื่อผู้เล่น
+	if myStatusBar:FindFirstChild("PlayerName") then
+		myStatusBar.PlayerName.Text = player.Name
+	end
+
 	-- Update level if provided
 	if stats.level and myStatusBar:FindFirstChild("PlayerLevel") then
-		myStatusBar.PlayerLevel.Text = "Lv." .. stats.level
+		if myStatusBar.PlayerLevel:FindFirstChild("LevelLabel") then
+			myStatusBar.PlayerLevel.LevelLabel.Text = "Lv." .. stats.level
+		else
+			myStatusBar.PlayerLevel.Text = "Lv." .. stats.level
+		end
 		playerClassInfo.level = stats.level
 	end
 
 	-- Update class if provided
 	if stats.class and myStatusBar:FindFirstChild("PlayerClass") then
-		myStatusBar.PlayerClass.Text = stats.class
+		myStatusBar.PlayerClass.Text = "Class: " .. stats.class
 		playerClassInfo.class = stats.class
 
 		-- ปรับสีตามคลาส
 		local classColor = CLASS_COLORS[stats.class] or CLASS_COLORS.Default
-
-		-- ปรับสีแถบสถานะ
-		if myStatusBar:FindFirstChild("UIStroke") then
-			myStatusBar.UIStroke.Color = classColor
-		end
 
 		-- ปรับสี HP และ MP ตามคลาส
 		if myStatusBar:FindFirstChild("HPBar") and myStatusBar.HPBar:FindFirstChild("HPFill") then
@@ -232,43 +261,14 @@ local function updateMyStatusBar(stats)
 			end
 		end
 
-		-- แสดงการแจ้งเตือนคลาส (ถ้ามีระบบ NotificationSystem)
-		local notificationTemplate = MainGameUI:FindFirstChild("NotificationSystem")
-		if notificationTemplate and notificationTemplate:IsA("Frame") then
-			local notification = notificationTemplate:Clone()
-			notification.Name = "ClassNotification"
-			notification.Visible = true
+		-- แสดงการแจ้งเตือนคลาส
+		local classText = "Playing as " .. stats.class .. " (HP: " .. (stats.maxHp or currentPlayerStats.maxHp) ..
+			", MP: " .. (stats.maxMp or currentPlayerStats.maxMp) .. ")"
 
-			if notification:FindFirstChild("NotificationText") then
-				notification.NotificationText.Text = "Playing as " .. stats.class .. " (HP: " .. (stats.maxHp or currentPlayerStats.maxHp) ..
-					", MP: " .. (stats.maxMp or currentPlayerStats.maxMp) .. ")"
-			end
-
-			notification.Parent = MainGameUI
-			notification:TweenPosition(
-				UDim2.new(0.5, 0, 0.3, 0),
-				Enum.EasingDirection.Out,
-				Enum.EasingStyle.Back,
-				0.5,
-				true
-			)
-
-			delay(4, function()
-				notification:TweenPosition(
-					UDim2.new(0.5, 0, -0.2, 0),
-					Enum.EasingDirection.In,
-					Enum.EasingStyle.Quad,
-					0.5,
-					true,
-					function()
-						notification:Destroy()
-					end
-				)
-			end)
-		end
+		createNotification(classText, CLASS_COLORS[stats.class], 4)
 	end
 
-	-- Update HP if provided
+	-- Update HP
 	if stats.hp and stats.maxHp and
 		myStatusBar:FindFirstChild("HPBar") and
 		myStatusBar.HPBar:FindFirstChild("HPFill") then
@@ -277,7 +277,8 @@ local function updateMyStatusBar(stats)
 		createTween(
 			myStatusBar.HPBar.HPFill,
 			{Size = UDim2.new(hpRatio, 0, 1, 0)},
-			0.3
+			0.3, 
+			Enum.EasingStyle.Elastic
 		):Play()
 
 		if myStatusBar.HPBar:FindFirstChild("HPText") then
@@ -289,14 +290,14 @@ local function updateMyStatusBar(stats)
 			if hpRatio < 0.3 then
 				myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
 			elseif hpRatio < 0.6 then
-				myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(255, 200, 50)
+				myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(255, 150, 50)
 			else
-				myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+				myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
 			end
 		end
 	end
 
-	-- Update MP if provided
+	-- Update MP
 	if stats.mp and stats.maxMp and
 		myStatusBar:FindFirstChild("MPBar") and
 		myStatusBar.MPBar:FindFirstChild("MPFill") then
@@ -305,7 +306,8 @@ local function updateMyStatusBar(stats)
 		createTween(
 			myStatusBar.MPBar.MPFill,
 			{Size = UDim2.new(mpRatio, 0, 1, 0)},
-			0.3
+			0.3,
+			Enum.EasingStyle.Elastic
 		):Play()
 
 		if myStatusBar.MPBar:FindFirstChild("MPText") then
@@ -313,7 +315,7 @@ local function updateMyStatusBar(stats)
 		end
 	end
 
-	-- Update money if provided
+	-- Update money
 	if stats.money and
 		myStatusBar:FindFirstChild("MoneyContainer") and
 		myStatusBar.MoneyContainer:FindFirstChild("MoneyAmount") then
@@ -322,8 +324,10 @@ local function updateMyStatusBar(stats)
 		local newMoney = stats.money
 
 		if newMoney ~= currentMoney then
+			-- อนิเมชั่นสำหรับการเปลี่ยนแปลงเงิน
+			local direction = newMoney > currentMoney and 1 or -1
 			local color = newMoney > currentMoney and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)
-			local startSize = newMoney > currentMoney and 16 or 14
+			local startSize = newMoney > currentMoney and 18 or 14
 			local easingStyle = newMoney > currentMoney and Enum.EasingStyle.Back or Enum.EasingStyle.Bounce
 
 			myStatusBar.MoneyContainer.MoneyAmount.TextColor3 = color
@@ -339,34 +343,68 @@ local function updateMyStatusBar(stats)
 			moneyTween.Completed:Connect(function()
 				createTween(
 					myStatusBar.MoneyContainer.MoneyAmount,
-					{TextSize = 12, TextColor3 = Color3.fromRGB(255, 255, 255)},
+					{TextSize = 14, TextColor3 = Color3.fromRGB(255, 255, 255)},
 					0.3
 				):Play()
 			end)
+
+			-- แสดงเงินที่เปลี่ยนแปลง
+			local difference = newMoney - currentMoney
+			if math.abs(difference) >= 10 then  -- เปลี่ยนแปลง >= 10 จึงแสดง
+				local moneyChangeText = direction > 0 and "+" .. difference .. " coins" or difference .. " coins"
+				createNotification(moneyChangeText, direction > 0 and Color3.fromRGB(40, 120, 40) or Color3.fromRGB(120, 40, 40), 2)
+			end
 		end
 
 		myStatusBar.MoneyContainer.MoneyAmount.Text = tostring(stats.money)
-	end
+		end
 
-	-- อัปเดตค่าประสบการณ์ถ้ามี
-	if stats.exp and stats.nextLevelExp and
-		myStatusBar:FindFirstChild("ExpBar") and
-		myStatusBar.ExpBar:FindFirstChild("ExpFill") then
-
-		playerClassInfo.exp = stats.exp
-		playerClassInfo.nextLevelExp = stats.nextLevelExp
-
-		local expRatio = math.clamp(stats.exp / stats.nextLevelExp, 0, 1)
-		createTween(
-			myStatusBar.ExpBar.ExpFill,
-			{Size = UDim2.new(expRatio, 0, 1, 0)},
-			0.5
-		):Play()
-
-		if myStatusBar.ExpBar:FindFirstChild("ExpText") then
-			myStatusBar.ExpBar.ExpText.Text = "EXP: " .. math.floor(stats.exp) .. "/" .. math.floor(stats.nextLevelExp)
+		-- อัปเดตค่าสถานะ
+	-- อัปเดตค่าสถานะ
+	local statsList = {"defense", "attack", "mp", "magic"}
+	for _, statName in ipairs(statsList) do
+		if stats[statName] and myStatusBar:FindFirstChild(string.upper(statName) .. "Value") then
+			myStatusBar[string.upper(statName) .. "Value"].Text = tostring(stats[statName])
 		end
 	end
+
+	-- สำหรับการแสดงค่าสถานะเฉพาะในรูปแบบใหม่
+	if stats.defense and myStatusBar:FindFirstChild("DEFValue") then
+		myStatusBar.DEFValue.Text = tostring(stats.defense)
+	end
+
+	if stats.attack and myStatusBar:FindFirstChild("ATKValue") then
+		myStatusBar.ATKValue.Text = tostring(stats.attack)
+	end
+
+	if stats.mp and myStatusBar:FindFirstChild("MPValue") then
+		myStatusBar.MPValue.Text = tostring(stats.mp)
+	end
+
+	if stats.magic and myStatusBar:FindFirstChild("MAGValue") then
+		myStatusBar.MAGValue.Text = tostring(stats.magic)
+	end
+
+-- อัปเดตค่า ExpBar ถ้ามี
+if stats.exp and stats.nextLevelExp and
+	myStatusBar:FindFirstChild("ExpBar") and
+	myStatusBar.ExpBar:FindFirstChild("ExpFill") and
+	myStatusBar.ExpBar.Visible then
+
+	playerClassInfo.exp = stats.exp
+	playerClassInfo.nextLevelExp = stats.nextLevelExp
+
+	local expRatio = math.clamp(stats.exp / stats.nextLevelExp, 0, 1)
+	createTween(
+		myStatusBar.ExpBar.ExpFill,
+		{Size = UDim2.new(expRatio, 0, 1, 0)},
+		0.5
+	):Play()
+
+	if myStatusBar.ExpBar:FindFirstChild("ExpText") then
+		myStatusBar.ExpBar.ExpText.Text = "EXP: " .. math.floor(stats.exp) .. "/" .. math.floor(stats.nextLevelExp)
+	end
+end
 end
 
 -- Update turn indicator function
@@ -408,10 +446,23 @@ local function updateTurnIndicator(turnDetails)
 	if isMyTurn then
 		if myStatusBar then
 			local highlightColor = CLASS_COLORS[playerClassInfo.class] or Color3.fromRGB(70, 120, 200)
-			myStatusBar.BackgroundColor3 = highlightColor:Lerp(Color3.fromRGB(255, 255, 255), 0.7)
-			if myStatusBar:FindFirstChild("UIStroke") then
-				myStatusBar.UIStroke.Color = highlightColor
-				myStatusBar.UIStroke.Thickness = 3
+			-- ไม่เปลี่ยนสีพื้นหลัง แต่ทำให้ขอบสว่างขึ้น
+			local uiStrokeElements = myStatusBar:GetDescendants()
+			for _, element in ipairs(uiStrokeElements) do
+				if element:IsA("UIStroke") then
+					local originalColor = element.Color
+					createTween(element, 
+						{Color = highlightColor:Lerp(GOLD_COLOR, 0.5), Thickness = element.Thickness + 1}, 
+						0.5
+					):Play()
+
+					delay(0.6, function()
+						createTween(element, 
+							{Color = GOLD_COLOR, Thickness = element.Thickness - 1}, 
+							0.5
+						):Play()
+					end)
+				end
 			end
 		end
 
@@ -435,31 +486,10 @@ local function updateTurnIndicator(turnDetails)
 		expandTween:Play()
 		expandTween.Completed:Connect(function() contractTween:Play() end)
 
-		-- แสดงการแจ้งเตือน (ถ้ามีระบบ NotificationSystem)
-		local notificationTemplate = MainGameUI:FindFirstChild("NotificationSystem")
-		if notificationTemplate and notificationTemplate:IsA("Frame") then
-			local newNotification = notificationTemplate:Clone()
-			newNotification.Name = "YourTurnNotification"
-			newNotification.Visible = true
-			if newNotification:FindFirstChild("NotificationText") then
-				newNotification.NotificationText.Text = "It's your turn!"
-			end
-			newNotification.Parent = MainGameUI
-			newNotification:TweenPosition(UDim2.new(0.5, 0, 0.7, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Back, 0.7, true)
-			delay(2, function()
-				newNotification:TweenPosition(UDim2.new(0.5, 0, 1.1, 0), Enum.EasingDirection.In, Enum.EasingStyle.Quad, 0.5, true, function() newNotification:Destroy() end)
-			end)
-		end
+		-- แสดงการแจ้งเตือน
+		createNotification("It's your turn!", CLASS_COLORS[playerClassInfo.class] or Color3.fromRGB(60, 140, 200), 2)
 	else
 		-- Reset highlights if not player's turn
-		if myStatusBar then
-			local baseColor = CLASS_COLORS[playerClassInfo.class] or Color3.fromRGB(60, 80, 100)
-			myStatusBar.BackgroundColor3 = baseColor:Lerp(Color3.fromRGB(40, 40, 60), 0.7)
-			if myStatusBar:FindFirstChild("UIStroke") then
-				myStatusBar.UIStroke.Color = baseColor
-				myStatusBar.UIStroke.Thickness = 2
-			end
-		end
 		CurrentTurnIndicator.BackgroundColor3 = Color3.fromRGB(80, 80, 100)
 	end
 
@@ -601,39 +631,49 @@ local function setupButtonHandlers()
 		end)
 		QuestUI.CloseButton:SetAttribute("Connected", true)
 	end
-end
 
--- แสดงการแจ้งเตือนการเลเวลอัพ (ใช้ระบบที่มีอยู่แล้ว)
-local function showLevelUpNotification(newLevel, statIncreases)
-	local notificationTemplate = MainGameUI:FindFirstChild("NotificationSystem")
-	if notificationTemplate and notificationTemplate:IsA("Frame") then
-		local levelUpNotif = notificationTemplate:Clone()
-		levelUpNotif.Name = "LevelUpNotification"
-		levelUpNotif.Visible = true
+	-- ตรวจสอบปุ่มลูกศร collapse/expand ใน UI ใหม่
+	local arrowButton = StatusBarContainer:FindFirstChild("ArrowButton")
+	if arrowButton and arrowButton:FindFirstChild("Button") and not arrowButton:GetAttribute("Connected") then
+		arrowButton.Button.MouseButton1Click:Connect(function()
+			local playerStatusBar = StatusBarContainer:FindFirstChild("MyPlayerStatusBar")
+			if not playerStatusBar then return end
 
-		if levelUpNotif:FindFirstChild("NotificationText") then
-			local statText = "LEVEL UP! You reached level " .. newLevel .. "!\n"
-			for stat, increase in pairs(statIncreases) do
-				local statName = stat:gsub("Max", "") -- Simplify name (MaxHP -> HP)
-				if increase > 0 then
-					statText = statText .. statName .. " +" .. increase .. " "
-				end
+			statusExpanded = not statusExpanded
+
+			if statusExpanded then
+				-- ขยาย - แสดง UI เต็มรูปแบบ
+				playerStatusBar.Visible = true
+				createTween(playerStatusBar, {Size = UDim2.new(1, 0, 0.9, 0)}, 0.4, Enum.EasingStyle.Back):Play()
+			else
+				-- ย่อ - ซ่อน UI
+				createTween(playerStatusBar, {Size = UDim2.new(1, 0, 0, 0)}, 0.3):Play()
+				delay(0.2, function() playerStatusBar.Visible = false end)
 			end
-			levelUpNotif.NotificationText.Text = statText
-			levelUpNotif.NotificationText.TextSize = 20
-		end
 
-		levelUpNotif.BackgroundColor3 = Color3.fromRGB(80, 120, 200)
-		levelUpNotif.Parent = MainGameUI
-
-		levelUpNotif:TweenPosition(UDim2.new(0.5, 0, 0.4, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Back, 0.8, true)
-		delay(5, function()
-			levelUpNotif:TweenPosition(UDim2.new(0.5, 0, -0.3, 0), Enum.EasingDirection.In, Enum.EasingStyle.Back, 0.6, true, function() levelUpNotif:Destroy() end)
+			arrowButton.ArrowIcon.Text = statusExpanded and "<" or ">"
 		end)
+
+		arrowButton:SetAttribute("Connected", true)
 	end
 end
 
--- Connect remote events
+-- แสดงการแจ้งเตือนการเลเวลอัพ
+local function showLevelUpNotification(newLevel, statIncreases)
+	-- สร้างข้อความแสดงค่าสถานะที่เพิ่มขึ้น
+	local statText = "LEVEL UP! You reached level " .. newLevel .. "!\n"
+	for stat, increase in pairs(statIncreases) do
+		local statName = stat:gsub("Max", "") -- Simplify name (MaxHP -> HP)
+		if increase > 0 then
+			statText = statText .. statName .. " +" .. increase .. " "
+		end
+	end
+
+	-- แสดงการแจ้งเตือน
+	createNotification(statText, Color3.fromRGB(80, 120, 200), 5)
+	end
+
+	-- Connect remote events
 updatePlayerStatsEvent.OnClientEvent:Connect(function(playerId, stats)
 	if playerId == player.UserId then
 		updateMyStatusBar(stats)
@@ -675,61 +715,59 @@ end)
 
 if updateExpEvent then
 	updateExpEvent.OnClientEvent:Connect(function(expData)
+		-- ตรวจสอบว่ามี ExpBar หรือไม่
 		if not myStatusBar then return end
-		if myStatusBar:FindFirstChild("ExpBar") and myStatusBar.ExpBar:FindFirstChild("ExpFill") then
-			playerClassInfo.exp = expData.exp
-			playerClassInfo.nextLevelExp = expData.nextLevelExp
-			playerClassInfo.classExp = expData.classExp
-			playerClassInfo.nextClassLevelExp = expData.nextClassLevelExp
 
-			local expRatio = math.clamp(expData.exp / expData.nextLevelExp, 0, 1)
-			createTween(myStatusBar.ExpBar.ExpFill, {Size = UDim2.new(expRatio, 0, 1, 0)}, 0.5):Play()
+		-- ทำให้ ExpBar มองเห็นได้ (อาจซ่อนอยู่ใน UI ใหม่)
+		if myStatusBar:FindFirstChild("ExpBar") then
+			myStatusBar.ExpBar.Visible = true
 
-			if myStatusBar.ExpBar:FindFirstChild("ExpText") then
-				myStatusBar.ExpBar.ExpText.Text = "EXP: " .. math.floor(expData.exp) .. "/" .. math.floor(expData.nextLevelExp)
-			end
-		end
-	end)
-end
+			if myStatusBar.ExpBar:FindFirstChild("ExpFill") then
+				playerClassInfo.exp = expData.exp
+				playerClassInfo.nextLevelExp = expData.nextLevelExp
+				playerClassInfo.classExp = expData.classExp
+				playerClassInfo.nextClassLevelExp = expData.nextClassLevelExp
 
-levelUpEvent.OnClientEvent:Connect(function(newLevel, statIncreases)
+				local expRatio = math.clamp(expData.exp / expData.nextLevelExp, 0, 1)
+				createTween(myStatusBar.ExpBar.ExpFill, {Size = UDim2.new(expRatio, 0, 1, 0)}, 0.5):Play()
+
+				if myStatusBar.ExpBar:FindFirstChild("ExpText") then
+					myStatusBar.ExpBar.ExpText.Text = "EXP: " .. math.floor(expData.exp) .. "/" .. math.floor(expData.nextLevelExp)
+				end
+				end
+				end
+				end)
+				end
+
+				levelUpEvent.OnClientEvent:Connect(function(newLevel, statIncreases)
 	playerClassInfo.level = newLevel
 	showLevelUpNotification(newLevel, statIncreases)
-	if myStatusBar and myStatusBar:FindFirstChild("PlayerLevel") then
-		myStatusBar.PlayerLevel.Text = "Lv." .. newLevel
-	end
-	-- Server should send UpdatePlayerStats after level up
-end)
 
-classLevelUpEvent.OnClientEvent:Connect(function(newClassLevel, statIncreases, nextClass)
+	-- อัปเดตค่าเลเวลใน UI
+	if myStatusBar and myStatusBar:FindFirstChild("PlayerLevel") then
+		if myStatusBar.PlayerLevel:FindFirstChild("LevelLabel") then
+			myStatusBar.PlayerLevel.LevelLabel.Text = "Lv." .. newLevel
+		else
+			myStatusBar.PlayerLevel.Text = "Lv." .. newLevel
+		end
+	end
+
+	-- Server should send UpdatePlayerStats after level up
+	end)
+
+	classLevelUpEvent.OnClientEvent:Connect(function(newClassLevel, statIncreases, nextClass)
 	playerClassInfo.classLevel = newClassLevel
 
-	local notificationTemplate = MainGameUI:FindFirstChild("NotificationSystem")
-	if notificationTemplate and notificationTemplate:IsA("Frame") then
-		local classLevelUpNotif = notificationTemplate:Clone()
-		classLevelUpNotif.Name = "ClassLevelUpNotification"
-		classLevelUpNotif.Visible = true
-
-		if classLevelUpNotif:FindFirstChild("NotificationText") then
-			local message = "CLASS LEVEL UP! " .. (playerClassInfo.class or "Class") .. " reached level " .. newClassLevel
-			if nextClass then
-				message = message .. "\nUpgrade to " .. nextClass .. " is now available!"
-			end
-			classLevelUpNotif.NotificationText.Text = message
-		end
-
-		local classColor = CLASS_COLORS[playerClassInfo.class] or Color3.fromRGB(80, 120, 200)
-		classLevelUpNotif.BackgroundColor3 = classColor
-		classLevelUpNotif.Parent = MainGameUI
-
-		classLevelUpNotif:TweenPosition(UDim2.new(0.5, 0, 0.4, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Back, 0.8, true)
-		delay(5, function()
-			classLevelUpNotif:TweenPosition(UDim2.new(0.5, 0, -0.3, 0), Enum.EasingDirection.In, Enum.EasingStyle.Back, 0.6, true, function() classLevelUpNotif:Destroy() end)
-		end)
+	-- แสดงการแจ้งเตือนคลาสเลเวลอัพ
+	local message = "CLASS LEVEL UP! " .. (playerClassInfo.class or "Class") .. " reached level " .. newClassLevel
+	if nextClass then
+		message = message .. "\nUpgrade to " .. nextClass .. " is now available!"
 	end
-end)
 
-if updateTurnDetailsEvent then
+	createNotification(message, CLASS_COLORS[playerClassInfo.class] or Color3.fromRGB(80, 120, 200), 5)
+	end)
+
+	if updateTurnDetailsEvent then
 	updateTurnDetailsEvent.OnClientEvent:Connect(updateTurnIndicator)
 end
 
@@ -763,14 +801,14 @@ if PopupUI then
 end
 
 -- Setup initial UI elements
-myStatusBar = setupPlayerStatusBar()
+myStatusBar = StatusBarContainer:FindFirstChild("MyPlayerStatusBar")
 setupButtonHandlers()
 setupEndTurnButton()
 
 -- Ensure status bar exists when UI becomes enabled
 MainGameUI:GetPropertyChangedSignal("Enabled"):Connect(function()
 	if MainGameUI.Enabled and not myStatusBar then
-		myStatusBar = setupPlayerStatusBar()
+		myStatusBar = StatusBarContainer:FindFirstChild("MyPlayerStatusBar")
 	end
 end)
 
