@@ -66,40 +66,90 @@ ScreenGui (ชื่อ "ClassSelection")
 3. หน้าเกมหลัก (Main Game Screen)
 ScreenGui (ชื่อ "MainGameUI")
 ├── Frame (ชื่อ "StatusBarContainer")
-│   ├── UIListLayout
-│   └── Frame (ชื่อ "PlayerStatusBar") [จะถูกโคลนสำหรับแต่ละผู้เล่น]
+│   ├── Frame (ชื่อ "MyPlayerStatusBar") - กล่องสถานะผู้เล่นแบบเมดิเอวัล
+│   │   ├── UICorner
+│   │   ├── UIStroke (สีทอง)
+│   │   ├── Frame (ชื่อ "CornerDecor1") - กรอบตกแต่งมุมซ้ายบน
+│   │   ├── Frame (ชื่อ "CornerDecor2") - กรอบตกแต่งมุมขวาบน
+│   │   ├── Frame (ชื่อ "CornerDecor3") - กรอบตกแต่งมุมซ้ายล่าง
+│   │   ├── Frame (ชื่อ "CornerDecor4") - กรอบตกแต่งมุมขวาล่าง
+│   │   ├── TextLabel (ชื่อ "PlayerName") - ชื่อผู้เล่น
+│   │   ├── Frame (ชื่อ "HeaderLine") - เส้นคั่นส่วนหัว
+│   │   ├── TextLabel (ชื่อ "HPLabel") - ป้ายแสดง HP
+│   │   ├── Frame (ชื่อ "HPBar") - แถบแสดง HP
+│   │   │   ├── UICorner
+│   │   │   ├── UIStroke
+│   │   │   ├── Frame (ชื่อ "HPFill") - แถบสีแดงแสดงค่า HP ปัจจุบัน
+│   │   │   │   └── UICorner
+│   │   │   └── TextLabel (ชื่อ "HPText") - ข้อความแสดงค่า HP (100/100)
+│   │   ├── TextLabel (ชื่อ "MPLabel") - ป้ายแสดง MP
+│   │   ├── Frame (ชื่อ "MPBar") - แถบแสดง MP
+│   │   │   ├── UICorner
+│   │   │   ├── UIStroke
+│   │   │   ├── Frame (ชื่อ "MPFill") - แถบสีน้ำเงินแสดงค่า MP ปัจจุบัน
+│   │   │   │   └── UICorner
+│   │   │   └── TextLabel (ชื่อ "MPText") - ข้อความแสดงค่า MP (50/50)
+│   │   ├── TextLabel (ชื่อ "PlayerClass") - แสดงคลาสของผู้เล่น (Class: Mage)
+│   │   ├── Frame (ชื่อ "MiddleLine") - เส้นคั่นกลาง
+│   │   ├── TextLabel (ชื่อ "StatsHeader") - หัวข้อ STATS
+│   │   ├── TextLabel (ชื่อ "DEFLabel") - ป้ายค่า DEF
+│   │   ├── TextLabel (ชื่อ "DEFValue") - ค่า DEF
+│   │   ├── TextLabel (ชื่อ "MPLabel") - ป้ายค่า MP แบบตัวเลข
+│   │   ├── TextLabel (ชื่อ "MPValue") - ค่า MP แบบตัวเลข
+│   │   ├── TextLabel (ชื่อ "DEXLabel") - ป้ายค่า DEX
+│   │   ├── TextLabel (ชื่อ "DEXValue") - ค่า DEX
+│   │   ├── TextLabel (ชื่อ "INTLabel") - ป้ายค่า INT
+│   │   ├── TextLabel (ชื่อ "INTValue") - ค่า INT
+│   │   ├── Frame (ชื่อ "MoneyContainer") - กล่องแสดงเงิน
+│   │   │   ├── UICorner
+│   │   │   ├── UIStroke
+│   │   │   ├── TextLabel (ชื่อ "CoinIcon") - ไอคอน $
+│   │   │   └── TextLabel (ชื่อ "MoneyAmount") - จำนวนเงิน
+│   │   ├── Frame (ชื่อ "PlayerLevel") - กล่องแสดงเลเวล
+│   │   │   ├── UICorner
+│   │   │   ├── UIStroke
+│   │   │   └── TextLabel (ชื่อ "LevelLabel") - แสดงเลเวล (Lv.5)
+│   │   └── Frame (ชื่อ "ExpBar") - แถบประสบการณ์ (ซ่อนไว้ตอนเริ่มต้น)
+│   │       ├── UICorner
+│   │       ├── UIStroke
+│   │       ├── Frame (ชื่อ "ExpFill") - แถบสีเขียวแสดงค่าประสบการณ์
+│   │       │   └── UICorner
+│   │       └── TextLabel (ชื่อ "ExpText") - ข้อความแสดงค่าประสบการณ์
+│   └── Frame (ชื่อ "ArrowButton") - ปุ่มลูกศรสำหรับย่อ/ขยาย
 │       ├── UICorner
 │       ├── UIStroke
-│       ├── ImageLabel (ชื่อ "PlayerIcon")
-│       ├── TextLabel (ชื่อ "PlayerName")
-│       ├── TextLabel (ชื่อ "PlayerClass")
-│       ├── TextLabel (ชื่อ "PlayerLevel")
-│       ├── Frame (ชื่อ "HPBar")
-│       │   ├── Frame (ชื่อ "HPFill")
-│       │   └── TextLabel (ชื่อ "HPText")
-│       ├── Frame (ชื่อ "MPBar")
-│       │   ├── Frame (ชื่อ "MPFill")
-│       │   └── TextLabel (ชื่อ "MPText")
-│       ├── Frame (ชื่อ "MoneyContainer")
-│       │   ├── ImageLabel (ชื่อ "CoinIcon")
-│       │   └── TextLabel (ชื่อ "MoneyAmount")
-│       └── Frame (ชื่อ "KeyItemsContainer")
-│           ├── UIGridLayout
-│           └── ImageLabel (ชื่อ "ItemIcon") [จะถูกโคลนสำหรับแต่ละไอเทมสำคัญ]
-├── Frame (ชื่อ "CurrentTurnIndicator")
+│       ├── TextLabel (ชื่อ "ArrowIcon") - ข้อความ < หรือ >
+│       └── TextButton (ชื่อ "Button") - ปุ่มกดได้แบบไม่มีข้อความ
+├── Frame (ชื่อ "CurrentTurnIndicator") - แสดงเทิร์นปัจจุบัน
 │   ├── UICorner
 │   ├── UIStroke
-│   └── TextLabel (ชื่อ "TurnText")
-├── TextButton (ชื่อ "InventoryButton")
+│   ├── TextLabel (ชื่อ "TurnText") - ข้อความแสดงเทิร์น (Player2's Turn)
+│   ├── TextLabel (ชื่อ "PlayerClassLabel") - แสดงคลาสของผู้เล่นที่เป็นเทิร์นปัจจุบัน
+│   ├── TextLabel (ชื่อ "PlayerLevelLabel") - แสดงเลเวลของผู้เล่นที่เป็นเทิร์นปัจจุบัน
+│   └── Frame (ชื่อ "TurnTimerFrame") - กรอบแสดงเวลา
+│       ├── UICorner
+│       ├── UIStroke
+│       ├── Frame (ชื่อ "TimerFill") - แถบแสดงเวลาที่เหลือ
+│       │   └── UICorner
+│       └── TextLabel (ชื่อ "TimerText") - ข้อความแสดงเวลา
+├── TextButton (ชื่อ "InventoryButton") - ปุ่มเปิดกระเป๋า
 │   ├── UICorner
 │   ├── UIStroke
 │   ├── ImageLabel (ชื่อ "InventoryIcon")
 │   └── TextLabel (ชื่อ "InventoryText")
-└── TextButton (ชื่อ "QuestButton")
-    ├── UICorner
-    ├── UIStroke
-    ├── ImageLabel (ชื่อ "QuestIcon")
-    └── TextLabel (ชื่อ "QuestText")
+├── TextButton (ชื่อ "QuestButton") - ปุ่มเปิดเควส
+│   ├── UICorner
+│   ├── UIStroke
+│   ├── ImageLabel (ชื่อ "QuestIcon")
+│   └── TextLabel (ชื่อ "QuestText")
+├── TextButton (ชื่อ "EndTurnButton") - ปุ่มจบเทิร์น
+│   ├── UICorner
+│   ├── UIStroke
+│   └── TextLabel (ชื่อ "EndTurnText")
+└── Frame (ชื่อ "NotificationSystem") - ระบบแจ้งเตือน
+├── UICorner
+├── UIStroke
+└── TextLabel (ชื่อ "NotificationText") - ข้อความแจ้งเตือน
 
 4. หน้าทอยลูกเต๋าและเลือกเส้นทาง (Dice Roll & Path Selection)
 Frame (ชื่อ "DiceRollUI")
