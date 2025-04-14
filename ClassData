@@ -1,7 +1,9 @@
 -- ClassData.lua
 -- ข้อมูลและคุณสมบัติของคลาสต่างๆ ในเกม
--- Version: 2.0.0 (Updated)
+-- Version: 3.1.0 (Level 1 Base Stats Only)
 -- วางที่: ReplicatedStorage/SharedModules/ClassData.lua
+-- หมายเหตุ: BaseStats ในเวอร์ชันนี้เก็บเฉพาะค่าสถานะเริ่มต้น ณ เลเวล 1
+--         ส่วนการเติบโตของสเตตัสต่อเลเวล จะต้องจัดการในระบบอื่น (เช่น PlayerManager หรือ LevelingSystem)
 
 local ClassData = {}
 
@@ -12,13 +14,11 @@ ClassData.Classes = {
 		DisplayName = "Warrior",
 		Description = "A sword man",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = {
-			MaxHP = 125,
-			MaxMP = 50,
-			ATK = 95,
-			DEF = 75,
-			MAGIC = 10,
-			AGI = 40,
+		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1
+			HP = 125, -- MaxHP เริ่มต้น
+			MP = 50,  -- MaxMP เริ่มต้น
+			ATK = 95, -- ATK เริ่มต้น
+			MAG = 10, -- MAGIC เริ่มต้น
 		},
 		NextClass = "Knight",
 		UpgradeCondition = { Type = "Level", Value = 10 },
@@ -29,13 +29,11 @@ ClassData.Classes = {
 		DisplayName = "Thief",
 		Description = "A thief man",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = {
-			MaxHP = 100,
-			MaxMP = 60,
+		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1
+			HP = 100,
+			MP = 60,
 			ATK = 75,
-			DEF = 30,
-			MAGIC = 30,
-			AGI = 80,
+			MAG = 30,
 		},
 		NextClass = "Assassin",
 		UpgradeCondition = { Type = "Level", Value = 10 },
@@ -46,13 +44,11 @@ ClassData.Classes = {
 		DisplayName = "Mage",
 		Description = "A magic man",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = {
-			MaxHP = 85,
-			MaxMP = 120,
+		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1
+			HP = 85,
+			MP = 120,
 			ATK = 25,
-			DEF = 35,
-			MAGIC = 95,
-			AGI = 50,
+			MAG = 95,
 		},
 		NextClass = "Wizard",
 		UpgradeCondition = { Type = "Level", Value = 10 },
@@ -63,13 +59,11 @@ ClassData.Classes = {
 		DisplayName = "Knight",
 		Description = "นักรบผู้ช่ำชอง เกราะหนาและพลังโจมตีที่หนักหน่วงขึ้น สามารถปกป้องเพื่อนร่วมทีมได้",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = {
-			MaxHP = 180,
-			MaxMP = 65,
+		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1 (เมื่อเปลี่ยนคลาส)
+			HP = 180,
+			MP = 65,
 			ATK = 120,
-			DEF = 100,
-			MAGIC = 15,
-			AGI = 45,
+			MAG = 15,
 		},
 		NextClass = "Paladin",
 		UpgradeCondition = { Type = "Quest", Value = "ProveYourValor" },
@@ -79,13 +73,11 @@ ClassData.Classes = {
 		DisplayName = "Paladin",
 		Description = "อัศวินศักดิ์สิทธิ์ ผู้ผสานพลังแห่งการต่อสู้เข้ากับการปกป้องและเวทมนตร์สนับสนุน",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = {
-			MaxHP = 250,
-			MaxMP = 100,
+		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1 (เมื่อเปลี่ยนคลาส)
+			HP = 250,
+			MP = 100,
 			ATK = 150,
-			DEF = 140,
-			MAGIC = 50,
-			AGI = 50,
+			MAG = 50,
 		},
 		NextClass = nil, -- คลาสสูงสุดในสายนี้
 		UpgradeCondition = nil,
@@ -96,13 +88,11 @@ ClassData.Classes = {
 		DisplayName = "Wizard",
 		Description = "เชี่ยวชาญเวทมนตร์ธาตุต่างๆ มีพลังทำลายล้างสูงขึ้นและคาถาที่ซับซ้อนกว่าเดิม",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = {
-			MaxHP = 110,
-			MaxMP = 180,
+		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1 (เมื่อเปลี่ยนคลาส)
+			HP = 110,
+			MP = 180,
 			ATK = 35,
-			DEF = 45,
-			MAGIC = 130,
-			AGI = 60,
+			MAG = 130,
 		},
 		NextClass = "Archmage",
 		UpgradeCondition = { Type = "Item", Value = "AncientGrimoire" },
@@ -112,13 +102,11 @@ ClassData.Classes = {
 		DisplayName = "Archmage",
 		Description = "ผู้บรรลุศาสตร์แห่งเวทมนตร์ขั้นสูงสุด ควบคุมพลังอันมหาศาลและคาถาที่เปลี่ยนแปลงสนามรบได้",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = {
-			MaxHP = 140,
-			MaxMP = 250,
+		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1 (เมื่อเปลี่ยนคลาส)
+			HP = 140,
+			MP = 250,
 			ATK = 45,
-			DEF = 60,
-			MAGIC = 180,
-			AGI = 70,
+			MAG = 180,
 		},
 		NextClass = nil,
 		UpgradeCondition = nil,
@@ -129,13 +117,11 @@ ClassData.Classes = {
 		DisplayName = "Assassin",
 		Description = "เชี่ยวชาญการลอบสังหาร สร้างความเสียหายคริติคอลอย่างรุนแรงและเคลื่อนไหวในเงามืด",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = {
-			MaxHP = 130,
-			MaxMP = 80,
+		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1 (เมื่อเปลี่ยนคลาส)
+			HP = 130,
+			MP = 80,
 			ATK = 110,
-			DEF = 45,
-			MAGIC = 40,
-			AGI = 120,
+			MAG = 40,
 		},
 		NextClass = "Shadow",
 		UpgradeCondition = { Type = "Skill", Value = "MasterStealth" },
@@ -145,13 +131,11 @@ ClassData.Classes = {
 		DisplayName = "Shadow",
 		Description = "ปรมาจารย์แห่งเงา ผู้ใช้ทักษะลอบเร้นและการโจมตีที่ศัตรูไม่อาจคาดเดาได้",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = {
-			MaxHP = 160,
-			MaxMP = 100,
+		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1 (เมื่อเปลี่ยนคลาส)
+			HP = 160,
+			MP = 100,
 			ATK = 140,
-			DEF = 60,
-			MAGIC = 55,
-			AGI = 170,
+			MAG = 55,
 		},
 		NextClass = nil,
 		UpgradeCondition = nil,
@@ -163,6 +147,7 @@ function ClassData:GetClassInfo(className)
 	return self.Classes[className]
 end
 
+-- ดึงค่าสถานะเริ่มต้น ณ เลเวล 1
 function ClassData:GetBaseStats(className)
 	local info = self:GetClassInfo(className)
 	return info and info.BaseStats
