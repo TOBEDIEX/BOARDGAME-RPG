@@ -1,6 +1,6 @@
 -- ItemData.lua
--- ข้อมูลไอเทมทั้งหมดในเกม (เวอร์ชันทดสอบ)
--- Version: 1.0.0
+-- ข้อมูลไอเทมทั้งหมดในเกม (เวอร์ชันอัพเดต)
+-- Version: 1.2.0
 
 -- Constants
 local ITEM_TYPES = {
@@ -24,9 +24,9 @@ local ItemData = {}
 -- ฟังก์ชันใช้ไอเทม (จะถูกกำหนดโดย InventoryService)
 ItemData.UseHandlers = {}
 
--- ไอเทมสำหรับทดสอบ
+-- เพิ่มไอเทม DiceRollBonus
 ItemData.Items = {
-	-- ไอเทมทดสอบ		
+	-- ไอเทมเดิม
 	test_item = {
 		id = "test_item",
 		name = "Test Item",
@@ -39,7 +39,64 @@ ItemData.Items = {
 		buyPrice = 20,
 		usable = true,
 		consumable = true,
-		iconId = "rbxassetid://6675226918", -- เปลี่ยน ID ตามที่ต้องการ
+		iconId = "rbxassetid://6675226918",
+		stats = {
+			hp = 50
+		}
+	},
+
+	-- ไอเทมใหม่: เต๋าเพิ่มแต้ม +1
+	dice_bonus_1 = {
+		id = "dice_bonus_1",
+		name = "Lucky Dice +1",
+		description = "เพิ่มแต้มลูกเต๋า +1 ในเทิร์นถัดไป 1 ครั้ง",
+		type = ITEM_TYPES.GENERAL,
+		rarity = 2,
+		stackable = true,
+		maxStack = 5,
+		sellPrice = 100,
+		buyPrice = 300,
+		usable = true,
+		consumable = true,
+		iconId = "rbxassetid://7228017567", -- รูปลูกเต๋า
+		stats = {
+			diceRollBonus = 1
+		}
+	},
+
+	-- ไอเทมใหม่: เต๋าเพิ่มแต้ม +2
+	dice_bonus_2 = {
+		id = "dice_bonus_2",
+		name = "Magical Dice +2",
+		description = "เพิ่มแต้มลูกเต๋า +2 ในเทิร์นถัดไป 1 ครั้ง",
+		type = ITEM_TYPES.GENERAL,
+		rarity = 3,
+		stackable = true,
+		maxStack = 3,
+		sellPrice = 250,
+		buyPrice = 600,
+		usable = true,
+		consumable = true,
+		iconId = "rbxassetid://7228017567", -- รูปลูกเต๋า
+		stats = {
+			diceRollBonus = 2
+		}
+	},
+
+	-- ไอเทมใหม่: ยาฟื้นพลัง
+	health_potion = {
+		id = "health_potion",
+		name = "Health Potion",
+		description = "ฟื้นพลังชีวิต 50 หน่วย",
+		type = ITEM_TYPES.GENERAL,
+		rarity = 1,
+		stackable = true,
+		maxStack = 10,
+		sellPrice = 50,
+		buyPrice = 150,
+		usable = true,
+		consumable = true,
+		iconId = "rbxassetid://7060145106", -- รูปขวดยา
 		stats = {
 			hp = 50
 		}
@@ -61,12 +118,20 @@ ItemData.Equipment = {
 		sellPrice = 100,
 		buyPrice = 300,
 		usable = false,
-		iconId = "rbxassetid://6675226140", -- เปลี่ยน ID ตามที่ต้องการ
+		iconId = "rbxassetid://6675226140",
 		stats = {
 			attack = 10,
 			defense = 5
 		}
 	}
+}
+
+-- รายการไอเทมที่อาจได้รับจากช่อง Item
+ItemData.ItemTilePool = {
+	-- เรียงตามความถี่ในการออกไอเทม (เปอร์เซ็นต์โดยประมาณ)
+	{id = "health_potion", weight = 70},   -- 70%
+	{id = "dice_bonus_1", weight = 25},    -- 25%
+	{id = "dice_bonus_2", weight = 5}      -- 5%
 }
 
 -- ค้นหาไอเทมจาก ID
@@ -103,6 +168,27 @@ function ItemData.GetItemsByType(itemType)
 	end
 
 	return result
+end
+
+-- สุ่มไอเทมจาก ItemTilePool
+function ItemData.GetRandomItemFromPool()
+	local totalWeight = 0
+	for _, itemInfo in ipairs(ItemData.ItemTilePool) do
+		totalWeight = totalWeight + itemInfo.weight
+	end
+
+	local randomValue = math.random(1, totalWeight)
+	local currentWeight = 0
+
+	for _, itemInfo in ipairs(ItemData.ItemTilePool) do
+		currentWeight = currentWeight + itemInfo.weight
+		if randomValue <= currentWeight then
+			return ItemData.GetItemById(itemInfo.id)
+		end
+	end
+
+	-- กรณีที่ไม่พบ (ไม่ควรเกิดขึ้น)
+	return ItemData.GetItemById("health_potion")
 end
 
 -- ส่งออกค่าคงที่
