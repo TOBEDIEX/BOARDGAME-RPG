@@ -1,0 +1,154 @@
+-- ItemTileHandler.server.lua
+-- ตัวจัดการเหตุการณ์ช่อง Item ฝั่งเซิร์ฟเวอร์
+-- Version: 1.0.0
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+
+-- ตั้งค่า Debug Mode
+local DEBUG = true
+local function log(msg) if DEBUG then print("[ItemTileServer] " .. msg) end end
+
+-- สร้าง Remote Events
+local remotes = ReplicatedStorage:WaitForChild("Remotes")
+local eventTileRemotes = remotes:FindFirstChild("EventTileRemotes") or Instance.new("Folder")
+eventTileRemotes.Name = "EventTileRemotes"
+eventTileRemotes.Parent = remotes
+
+local itemEventRemote = eventTileRemotes:FindFirstChild("ItemEvent") or Instance.new("RemoteEvent")
+itemEventRemote.Name = "ItemEvent"
+itemEventRemote.Parent = eventTileRemotes
+
+-- โหลด ItemData module
+local ItemData = nil
+local success, result = pcall(function()
+    return require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("ItemData"))
+end)
+
+if success then
+    ItemData = result
+    log("โหลด ItemData module สำเร็จ")
+else
+    warn("[ItemTileServer] ไม่สามารถโหลด ItemData module: " .. tostring(result))
+    -- สร้าง ItemData จำลอง
+    ItemData = {
+        Items = {
+            health_potion = {
+                id = "health_potion",
+                name = "Health Potion",
+                description = "ฟื้นพลังชีวิต 50 หน่วย",
+                type = 1,
+                rarity = 1,
+                iconId = "rbxassetid://7060145106"
+            }
+        },
+        GetRandomItemFromPool = function()
+            return {
+                id = "health_potion",
+                name = "Health Potion",
+                description = "ฟื้นพลังชีวิต 50 หน่วย",
+                type = 1,
+                rarity = 1,
+                iconId = "rbxassetid://7060145106"
+            }
+        end,
+        GetItemById = function(id)
+            return {
+                id = id,
+                name = "Unknown Item",
+                description = "Item data not available.",
+                type = 1,
+                rarity = 1,
+                iconId = ""
+            }
+        end
+    }
+end
+
+-- หา InventoryService
+local function getInventoryService()
+    -- ลองหาจากหลายวิธี
+    if _G.GameManager and _G.GameManager.inventoryService then 
+        return _G.GameManager.inventoryService 
+    end
+    
+    -- ถ้าไม่พบ สร้าง stub
+    log("ไม่พบ InventoryService สร้าง stub")
+    return {
+        AddItemToPlayer = function(player, itemId, quantity)
+            log("⚠️ [STUB] AddItemToPlayer สำหรับ " .. player.Name .. " - ไอเทม: " .. itemId .. " x" .. tostring(quantity))
+            return true, "Item added (stub)"
+        end
+    }
+end
+
+-- รับฟังเหตุการณ์จาก client
+itemEventRemote.OnServerEvent:Connect(function(player, command, data)
+    log("ได้รับคำสั่ง: " .. tostring(command) .. " จาก " .. player.Name)
+
+    if command == "giveRandomItem" then
+        -- สุ่มไอเทม
+        local randomItem = ItemData.GetRandomItemFromPool()
+        if not randomItem then
+            warn("[ItemTileServer] ไม่สามารถสุ่มไอเทมได้ สำหรับผู้เล่น " .. player.Name)
+            return
+        end
+        
+        log("สุ่มได้ไอเทม: " .. randomItem.name .. " (ID: " .. randomItem.id .. ")")
+        
+        -- ให้ไอเทมกับผู้เล่น
+        local inventoryService = getInventoryService()
+        local success, message = inventoryService.AddItemToPlayer(player, randomItem.id, 1)
+        
+        -- แจ้งกลับไปยัง client
+        if success then
+            log("เพิ่ม " .. randomItem.name .. " ให้กับ " .. player.Name)
+            itemEventRemote:FireClient(player, "receiveItem", randomItem)
+        else
+            warn("[ItemTileServer] ไม่สามารถเพิ่มไอเทมให้ผู้เล่น: " .. (message or "ไม่ทราบสาเหตุ"))
+        end
+    end
+end)
+
+-- ฟังก์ชันทดสอบ
+local function testGiveRandomItem(player)
+    -- ถ้าไม่ระบุผู้เล่น ใช้ผู้เล่นแรกในเซิร์ฟเวอร์
+    if not player then
+        local players = Players:GetPlayers()
+        if #players == 0 then 
+            warn("[ItemTileServer] ไม่มีผู้เล่นในเกม")
+            return false 
+        end
+        player = players[1]
+    end
+    
+    log("ทดสอบสุ่มไอเทมให้ " .. player.Name)
+    
+    -- สุ่มไอเทม
+    local randomItem = ItemData.GetRandomItemFromPool()
+    if not randomItem then
+        warn("[ItemTileServer] ไม่สามารถสุ่มไอเทมได้")
+        return false
+    end
+    
+    log("สุ่มได้ไอเทม: " .. randomItem.name .. " (ID: " .. randomItem.id .. ")")
+    
+    -- ให้ไอเทมกับผู้เล่น
+    local inventoryService = getInventoryService()
+    local success, message = inventoryService.AddItemToPlayer(player, randomItem.id, 1)
+    
+    if success then
+        -- แจ้งกลับไปยัง client
+        itemEventRemote:FireClient(player, "receiveItem", randomItem)
+        log("ให้ " .. randomItem.name .. " กับ " .. player.Name .. " สำเร็จ")
+    else
+        warn("[ItemTileServer] ไม่สามารถเพิ่มไอเทมให้ผู้เล่น: " .. (message or "ไม่ทราบสาเหตุ"))
+    end
+    
+    return success
+end
+
+-- เพิ่มฟังก์ชันทดสอบใน global
+_G.TestGiveRandomItem = testGiveRandomItem
+
+log("ระบบช่อง Item ฝั่งเซิร์ฟเวอร์เริ่มต้นแล้ว - พิมพ์ _G.TestGiveRandomItem() ในแถบคำสั่งเพื่อทดสอบ")
