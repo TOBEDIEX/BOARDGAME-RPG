@@ -1,6 +1,6 @@
 -- BoardService.server.lua
 -- Server-side service for board system management
--- Version: 3.0.0 (Optimized)
+-- Version: 3.2.0 (Supports unlimited steps from dice bonus)
 
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -51,6 +51,20 @@ local function getGameManager()
 		task.wait(0.1)
 	end
 	return _G.GameManager
+end
+
+-- ฟังก์ชันใหม่: ดึง DiceBonusService
+local function getDiceBonusService()
+	if _G.DiceBonusService then
+		return _G.DiceBonusService
+	end
+
+	local gameManager = getGameManager()
+	if gameManager and gameManager.diceBonusService then
+		return gameManager.diceBonusService
+	end
+
+	return nil
 end
 
 -- Store movement completion state
@@ -136,7 +150,42 @@ local function initializeBoardService()
 			return 
 		end
 
-		-- Process movement
+		-- ตรวจสอบว่าค่า diceResult อยู่ในช่วงที่เป็นไปได้หรือไม่
+		local diceBonusService = getDiceBonusService()
+		local diceBonus = diceBonusService and diceBonusService.GetPlayerDiceBonus(playerId) or 0
+
+		-- เมื่อมีการใช้ลูกเต๋าพร้อมโบนัส จำนวนลูกเต๋าคือ 1 + diceBonus
+		-- ค่าต่ำสุดที่เป็นไปได้คือ จำนวนลูกเต๋า × 1
+		-- ค่าสูงสุดที่เป็นไปได้คือ จำนวนลูกเต๋า × 6
+		local minPossibleResult = 1 + diceBonus -- ต่ำสุดคือลูกละ 1
+		local maxPossibleResult = (1 + diceBonus) * 6 -- สูงสุดคือลูกละ 6
+
+		print("[BoardService] Player " .. player.Name .. " rolled " .. diceResult .. 
+			" (Bonus: " .. diceBonus .. ", Valid range: " .. minPossibleResult .. "-" .. maxPossibleResult .. ")")
+
+		if diceResult < minPossibleResult or diceResult > maxPossibleResult then
+			warn("[BoardService] Invalid dice result from player " .. player.Name .. ": " .. diceResult .. 
+				" (Expected range: " .. minPossibleResult .. "-" .. maxPossibleResult .. ")")
+
+			-- แทนค่าด้วยค่าที่สุ่มใหม่ในกรณีที่ค่าไม่ถูกต้อง
+			local baseDiceRoll = math.random(1, 6)
+			local bonusDiceRolls = {}
+
+			for i = 1, diceBonus do
+				table.insert(bonusDiceRolls, math.random(1, 6))
+			end
+
+			-- คำนวณผลรวม
+			local totalResult = baseDiceRoll
+			for _, bonusRoll in ipairs(bonusDiceRolls) do
+				totalResult = totalResult + bonusRoll
+			end
+
+			diceResult = totalResult
+			print("[BoardService] Using server-generated dice result instead: " .. diceResult)
+		end
+
+		-- Process movement with unlimited steps
 		local moveInfo = boardSystem:ProcessPlayerMove(playerId, diceResult)
 
 		if moveInfo and moveInfo.autoPath and #moveInfo.autoPath > 0 then
@@ -152,6 +201,12 @@ local function initializeBoardService()
 			if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
 				gameManager.turnSystem:EndPlayerTurn(playerId, "no_move")
 			end
+		end
+
+		-- ล้าง Dice Bonus หลังจากใช้ไปแล้ว
+		if diceBonus > 0 and diceBonusService then
+			diceBonusService.ClearPlayerDiceBonus(playerId)
+			print("[BoardService] Cleared dice bonus for player " .. player.Name .. " after use")
 		end
 	end)
 
