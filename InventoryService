@@ -1,6 +1,6 @@
 -- InventoryService.server.lua
--- บริการจัดการระบบ Inventory ฝั่งเซิร์ฟเวอร์ (ไม่ใช้ DataStore)
--- Version: 3.3.0 (แก้ไขปัญหา HP รีเซ็ตด้วยเทคนิค delay)
+-- บริการจัดการระบบ Inventory ฝั่งเซิร์ฟเวอร์ (อัพเดตสำหรับ DiceBonus)
+-- Version: 3.4.0
 
 -- Services
 local ServerStorage = game:GetService("ServerStorage")
@@ -35,6 +35,19 @@ else
 				maxStack = 99,
 				iconId = "",
 				stats = { hp = 50 }
+			},
+			-- เพิ่มไอเทม DiceBonus
+			dice_bonus_1 = {
+				id = "dice_bonus_1",
+				name = "Lucky Dice +1",
+				description = "เพิ่มแต้มลูกเต๋า +1 ในเทิร์นถัดไป 1 ครั้ง",
+				type = 1, -- GENERAL
+				rarity = 2,
+				stackable = true,
+				maxStack = 5,
+				usable = true,
+				consumable = true,
+				stats = { diceRollBonus = 1 }
 			}
 		},
 		Equipment = {
@@ -52,11 +65,11 @@ else
 		},
 		GetItemById = function(itemId)
 			return ItemData.Items[itemId] or ItemData.Equipment[itemId]
-		end
+	end
 	}
-end
+	end
 
--- Create remotes if they don't exist
+	-- Create remotes if they don't exist
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
 local inventoryRemotes = remotes:FindFirstChild("InventoryRemotes")
 
@@ -78,7 +91,8 @@ local remoteEvents = {
 	"DropItem",
 	"TransferItem",
 	"InspectItem",
-	"EquipmentSlotClicked"
+	"EquipmentSlotClicked",
+	"DiceBonus" -- เพิ่ม Remote สำหรับ DiceBonus
 }
 
 -- Create required RemoteEvents
@@ -95,6 +109,22 @@ local playerInventories = {}
 
 -- เพิ่มตัวแปรเก็บข้อมูลอุปกรณ์ที่เคยให้ HP แล้ว ตาม player และ itemId
 local playerHealedItems = {}
+
+-- เพิ่มตัวแปรเก็บข้อมูลการใช้ไอเทม DiceBonus ตาม player
+local playerDiceBonusUses = {}
+
+-- ฟังก์ชันดึง DiceBonusService
+local function getDiceBonusService()
+	if _G.DiceBonusService then
+		return _G.DiceBonusService
+	end
+
+	if _G.GameManager and _G.GameManager.diceBonusService then
+		return _G.GameManager.diceBonusService
+	end
+
+	return nil
+end
 
 -- Main service
 local InventoryService = {}
@@ -125,8 +155,17 @@ function InventoryService.GiveStartingItems(player, inventory)
 	local playerData = _G.GameManager and _G.GameManager.playerManager:GetPlayerData(player)
 	local playerClass = playerData and playerData.class or "Unknown"
 
-	-- ไอเทมพื้นฐานที่ทุกคนได้รับ - ในที่นี้เป็นไอเทมทดสอบ
+	-- ไอเทมพื้นฐานที่ทุกคนได้รับ
 	inventory:AddItem(ItemData.Items.test_item, 3)
+
+	-- เพิ่มไอเทม DiceBonus สำหรับทดสอบ
+	if ItemData.Items.dice_bonus_1 then
+		inventory:AddItem(ItemData.Items.dice_bonus_1, 2)
+	end
+
+	if ItemData.Items.dice_bonus_2 then
+		inventory:AddItem(ItemData.Items.dice_bonus_2, 1)
+	end
 
 	-- ไอเทมตามคลาส
 	if playerClass == "Warrior" or playerClass == "Knight" or playerClass == "Paladin" then
@@ -294,327 +333,7 @@ function InventoryService.UpdatePlayerStats(player, equipmentStats)
 	return true
 end
 
--- อัปเดตสถานะโดยไม่แตะต้อง HP (ใช้เฉพาะสำหรับการใส่อุปกรณ์)
-function InventoryService.UpdateStatsWithoutHP(player, equipmentStats)
-	-- ถ้ามีระบบจัดการผู้เล่น ให้อัปเดตสถิติ
-	if _G.GameManager and _G.GameManager.playerManager then
-		local playerData = _G.GameManager.playerManager:GetPlayerData(player)
-		if playerData and playerData.stats then
-			-- เก็บสถิติพื้นฐาน
-			local baseStats = playerData.baseStats
-
-			-- ตรวจสอบว่ามี baseStats หรือไม่
-			if not baseStats then
-				print("[InventoryService] Warning: baseStats not found, creating new baseStats...")
-
-				-- สร้าง baseStats จากค่าปัจจุบัน
-				baseStats = {
-					maxHp = playerData.stats.maxHp,
-					hp = playerData.stats.hp,
-					maxMp = playerData.stats.maxMp,
-					mp = playerData.stats.mp,
-					attack = playerData.stats.attack,
-					defense = playerData.stats.defense,
-					magic = playerData.stats.magic,
-					money = playerData.stats.money or 100
-				}
-				playerData.baseStats = baseStats
-			end
-
-			-- ล็อกค่า baseStats และ equipmentStats เพื่อดีบัก
-			print("[InventoryService] BaseStats: maxHp=" .. baseStats.maxHp .. 
-				", attack=" .. baseStats.attack .. ", defense=" .. baseStats.defense)
-
-			-- เก็บค่า HP ปัจจุบันไว้ (เพื่อไม่ให้เปลี่ยนแปลง)
-			local currentHP = playerData.stats.hp
-
-			-- คำนวณสถิติรวมจากค่าพื้นฐานบวกอุปกรณ์
-			for statName, baseValue in pairs(baseStats) do
-				if equipmentStats[statName] then
-					playerData.stats[statName] = baseValue + equipmentStats[statName]
-				else
-					playerData.stats[statName] = baseValue
-				end
-			end
-
-			-- แก้ไข: นำค่า defense จากอุปกรณ์มาเพิ่ม maxHp โดยตรง
-			-- ค่า defense 1 จะเพิ่ม maxHp 5 หน่วย
-			local defBonus = equipmentStats.defense or 0
-			local hpFromDef = defBonus * 5  -- อัตราส่วน: defense 1 = maxHp 5
-
-			print("[InventoryService] Defense Bonus: " .. defBonus .. " (adds " .. hpFromDef .. " to maxHp)")
-
-			-- เพิ่ม MaxHP จาก defense
-			playerData.stats.maxHp = baseStats.maxHp + hpFromDef
-
-			-- ** เก็บค่า HP เดิมไว้ **
-			playerData.stats.hp = currentHP
-
-			-- แต่ทำให้แน่ใจว่า HP ไม่เกิน MaxHP
-			if playerData.stats.hp > playerData.stats.maxHp then
-				playerData.stats.hp = playerData.stats.maxHp
-			end
-
-			-- อัปเดตสถิติให้ผู้เล่น (ยกเว้น HP)
-			-- ใช้ SyncPlayerStats โดยตรงแทน UpdatePlayerStats
-			_G.GameManager.playerManager:SyncPlayerStats(player)
-
-			print("[InventoryService] Stats updated (without changing HP): maxHp=" .. playerData.stats.maxHp .. 
-				", hp=" .. playerData.stats.hp .. ", attack=" .. playerData.stats.attack)
-		end
-	end
-
-	return true
-end
-
--- Handle equipment changes (แก้ไขด้วยเทคนิค delay)
-function InventoryService.EquipItemForPlayer(player, inventoryId)
-	local inventory = InventoryService.GetPlayerInventory(player)
-	if not inventory then
-		return false, "Failed to get player inventory"
-	end
-
-	-- ค้นหาไอเทมเพื่อล็อกข้อมูล
-	local item = inventory:FindItemByInventoryId(inventoryId)
-	if not item then
-		return false, "Item not found"
-	end
-
-	local itemName = item.name or "Unknown Item"
-	local itemId = item.id
-
-	-- สวมใส่อุปกรณ์
-	local success, message = inventory:EquipItem(inventoryId)
-
-	-- ส่งข้อมูลอัปเดตไปยังไคลเอนต์
-	if success then
-		-- ดึงข้อมูลผู้เล่น
-		local playerData = _G.GameManager and _G.GameManager.playerManager:GetPlayerData(player)
-		if playerData then
-			-- สร้าง map เก็บข้อมูลอุปกรณ์ที่เคยใช้ฟื้น HP แล้ว
-			if not playerHealedItems[player.UserId] then
-				playerHealedItems[player.UserId] = {}
-			end
-
-			-- เก็บค่า HP ปัจจุบันไว้ก่อนอัปเดตสถานะ
-			local currentHP = playerData.stats.hp
-			local currentMaxHP = playerData.stats.maxHp
-
-			-- อัปเดตสถิติก่อน (รวม MaxHP)
-			local equipmentStats = inventory:CalculateEquipmentStats()
-			if equipmentStats then
-				-- อัปเดตค่าสถิติโดยใช้ฟังก์ชันพิเศษที่ไม่อัปเดต HP
-				InventoryService.UpdateStatsWithoutHP(player, equipmentStats)
-
-				-- ดึงค่า MaxHP หลังจากอัปเดต
-				local newMaxHP = playerData.stats.maxHp
-
-				-- ตรวจสอบว่าอุปกรณ์ชิ้นนี้เคยใช้ฟื้น HP แล้วหรือไม่
-				if not playerHealedItems[player.UserId][itemId] then
-					-- ฟื้น HP เต็ม (หลังจากอัปเดต MaxHP แล้ว)
-					local fullHP = newMaxHP
-					playerData.stats.hp = fullHP
-
-					print("[InventoryService] Full HP restore from equipping new item: " .. itemId .. 
-						" (HP: " .. currentHP .. " -> " .. fullHP .. ", MaxHP: " .. currentMaxHP .. " -> " .. newMaxHP .. ")")
-
-					-- บันทึกว่าอุปกรณ์ชิ้นนี้ได้ใช้ฟื้น HP แล้ว
-					playerHealedItems[player.UserId][itemId] = true
-
-					-- ใช้เทคนิค delay เพื่อให้แน่ใจว่าค่า HP จะเป็นค่าที่ถูกต้องหลังจากโค้ดอื่นทำงานเสร็จแล้ว
-					-- เราจะใช้ task.delay ที่มีความล่าช้าเล็กน้อยเพื่อให้โค้ดอื่นทำงานก่อน
-					task.delay(0.1, function()
-						if player and player.Parent and playerData then
-							print("[InventoryService] FINAL HP FIX - Setting HP to: " .. fullHP)
-
-							-- ตั้งค่า HP ในข้อมูลผู้เล่นอีกครั้ง
-							playerData.stats.hp = fullHP
-
-							-- อัปเดต HP โดยตรง (ไม่ผ่านฟังก์ชันอัปเดตสถานะอื่น)
-							if player.Character and player.Character:FindFirstChild("Humanoid") then
-								player.Character.Humanoid.MaxHealth = newMaxHP
-								player.Character.Humanoid.Health = fullHP
-							end
-
-							-- อัปเดตให้ client โดยตรง แทนที่จะใช้ SyncPlayerStats
-							if _G.GameManager.playerManager.updatePlayerStatsEvent then
-								local statsToSync = {
-									hp = fullHP,
-									maxHp = newMaxHP,
-									mp = playerData.stats.mp,
-									maxMp = playerData.stats.maxMp,
-									attack = playerData.stats.attack,
-									defense = playerData.stats.defense,
-									magic = playerData.stats.magic,
-									level = playerData.stats.level or 1,
-									class = playerData.class,
-									money = playerData.stats.money
-								}
-
-								_G.GameManager.playerManager.updatePlayerStatsEvent:FireClient(
-									player, 
-									player.UserId, 
-									statsToSync
-								)
-							end
-
-							-- แทนที่ healthChanged connection ชั่วคราว
-							if _G.GameManager.playerManager.healthSyncConnections and 
-								_G.GameManager.playerManager.healthSyncConnections[player.UserId] and
-								_G.GameManager.playerManager.healthSyncConnections[player.UserId].healthChanged then
-
-								local oldConnection = _G.GameManager.playerManager.healthSyncConnections[player.UserId].healthChanged
-								oldConnection:Disconnect()
-
-								if player.Character and player.Character:FindFirstChild("Humanoid") then
-									-- สร้าง connection ใหม่หลังจากตั้งค่า HP แล้ว
-									local humanoid = player.Character:FindFirstChild("Humanoid")
-									local newConnection = humanoid.HealthChanged:Connect(function(newHealth)
-										if newHealth < humanoid.Health then
-											local damage = humanoid.Health - newHealth
-
-											local currentPlayerData = _G.GameManager.playerManager:GetPlayerData(player)
-											if currentPlayerData then
-												local newStatsHP = math.max(0, currentPlayerData.stats.hp - damage)
-												_G.GameManager.playerManager:UpdatePlayerHP(player, newStatsHP)
-
-												if _G.GameManager.playerManager.playerDamagedEvent then
-													_G.GameManager.playerManager.playerDamagedEvent:FireClient(player, {
-														oldHP = currentPlayerData.stats.hp + damage,
-														newHP = newStatsHP,
-														maxHP = currentPlayerData.stats.maxHp,
-														damage = damage,
-														source = "Humanoid"
-													})
-												end
-											end
-										end
-									end)
-
-									_G.GameManager.playerManager.healthSyncConnections[player.UserId].healthChanged = newConnection
-								end
-							end
-						end
-					end)
-				else
-					print("[InventoryService] Item already used for HP restore before: " .. itemId .. 
-						" (HP remains at: " .. playerData.stats.hp .. "/" .. newMaxHP .. ")")
-				end
-			end
-		else
-			-- ไม่พบข้อมูลผู้เล่น ให้อัปเดตค่าสถิติตามปกติ
-			local equipmentStats = inventory:CalculateEquipmentStats()
-			if equipmentStats then
-				InventoryService.UpdatePlayerStats(player, equipmentStats)
-			end
-		end
-
-		-- ส่งข้อมูลอุปกรณ์ไปยังไคลเอนต์
-		InventoryService.SendInventoryToClient(player)
-
-		print("[InventoryService] Player " .. player.Name .. " equipped " .. itemName)
-	end
-
-	return success, message
-end
-
--- Handle unequipping items
-function InventoryService.UnequipItemForPlayer(player, slotType)
-	local inventory = InventoryService.GetPlayerInventory(player)
-	if not inventory then
-		return false, "Failed to get player inventory"
-	end
-
-	-- ดึงอุปกรณ์ที่สวมใส่อยู่ในช่องนี้
-	local equippedItem = inventory:GetEquippedItemInSlot(slotType)
-	if not equippedItem then
-		return false, "No item equipped in this slot"
-	end
-
-	-- ถอดอุปกรณ์
-	local success, message = inventory:UnequipItem(slotType)
-
-	-- ส่งข้อมูลอัปเดตไปยังไคลเอนต์
-	if success then
-		InventoryService.SendInventoryToClient(player)
-
-		-- อัปเดตสถิติของผู้เล่น (ไม่ฟื้น HP)
-		local equipmentStats = inventory:CalculateEquipmentStats()
-		InventoryService.UpdatePlayerStats(player, equipmentStats)
-
-		print("[InventoryService] Player " .. player.Name .. " unequipped item from slot " .. tostring(slotType))
-	end
-
-	return success, message
-end
-
--- Handle equipment slot clicks
-function InventoryService.HandleEquipmentSlotClick(player, slotType)
-	local inventory = InventoryService.GetPlayerInventory(player)
-	if not inventory then
-		return false, "Failed to get player inventory"
-	end
-
-	-- ตรวจสอบว่ามีอุปกรณ์ในช่องนี้หรือไม่
-	local item = inventory:GetEquippedItemInSlot(slotType)
-	if not item then
-		return false, "No item equipped in this slot"
-	end
-
-	-- ส่งข้อมูลของอุปกรณ์ไปแสดงในหน้ารายละเอียดไอเทม
-	local inspectEvent = inventoryRemotes:WaitForChild("InspectItem")
-	inspectEvent:FireClient(player, item)
-
-	return true, "Equipment inspection successful"
-end
-
--- เพิ่มฟังก์ชันเพื่อการรีเซ็ตค่า HP หลังจากใช้ไอเทมฟื้นพลัง
-function InventoryService.ForceHealToFull(player)
-	local playerData = _G.GameManager and _G.GameManager.playerManager:GetPlayerData(player)
-	if not playerData then return false end
-
-	local fullHP = playerData.stats.maxHp
-
-	-- ตั้งค่า HP ใหม่
-	playerData.stats.hp = fullHP
-
-	-- อัปเดต Humanoid โดยตรง
-	if player.Character and player.Character:FindFirstChild("Humanoid") then
-		player.Character.Humanoid.Health = fullHP
-	end
-
-	-- ส่งข้อมูลให้ client
-	if _G.GameManager.playerManager.updatePlayerStatsEvent then
-		local statsToSync = {
-			hp = fullHP,
-			maxHp = playerData.stats.maxHp,
-			mp = playerData.stats.mp,
-			maxMp = playerData.stats.maxMp,
-			attack = playerData.stats.attack,
-			defense = playerData.stats.defense,
-			magic = playerData.stats.magic,
-			level = playerData.stats.level or 1,
-			class = playerData.class,
-			money = playerData.stats.money
-		}
-
-		_G.GameManager.playerManager.updatePlayerStatsEvent:FireClient(
-			player, 
-			player.UserId, 
-			statsToSync
-		)
-	end
-
-	-- รีเซ็ตประวัติการฟื้น HP ของอุปกรณ์ทั้งหมด
-	if playerHealedItems[player.UserId] then
-		playerHealedItems[player.UserId] = {}
-	end
-
-	print("[InventoryService] Force healed player to full: " .. fullHP .. "/" .. playerData.stats.maxHp)
-	return true
-end
-
--- Handle using items (แก้ไขให้ใช้เทคนิค delay)
+-- Handle using items (แก้ไขให้รองรับ DiceBonus)
 function InventoryService.UseItemForPlayer(player, inventoryId)
 	local inventory = InventoryService.GetPlayerInventory(player)
 	if not inventory then
@@ -633,6 +352,26 @@ function InventoryService.UseItemForPlayer(player, inventoryId)
 	-- ตรวจสอบว่าใช้ได้หรือไม่
 	if not item.usable then
 		return false, "Item cannot be used"
+	end
+
+	-- เช็คว่าเป็นไอเทม DiceBonus หรือไม่
+	local isDiceBonus = item.stats and item.stats.diceRollBonus and item.stats.diceRollBonus > 0
+
+	if isDiceBonus then
+		-- ตรวจสอบว่าเป็นเทิร์นของผู้เล่นหรือไม่
+		local turnSystem = _G.GameManager and _G.GameManager.turnSystem
+		if not turnSystem then
+			return false, "Turn system not available"
+		end
+
+		if turnSystem:GetCurrentPlayerTurn() ~= player.UserId then
+			return false, "You can only use this item during your turn"
+		end
+
+		-- ตรวจสอบว่าใช้ไอเทม DiceBonus ไปแล้วในเทิร์นนี้หรือไม่
+		if playerDiceBonusUses[player.UserId] then
+			return false, "You already used a dice bonus item this turn"
+		end
 	end
 
 	-- กำหนดฟังก์ชั่นการใช้งาน (จากอีเวนต์สคริปต์หรือระบบอื่น)
@@ -657,7 +396,25 @@ function InventoryService.UseItemForPlayer(player, inventoryId)
 
 						-- เพิ่มค่าสถิติตามไอเทม
 						for statName, statValue in pairs(itemData.stats) do
-							if playerData.stats[statName] ~= nil then
+							if statName == "diceRollBonus" then
+								-- จัดการโบนัสลูกเต๋า
+								local diceBonusService = getDiceBonusService()
+								if diceBonusService then
+									diceBonusService.SetPlayerDiceBonus(player, statValue)
+									changed = true
+
+									-- บันทึกว่าได้ใช้ไอเทม DiceBonus ในเทิร์นนี้แล้ว
+									playerDiceBonusUses[player.UserId] = {
+										itemId = itemId,
+										bonusAmount = statValue,
+										timestamp = os.time()
+									}
+
+									print("[InventoryService] Player " .. player.Name .. " used dice bonus +" .. statValue)
+								else
+									warn("[InventoryService] Cannot find DiceBonusService to apply bonus")
+								end
+							elseif playerData.stats[statName] ~= nil then
 								playerData.stats[statName] = playerData.stats[statName] + statValue
 								changed = true
 							end
@@ -706,8 +463,8 @@ function InventoryService.UseItemForPlayer(player, inventoryId)
 							end)
 						end
 
-						-- อัปเดตสถิติถ้ามีการเปลี่ยนแปลง
-						if changed then
+						-- อัปเดตสถิติถ้ามีการเปลี่ยนแปลง (ไม่ต้องอัปเดต DiceBonus)
+						if changed and not isDiceBonus then
 							-- ใช้ ForceHealToFull ถ้าเป็นไอเทมฟื้น HP
 							if itemData.stats.hp and itemData.stats.hp > 0 then
 								task.delay(0.05, function()
@@ -718,10 +475,10 @@ function InventoryService.UseItemForPlayer(player, inventoryId)
 									_G.GameManager.playerManager:UpdatePlayerStats(player)
 								end
 							end
-
-							-- ส่งข้อความยืนยัน
-							return true, "Used " .. itemData.name
 						end
+
+						-- ส่งข้อความยืนยัน
+						return true, "Used " .. itemData.name
 					end
 				end
 			elseif itemData.type == InventorySystem.GetItemTypes().SKILL then
@@ -759,28 +516,19 @@ function InventoryService.UseItemForPlayer(player, inventoryId)
 	return success, message
 end
 
--- เพิ่มฟังก์ชัน Reset HP Healing History เมื่อผู้เล่นตาย หรือจบเกม
-function InventoryService.ResetHealingHistory(player)
-	if player and player.UserId and playerHealedItems[player.UserId] then
-		playerHealedItems[player.UserId] = {}
-		print("[InventoryService] Reset healing history for player: " .. player.Name)
-	end
-end
+-- ฟังก์ชันเพิ่ม: รีเซ็ตการใช้ไอเทม DiceBonus
+function InventoryService.ResetDiceBonusUse(player)
+	if not player then return false end
 
--- เพิ่มฟังก์ชัน Reset HP Healing History สำหรับไอเทมเฉพาะ
-function InventoryService.ResetItemHealingHistory(player, itemId)
-	if player and player.UserId and playerHealedItems[player.UserId] and itemId then
-		playerHealedItems[player.UserId][itemId] = nil
-		print("[InventoryService] Reset healing history for item: " .. itemId)
+	local playerId = typeof(player) == "number" and player or player.UserId
+
+	if playerDiceBonusUses[playerId] then
+		playerDiceBonusUses[playerId] = nil
+		print("[InventoryService] Reset dice bonus use for player: " .. playerId)
 		return true
 	end
-	return false
-end
 
--- เพิ่มฟังก์ชัน Reset HP Healing History สำหรับทุกผู้เล่น
-function InventoryService.ResetAllHealingHistory()
-	playerHealedItems = {}
-	print("[InventoryService] Reset healing history for all players")
+	return false
 end
 
 -- Connect remote events
@@ -859,6 +607,11 @@ local function setupPlayerEvents()
 		if playerHealedItems[player.UserId] then
 			playerHealedItems[player.UserId] = nil
 		end
+
+		-- รีเซ็ตข้อมูลการใช้ไอเทม DiceBonus
+		if playerDiceBonusUses[player.UserId] then
+			playerDiceBonusUses[player.UserId] = nil
+		end
 	end)
 
 	-- Initialize for existing players
@@ -867,38 +620,23 @@ local function setupPlayerEvents()
 			InventoryService.InitializePlayer(player)
 		end)
 	end
-end
 
--- เชื่อมต่อกับเหตุการณ์เมื่อผู้เล่นตาย (hook เข้ากับ PlayerManager)
-local function setupDeathHook()
-	-- ตรวจสอบว่ามี PlayerManager หรือไม่
-	if _G.GameManager and _G.GameManager.playerManager then
-		local playerManager = _G.GameManager.playerManager
+	-- เชื่อมต่อกับระบบเทิร์น
+	local remotes = ReplicatedStorage:WaitForChild("Remotes")
+	local gameRemotes = remotes:WaitForChild("GameRemotes", 10)
 
-		-- ดักฟังเหตุการณ์ HandlePlayerDeath (ถ้ารองรับ)
-		if playerManager.OnPlayerDeath then
-			-- เชื่อมต่อกับ event
-			playerManager.OnPlayerDeath:Connect(function(player)
-				-- รีเซ็ตประวัติการฟื้น HP
-				InventoryService.ResetHealingHistory(player)
+	if gameRemotes then
+		local updateTurnEvent = gameRemotes:WaitForChild("UpdateTurn", 10)
+		if updateTurnEvent then
+			updateTurnEvent.OnServerEvent:Connect(function(_, playerId)
+				-- รีเซ็ตการใช้ไอเทม DiceBonus สำหรับเทิร์นใหม่
+				for pid, _ in pairs(playerDiceBonusUses) do
+					if pid ~= playerId then
+						playerDiceBonusUses[pid] = nil
+						print("[InventoryService] Reset dice bonus use for player " .. pid .. " on turn change")
+					end
+				end
 			end)
-		end
-
-		-- Alternative: Hook เข้าไปใน HandlePlayerDeath โดยตรง
-		if typeof(playerManager.HandlePlayerDeath) == "function" then
-			-- เก็บฟังก์ชันเดิม
-			local originalHandlePlayerDeath = playerManager.HandlePlayerDeath
-
-			-- แทนที่ด้วยฟังก์ชันใหม่
-			playerManager.HandlePlayerDeath = function(self, player)
-				-- เรียกฟังก์ชันเดิมก่อน
-				originalHandlePlayerDeath(self, player)
-
-				-- รีเซ็ตประวัติการฟื้น HP
-				InventoryService.ResetHealingHistory(player)
-			end
-
-			print("[InventoryService] Successfully hooked into PlayerManager.HandlePlayerDeath")
 		end
 	end
 end
@@ -919,10 +657,48 @@ local function init()
 	-- เชื่อมต่อกับ Player Events
 	setupPlayerEvents()
 
-	-- เชื่อมต่อกับเหตุการณ์ผู้เล่นตาย
-	setupDeathHook()
-
 	print("InventoryService initialized successfully")
+
+	-- เพิ่มฟังก์ชันทดสอบโบนัสลูกเต๋าให้กับ _G
+	_G.TestDiceBonus = function(player, bonusAmount)
+		-- ถ้าไม่ระบุผู้เล่น ใช้ผู้เล่นแรกในเซิร์ฟเวอร์
+		if not player then
+			local players = Players:GetPlayers()
+			if #players == 0 then 
+				warn("[InventoryService] ไม่มีผู้เล่นในเกม")
+				return false 
+			end
+			player = players[1]
+		end
+
+		bonusAmount = bonusAmount or 1
+
+		-- ตรวจสอบว่าเป็นเทิร์นของผู้เล่นหรือไม่
+		local turnSystem = _G.GameManager and _G.GameManager.turnSystem
+		if turnSystem and turnSystem:GetCurrentPlayerTurn() ~= player.UserId then
+			warn("[InventoryService] ไม่ใช่เทิร์นของผู้เล่น " .. player.Name)
+			return false
+		end
+
+		-- ตั้งค่าโบนัสลูกเต๋า
+		local diceBonusService = getDiceBonusService()
+		if diceBonusService then
+			diceBonusService.SetPlayerDiceBonus(player, bonusAmount)
+
+			-- บันทึกว่าได้ใช้ไอเทม DiceBonus ในเทิร์นนี้แล้ว
+			playerDiceBonusUses[player.UserId] = {
+				itemId = "test_dice_bonus",
+				bonusAmount = bonusAmount,
+				timestamp = os.time()
+			}
+
+			print("[InventoryService] ทดสอบตั้งค่าโบนัสลูกเต๋า +" .. bonusAmount .. " สำหรับ " .. player.Name)
+			return true
+		else
+			warn("[InventoryService] ไม่พบ DiceBonusService")
+			return false
+		end
+	end
 end
 
 -- Start the initialization
