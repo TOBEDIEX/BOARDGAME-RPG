@@ -1,6 +1,6 @@
 -- ClassSystem.lua
 -- Module for managing player classes and class upgrades
--- Version: 4.0.0 (Optimized)
+-- Version: 4.2.0 (แก้ไขปัญหา BaseStats และรองรับกรณีเรียก ClassData ไม่ได้)
 
 local ClassSystem = {}
 ClassSystem.__index = ClassSystem
@@ -18,11 +18,64 @@ local STARTER_CLASSES = {
 }
 
 -- Load ClassData module
-local ClassData = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("ClassData"))
+local ClassData
+
+-- ใช้ pcall เพื่อป้องกันกรณีโหลด ClassData ไม่ได้
+local success, result = pcall(function()
+	return require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("ClassData"))
+end)
+
+if success then
+	ClassData = result
+	print("[ClassSystem] Successfully loaded ClassData module")
+else
+	warn("[ClassSystem] Failed to load ClassData module: " .. tostring(result))
+	-- สร้าง ClassData จำลอง
+	ClassData = {
+		Classes = {
+			Warrior = { 
+				BaseStats = { MaxHP = 125, MaxMP = 50, ATK = 95, MAGIC = 10 }
+			},
+			Mage = { 
+				BaseStats = { MaxHP = 85, MaxMP = 120, ATK = 25, MAGIC = 95 }
+			},
+			Thief = { 
+				BaseStats = { MaxHP = 100, MaxMP = 60, ATK = 75, MAGIC = 30 }
+			}
+		},
+		GetClassInfo = function(self, className)
+			return self.Classes[className]
+		end
+	}
+end
 
 -- Constants
 local EXP_TO_LEVEL_DIVIDER = 100  -- For calculating level from exp
 local CLASS_EXP_DIVIDER = 150     -- For calculating class level from exp
+
+-- แก้ไข: เพิ่มฟังก์ชั่นสำหรับสร้างสถานะพื้นฐาน
+local function createDefaultStats(className)
+	local defaultStats = {
+		MaxHP = 100,
+		MaxMP = 50,
+		ATK = 10,
+		MAGIC = 10
+	}
+
+	-- ปรับแต่งตามคลาส
+	if className == "Warrior" then
+		defaultStats.MaxHP = 125
+		defaultStats.ATK = 95
+	elseif className == "Mage" then
+		defaultStats.MaxHP = 85
+		defaultStats.MaxMP = 120
+		defaultStats.MAGIC = 95
+	elseif className == "Thief" then
+		defaultStats.ATK = 75
+	end
+
+	return defaultStats
+end
 
 function ClassSystem.new()
 	local self = setmetatable({}, ClassSystem)
@@ -51,15 +104,37 @@ end
 -- Get all classes (including upgrades)
 function ClassSystem:GetAllClasses()
 	local classes = {}
-	for className, _ in pairs(ClassData.Classes) do
-		table.insert(classes, className)
+	if ClassData and ClassData.Classes then
+		for className, _ in pairs(ClassData.Classes) do
+			table.insert(classes, className)
+		end
+	else
+		-- ถ้าไม่มี ClassData ให้ใช้แค่คลาสเริ่มต้น
+		for className, _ in pairs(STARTER_CLASSES) do
+			table.insert(classes, className)
+		end
 	end
 	return classes
 end
 
 -- Get class data
 function ClassSystem:GetClassData(className)
-	return ClassData:GetClassInfo(className)
+	if not ClassData then
+		warn("[ClassSystem] ClassData module not available")
+		return {
+			BaseStats = createDefaultStats(className)
+		}
+	end
+
+	local classInfo = ClassData:GetClassInfo(className)
+	if not classInfo then
+		warn("[ClassSystem] Class info not found for: " .. tostring(className))
+		return {
+			BaseStats = createDefaultStats(className)
+		}
+	end
+
+	return classInfo
 end
 
 -- Get random starter class
@@ -71,8 +146,8 @@ end
 -- Assign class to player
 function ClassSystem:AssignClassToPlayer(player, className)
 	-- Validate class
-	if not ClassData:GetClassInfo(className) then 
-		warn("Class not found: " .. tostring(className))
+	if not self:GetClassData(className) then 
+		warn("[ClassSystem] Class not found: " .. tostring(className))
 		return false 
 	end
 
@@ -95,7 +170,7 @@ function ClassSystem:AssignClassToPlayer(player, className)
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
 	local uiRemotes = remotes:WaitForChild("UIRemotes")
 	local classAssignedEvent = uiRemotes:WaitForChild("ClassAssigned")
-	local classData = ClassData:GetClassInfo(className)
+	local classData = self:GetClassData(className)
 
 	if classAssignedEvent and classData then
 		classAssignedEvent:FireClient(player, className, classData)
@@ -115,40 +190,60 @@ function ClassSystem:UpdatePlayerStatsFromClass(player, playerManager)
 	local className = self.playerClasses[userId]
 
 	if not className then
-		warn("No class assigned to player: " .. tostring(userId))
+		warn("[ClassSystem] No class assigned to player: " .. tostring(userId))
 		return false
 	end
 
-	local classData = ClassData:GetClassInfo(className)
+	local classData = self:GetClassData(className)
 	if not classData then
-		warn("Invalid class data for: " .. tostring(className))
+		warn("[ClassSystem] Invalid class data for: " .. tostring(className))
 		return false
 	end
 
 	local playerData = playerManager:GetPlayerData(player)
 	if not playerData then
-		warn("No player data found for: " .. tostring(userId))
+		warn("[ClassSystem] No player data found for: " .. tostring(userId))
 		return false
 	end
 
 	-- Update base stats
 	local baseStats = classData.BaseStats
 	if baseStats then
-		-- Update HP and MP
-		playerData.stats.maxHp = baseStats.MaxHP
-		playerData.stats.hp = baseStats.MaxHP  -- Start with full health
-		playerData.stats.maxMp = baseStats.MaxMP
-		playerData.stats.mp = baseStats.MaxMP  -- Start with full mana
+		-- แก้ไข: ใช้ baseStats โดยตรง และจัดการกับค่าที่ไม่มี
+		print("[ClassSystem] Loading stats for " .. className .. ": MaxHP=" .. (baseStats.MaxHP or "nil") .. 
+			", MaxMP=" .. (baseStats.MaxMP or "nil") .. ", ATK=" .. (baseStats.ATK or "nil") .. 
+			", MAGIC=" .. (baseStats.MAGIC or "nil"))
 
-		-- Update combat stats
-		playerData.stats.attack = baseStats.ATK
-		playerData.stats.defense = baseStats.DEF
-		playerData.stats.magic = baseStats.MAGIC
-		playerData.stats.magicDefense = baseStats.MDEF or baseStats.DEF  -- Use DEF if MDEF not specified
-		playerData.stats.agility = baseStats.AGI
+		-- Update HP and MP
+		playerData.stats.maxHp = baseStats.MaxHP or 100
+		playerData.stats.hp = baseStats.MaxHP or 100  -- Start with full health
+		playerData.stats.maxMp = baseStats.MaxMP or 50
+		playerData.stats.mp = baseStats.MaxMP or 50   -- Start with full mana
+
+		-- Update combat stats - ใช้ค่าที่มีหรือค่าพื้นฐานถ้าไม่มี
+		playerData.stats.attack = baseStats.ATK or 10
+		playerData.stats.defense = 10  -- แก้ไข: ค่าพื้นฐานถ้าไม่มี DEF
+		playerData.stats.magic = baseStats.MAGIC or 10
+		playerData.stats.magicDefense = 10  -- แก้ไข: ค่าพื้นฐานถ้าไม่มี MDEF
+		playerData.stats.agility = 10  -- แก้ไข: ค่าพื้นฐานถ้าไม่มี AGI
 
 		-- Store class
 		playerData.class = className
+
+		-- บันทึกค่าพื้นฐานเพื่อใช้ในการคำนวณอุปกรณ์
+		playerData.baseStats = {
+			maxHp = playerData.stats.maxHp,
+			hp = playerData.stats.hp,
+			maxMp = playerData.stats.maxMp,
+			mp = playerData.stats.mp,
+			attack = playerData.stats.attack,
+			defense = playerData.stats.defense,
+			magic = playerData.stats.magic,
+			magicDefense = playerData.stats.magicDefense,
+			agility = playerData.stats.agility,
+			level = playerData.stats.level or 1,
+			money = playerData.stats.money or 100
+		}
 
 		-- Send new stats to player
 		local remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -176,6 +271,132 @@ function ClassSystem:UpdatePlayerStatsFromClass(player, playerManager)
 	end
 
 	return false
+end
+
+-- Check for level up
+function ClassSystem:CheckLevelUp(userId)
+	-- Calculate level: Level = sqrt(Experience / EXP_TO_LEVEL_DIVIDER) + 1
+	local newLevel = math.floor(math.sqrt(self.playerExp[userId] / EXP_TO_LEVEL_DIVIDER)) + 1
+
+	if newLevel > self.playerLevels[userId] then
+		local oldLevel = self.playerLevels[userId]
+		local levelDiff = newLevel - oldLevel
+		self.playerLevels[userId] = newLevel
+
+		-- Calculate stat increases
+		local className = self.playerClasses[userId]
+		local classData = self:GetClassData(className)
+		local statIncreases = {}
+
+		if classData and classData.BaseStats then
+			-- แก้ไข: ปรับอัตราการเติบโตให้เข้ากับสถานะที่เรามี
+			local growthRates = {
+				MaxHP = 0.1,    -- 10% of base value per level
+				MaxMP = 0.08,   -- 8% of base value per level
+				ATK = 0.12,     -- 12% of base value per level
+				MAGIC = 0.11    -- 11% of base value per level
+			}
+
+			-- Calculate stat increases
+			for stat, baseValue in pairs(classData.BaseStats) do
+				local growthRate = growthRates[stat] or 0.1
+				statIncreases[stat] = math.floor(baseValue * growthRate * levelDiff)
+			end
+		end
+
+		-- Notify client and update stats
+		local player = Players:GetPlayerByUserId(userId)
+		if player then
+			-- Send level up notification
+			local remotes = ReplicatedStorage:WaitForChild("Remotes")
+			local uiRemotes = remotes:WaitForChild("UIRemotes")
+			local levelUpEvent = uiRemotes:WaitForChild("LevelUp")
+			levelUpEvent:FireClient(player, newLevel, statIncreases)
+
+			-- Apply stat increases
+			self:ApplyStatIncreases(player, statIncreases)
+
+			-- Call level up callback
+			if self.onLevelUp then
+				self.onLevelUp(player, newLevel, oldLevel, statIncreases)
+			end
+		end
+
+		return true
+	end
+
+	return false
+end
+
+-- Apply stat increases to player
+function ClassSystem:ApplyStatIncreases(player, statIncreases)
+	local playerManager = _G.GameManager and _G.GameManager.playerManager
+	if not playerManager then return end
+
+	local playerData = playerManager:GetPlayerData(player)
+	if not playerData then return end
+
+	-- Map ClassData stat names to PlayerManager stat names
+	local statMapping = {
+		MaxHP = "maxHp",
+		MaxMP = "maxMp",
+		ATK = "attack",
+		MAGIC = "magic"
+	}
+
+	-- Update each stat
+	for classDataStat, increase in pairs(statIncreases) do
+		local playerDataStat = statMapping[classDataStat]
+
+		if playerDataStat then
+			if playerDataStat == "maxHp" then
+				playerData.stats.maxHp = playerData.stats.maxHp + increase
+				playerData.stats.hp = playerData.stats.maxHp -- Restore full HP on level up
+
+				-- อัปเดต baseStats ด้วย
+				if playerData.baseStats then
+					playerData.baseStats.maxHp = playerData.baseStats.maxHp + increase
+					playerData.baseStats.hp = playerData.baseStats.maxHp
+				end
+			elseif playerDataStat == "maxMp" then
+				playerData.stats.maxMp = playerData.stats.maxMp + increase
+				playerData.stats.mp = playerData.stats.maxMp -- Restore full MP on level up
+
+				-- อัปเดต baseStats ด้วย
+				if playerData.baseStats then
+					playerData.baseStats.maxMp = playerData.baseStats.maxMp + increase
+					playerData.baseStats.mp = playerData.baseStats.maxMp
+				end
+			else
+				playerData.stats[playerDataStat] = (playerData.stats[playerDataStat] or 0) + increase
+
+				-- อัปเดต baseStats ด้วย
+				if playerData.baseStats then
+					playerData.baseStats[playerDataStat] = (playerData.baseStats[playerDataStat] or 0) + increase
+				end
+			end
+		end
+	end
+
+		-- Send updated stats to client
+local remotes = ReplicatedStorage:WaitForChild("Remotes")
+local uiRemotes = remotes:WaitForChild("UIRemotes")
+local updatePlayerStatsEvent = uiRemotes:WaitForChild("UpdatePlayerStats")
+
+updatePlayerStatsEvent:FireClient(player, player.UserId, {
+	hp = playerData.stats.hp,
+	maxHp = playerData.stats.maxHp,
+	mp = playerData.stats.mp,
+	maxMp = playerData.stats.maxMp,
+	attack = playerData.stats.attack,
+	defense = playerData.stats.defense,
+	magic = playerData.stats.magic,
+	magicDefense = playerData.stats.magicDefense,
+	agility = playerData.stats.agility,
+	level = self:GetPlayerLevel(player),
+	class = self:GetPlayerClass(player),
+	money = playerData.stats.money or 100
+})
 end
 
 -- Get player's class
@@ -240,64 +461,6 @@ function ClassSystem:AddExperience(player, amount)
 	return leveledUp or classLeveledUp
 end
 
--- Check for level up
-function ClassSystem:CheckLevelUp(userId)
-	-- Calculate level: Level = sqrt(Experience / EXP_TO_LEVEL_DIVIDER) + 1
-	local newLevel = math.floor(math.sqrt(self.playerExp[userId] / EXP_TO_LEVEL_DIVIDER)) + 1
-
-	if newLevel > self.playerLevels[userId] then
-		local oldLevel = self.playerLevels[userId]
-		local levelDiff = newLevel - oldLevel
-		self.playerLevels[userId] = newLevel
-
-		-- Calculate stat increases
-		local className = self.playerClasses[userId]
-		local classData = ClassData:GetClassInfo(className)
-		local statIncreases = {}
-
-		if classData and classData.BaseStats then
-			-- Growth rates for each stat
-			local growthRates = {
-				MaxHP = 0.1,    -- 10% of base value per level
-				MaxMP = 0.08,   -- 8% of base value per level
-				ATK = 0.12,     -- 12% of base value per level
-				DEF = 0.09,     -- 9% of base value per level
-				MAGIC = 0.11,   -- 11% of base value per level
-				MDEF = 0.09,    -- 9% of base value per level
-				AGI = 0.08      -- 8% of base value per level
-			}
-
-			-- Calculate stat increases
-			for stat, baseValue in pairs(classData.BaseStats) do
-				local growthRate = growthRates[stat] or 0.1
-				statIncreases[stat] = math.floor(baseValue * growthRate * levelDiff)
-			end
-		end
-
-		-- Notify client and update stats
-		local player = Players:GetPlayerByUserId(userId)
-		if player then
-			-- Send level up notification
-			local remotes = ReplicatedStorage:WaitForChild("Remotes")
-			local uiRemotes = remotes:WaitForChild("UIRemotes")
-			local levelUpEvent = uiRemotes:WaitForChild("LevelUp")
-			levelUpEvent:FireClient(player, newLevel, statIncreases)
-
-			-- Apply stat increases
-			self:ApplyStatIncreases(player, statIncreases)
-
-			-- Call level up callback
-			if self.onLevelUp then
-				self.onLevelUp(player, newLevel, oldLevel, statIncreases)
-			end
-		end
-
-		return true
-	end
-
-	return false
-end
-
 -- Check for class level up
 function ClassSystem:CheckClassLevelUp(userId)
 	-- Calculate class level: sqrt(ClassExp / CLASS_EXP_DIVIDER) + 1
@@ -310,7 +473,7 @@ function ClassSystem:CheckClassLevelUp(userId)
 
 		-- Calculate class-specific stat increases
 		local className = self.playerClasses[userId]
-		local classData = ClassData:GetClassInfo(className)
+		local classData = self:GetClassData(className)
 		local statIncreases = {}
 
 		if classData and classData.BaseStats then
@@ -319,10 +482,7 @@ function ClassSystem:CheckClassLevelUp(userId)
 				MaxHP = 0.12,    -- 12% of base value per level
 				MaxMP = 0.10,    -- 10% of base value per level
 				ATK = 0.15,      -- 15% of base value per level
-				DEF = 0.12,      -- 12% of base value per level
-				MAGIC = 0.15,    -- 15% of base value per level
-				MDEF = 0.12,     -- 12% of base value per level
-				AGI = 0.10       -- 10% of base value per level
+				MAGIC = 0.15     -- 15% of base value per level
 			}
 
 			-- Calculate stat increases with class bonuses
@@ -331,24 +491,24 @@ function ClassSystem:CheckClassLevelUp(userId)
 
 				-- Class-specific bonuses
 				local enhancement = 1.0
-				if className == "Warrior" and (stat == "ATK" or stat == "DEF" or stat == "MaxHP") then
-					enhancement = 1.5 -- 50% bonus for Warriors' ATK, DEF, HP
-				elseif className == "Knight" and (stat == "DEF" or stat == "MaxHP") then
-					enhancement = 1.8 -- 80% bonus for Knights' DEF, HP
-				elseif className == "Paladin" and (stat == "DEF" or stat == "MaxHP" or stat == "MDEF") then
-					enhancement = 2.0 -- 100% bonus for Paladins' DEF, HP, MDEF
+				if className == "Warrior" and (stat == "ATK" or stat == "MaxHP") then
+					enhancement = 1.5 -- 50% bonus for Warriors' ATK, HP
+				elseif className == "Knight" and (stat == "MaxHP") then
+					enhancement = 1.8 -- 80% bonus for Knights' HP
+				elseif className == "Paladin" and (stat == "MaxHP") then
+					enhancement = 2.0 -- 100% bonus for Paladins' HP
 				elseif className == "Mage" and (stat == "MAGIC" or stat == "MaxMP") then
 					enhancement = 1.5 -- 50% bonus for Mages' MAGIC, MP
 				elseif className == "Wizard" and (stat == "MAGIC" or stat == "MaxMP") then
 					enhancement = 1.8 -- 80% bonus for Wizards' MAGIC, MP
-				elseif className == "Archmage" and (stat == "MAGIC" or stat == "MaxMP" or stat == "MDEF") then
-					enhancement = 2.0 -- 100% bonus for Archmages' MAGIC, MP, MDEF
-				elseif className == "Thief" and (stat == "ATK" or stat == "AGI") then
-					enhancement = 1.3 -- 30% bonus for Thieves' ATK, AGI
-				elseif className == "Assassin" and (stat == "ATK" or stat == "AGI") then
-					enhancement = 1.6 -- 60% bonus for Assassins' ATK, AGI
-				elseif className == "Shadow" and (stat == "ATK" or stat == "AGI" or stat == "DEF") then
-					enhancement = 1.8 -- 80% bonus for Shadows' ATK, AGI, DEF
+				elseif className == "Archmage" and (stat == "MAGIC" or stat == "MaxMP") then
+					enhancement = 2.0 -- 100% bonus for Archmages' MAGIC, MP
+				elseif className == "Thief" and (stat == "ATK") then
+					enhancement = 1.3 -- 30% bonus for Thieves' ATK
+				elseif className == "Assassin" and (stat == "ATK") then
+					enhancement = 1.6 -- 60% bonus for Assassins' ATK
+				elseif className == "Shadow" and (stat == "ATK") then
+					enhancement = 1.8 -- 80% bonus for Shadows' ATK
 				end
 
 				statIncreases[stat] = math.floor(baseValue * growthRate * enhancement * levelDiff)
@@ -395,7 +555,7 @@ function ClassSystem:CheckClassLevelUp(userId)
 			if canUpgradeClass and nextClass then
 				local classUpgradeEvent = uiRemotes:FindFirstChild("ClassUpgradeAvailable")
 				if classUpgradeEvent then
-					local nextClassData = ClassData:GetClassInfo(nextClass)
+					local nextClassData = self:GetClassData(nextClass)
 					classUpgradeEvent:FireClient(player, nextClass, nextClassData)
 				end
 			end
@@ -410,63 +570,6 @@ function ClassSystem:CheckClassLevelUp(userId)
 	end
 
 	return false
-end
-
--- Apply stat increases to player
-function ClassSystem:ApplyStatIncreases(player, statIncreases)
-	local playerManager = _G.GameManager and _G.GameManager.playerManager
-	if not playerManager then return end
-
-	local playerData = playerManager:GetPlayerData(player)
-	if not playerData then return end
-
-	-- Map ClassData stat names to PlayerManager stat names
-	local statMapping = {
-		MaxHP = "maxHp",
-		MaxMP = "maxMp",
-		ATK = "attack",
-		DEF = "defense",
-		MAGIC = "magic",
-		MDEF = "magicDefense",
-		AGI = "agility"
-	}
-
-	-- Update each stat
-	for classDataStat, increase in pairs(statIncreases) do
-		local playerDataStat = statMapping[classDataStat]
-
-		if playerDataStat then
-			if playerDataStat == "maxHp" then
-				playerData.stats.maxHp = playerData.stats.maxHp + increase
-				playerData.stats.hp = playerData.stats.maxHp -- Restore full HP on level up
-			elseif playerDataStat == "maxMp" then
-				playerData.stats.maxMp = playerData.stats.maxMp + increase
-				playerData.stats.mp = playerData.stats.maxMp -- Restore full MP on level up
-			else
-				playerData.stats[playerDataStat] = (playerData.stats[playerDataStat] or 0) + increase
-			end
-		end
-	end
-
-	-- Send updated stats to client
-	local remotes = ReplicatedStorage:WaitForChild("Remotes")
-	local uiRemotes = remotes:WaitForChild("UIRemotes")
-	local updatePlayerStatsEvent = uiRemotes:WaitForChild("UpdatePlayerStats")
-
-	updatePlayerStatsEvent:FireClient(player, player.UserId, {
-		hp = playerData.stats.hp,
-		maxHp = playerData.stats.maxHp,
-		mp = playerData.stats.mp,
-		maxMp = playerData.stats.maxMp,
-		attack = playerData.stats.attack,
-		defense = playerData.stats.defense,
-		magic = playerData.stats.magic,
-		magicDefense = playerData.stats.magicDefense,
-		agility = playerData.stats.agility,
-		level = self:GetPlayerLevel(player),
-		class = self:GetPlayerClass(player),
-		money = playerData.stats.money or 100
-	})
 end
 
 -- Reset all player class data (for game restart)
