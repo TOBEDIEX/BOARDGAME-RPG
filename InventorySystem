@@ -1,6 +1,6 @@
 -- InventorySystem.lua (Updated)
 -- Core module for inventory management
--- Version: 2.1.0 (Optimized with Equipment UI Support)
+-- Version: 3.0.0 (แก้ไขให้ลบค่า magicDefense และ agility ออก)
 
 local InventorySystem = {}
 InventorySystem.__index = InventorySystem
@@ -377,32 +377,48 @@ function InventorySystem:CalculateEquipmentStats()
 	local stats = {
 		attack = 0,
 		defense = 0,
-		hp = 0,
-		mp = 0,
-		magic = 0,
-		agility = 0,
-		critRate = 0,
-		evasion = 0
+		magic = 0
 	}
 
+	-- ล็อกข้อมูลเพื่อดีบัก
+	print("[InventorySystem] Calculating equipment stats")
+
+	local itemCount = 0
 	for slotType, inventoryId in pairs(self.equippedItems) do
 		local item = self:FindItemByInventoryId(inventoryId)
 		if item and item.stats then
+			itemCount = itemCount + 1
+			print("[InventorySystem] Equipment #" .. itemCount .. ": " .. item.name)
+
+			-- แสดงสถานะของอุปกรณ์
+			for statName, statValue in pairs(item.stats) do
+				print("  > " .. statName .. ": " .. statValue)
+			end
+
+			-- เพิ่มค่าสถานะเข้าไปในผลลัพธ์
 			for statName, statValue in pairs(item.stats) do
 				if stats[statName] ~= nil then
 					stats[statName] = stats[statName] + statValue
 				else
-					-- If it's a new stat, add it
+					-- ถ้าเป็นค่าสถานะใหม่ ให้เพิ่มเข้าไป
 					stats[statName] = statValue
 				end
 			end
 
-			-- Store slot-specific stats if needed
+			-- เก็บค่าสถานะเฉพาะตำแหน่งถ้าจำเป็น
 			if slotType == EQUIPMENT_SLOTS.WEAPON and item.stats.attack then
 				stats.weaponAttack = item.stats.attack
 			elseif slotType == EQUIPMENT_SLOTS.ARMOR and item.stats.defense then
 				stats.armorDefense = item.stats.defense
 			end
+		end
+	end
+
+	-- แสดงสถานะรวมทั้งหมด
+	print("[InventorySystem] Total equipment stats:")
+	for statName, statValue in pairs(stats) do
+		if statValue > 0 then
+			print("  > " .. statName .. ": " .. statValue)
 		end
 	end
 
