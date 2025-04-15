@@ -1,11 +1,6 @@
--- BoardController.lua (Client-Side)
--- Manages movement, path selection UI, current tile display, and control locking
--- Version: 3.0.0 (Optimized)
-
 local BoardController = {}
 BoardController.__index = BoardController
 
--- Services
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -13,18 +8,13 @@ local Workspace = game:GetService("Workspace")
 local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
 
--- Local variables
 local player = Players.LocalPlayer
-local PlayerModule = require(player:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule"))
-local Controls = PlayerModule:GetControls()
 
--- Constants
 local DIRECTIONS = { FRONT = "FRONT", LEFT = "LEFT", RIGHT = "RIGHT" }
 local STEP_TIMEOUT = 5.0
 local DELAY_BETWEEN_STEPS = 0.1
 local MOVEMENT_COMPLETE_DELAY = 0.5
 
--- UI References
 local DiceRollUI, PathSelectionContainer, RemainingStepsText
 local ForwardButton, LeftButton, RightButton
 local CurrentTileText
@@ -33,7 +23,6 @@ function BoardController.new()
 	local self = setmetatable({}, BoardController)
 
 	self.tilePositions = {}
-	self.controlsDisabled = false
 	self.remotes = self:GetRemoteEvents()
 	self.uiConnections = {}
 	self.activeMovementCoroutines = {}
@@ -49,10 +38,10 @@ end
 function BoardController:InitializeUIReferences()
 	local PlayerGui = player:WaitForChild("PlayerGui")
 	if not PlayerGui then return end
-	
+
 	local PopupUI = PlayerGui:WaitForChild("PopupUI")
 	if not PopupUI then return end
-	
+
 	DiceRollUI = PopupUI:WaitForChild("DiceRollUI")
 
 	if not DiceRollUI then
@@ -70,12 +59,24 @@ function BoardController:InitializeUIReferences()
 		RightButton = PathSelectionContainer:FindFirstChild("RightButton")
 	end
 
-	CurrentTileText = PopupUI:FindFirstChild("CurrentTileText")
+	local MainGameUI = PlayerGui:FindFirstChild("MainGameUI")
+	if MainGameUI then
+		CurrentTileText = MainGameUI:FindFirstChild("CurrentTileText")
+	else
+		warn("[BoardController] MainGameUI not found!")
+	end
 end
 
 function BoardController:GetRemoteEvents()
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
 	local boardRemotes = remotes:WaitForChild("BoardRemotes")
+
+	local movementVisComplete = boardRemotes:FindFirstChild("MovementVisualizationComplete")
+	if not movementVisComplete then
+		movementVisComplete = Instance.new("RemoteEvent", boardRemotes)
+		movementVisComplete.Name = "MovementVisualizationComplete"
+		warn("[BoardController] Created missing RemoteEvent: MovementVisualizationComplete")
+	end
 
 	return {
 		playerArrivedAtTile = boardRemotes:WaitForChild("PlayerArrivedAtTile"),
@@ -83,30 +84,29 @@ function BoardController:GetRemoteEvents()
 		startPlayerMovementPath = boardRemotes:WaitForChild("StartPlayerMovementPath"),
 		tileTriggerEvent = boardRemotes:WaitForChild("TileTriggerEvent"),
 		activityComplete = boardRemotes:WaitForChild("ActivityComplete"),
-		movementVisualizationComplete = boardRemotes:FindFirstChild("MovementVisualizationComplete") or
-			Instance.new("RemoteEvent", boardRemotes)
+		movementVisualizationComplete = movementVisComplete
 	}
 end
 
 function BoardController:ConnectEvents()
-	if self.remotes.movementVisualizationComplete.Name ~= "MovementVisualizationComplete" then
-		self.remotes.movementVisualizationComplete.Name = "MovementVisualizationComplete"
-	end
-
 	self.remotes.startPlayerMovementPath.OnClientEvent:Connect(function(playerId, movementData)
-		if type(movementData) ~= "table" or type(movementData.path) ~= "table" or #movementData.path == 0 then
-			warn("[BoardController] Received invalid movement data for playerId:", playerId)
+		if type(movementData) ~= "table" then
+			warn("[BoardController] Received non-table movement data for playerId:", playerId)
 			return
 		end
-		
+		if type(movementData.path) ~= "table" or #movementData.path == 0 then
+			warn("[BoardController] Received invalid or empty path data for playerId:", playerId)
+			return
+		end
 		if movementData.directions and type(movementData.directions) ~= "table" then
+			warn("[BoardController] Received non-table directions data for playerId:", playerId, ". Setting to nil.")
 			movementData.directions = nil
 		end
-		
 		if movementData.requiresConfirmation ~= nil and type(movementData.requiresConfirmation) ~= "boolean" then
+			warn("[BoardController] Received non-boolean requiresConfirmation data for playerId:", playerId, ". Setting to false.")
 			movementData.requiresConfirmation = false
 		end
-		
+
 		self:StartMoveAlongPath(playerId, movementData.path, movementData.directions, movementData.requiresConfirmation)
 	end)
 
@@ -117,14 +117,9 @@ end
 
 function BoardController:StartMoveAlongPath(playerId, path, availableDirections, requiresConfirmation)
 	if self.activeMovementCoroutines[playerId] then
-		if playerId == player.UserId then
-			task.spawn(coroutine.close, self.activeMovementCoroutines[playerId])
-		end
+		task.spawn(coroutine.close, self.activeMovementCoroutines[playerId])
 		self.activeMovementCoroutines[playerId] = nil
-	end
-
-	if playerId == player.UserId then
-		self:DisableControls()
+		print("[BoardController] Closed existing movement coroutine for playerId:", playerId)
 	end
 
 	if requiresConfirmation then
@@ -136,22 +131,16 @@ function BoardController:StartMoveAlongPath(playerId, path, availableDirections,
 	local co = coroutine.create(function()
 		self:MovePlayerAlongPath(playerId, path, availableDirections, requiresConfirmation)
 	end)
-	
 	self.activeMovementCoroutines[playerId] = co
 	local success, err = coroutine.resume(co)
 
 	if not success then
-		warn("[BoardController] Coroutine failed for playerId:", playerId, "Error:", err)
-		
+		warn("[BoardController] Coroutine resume failed immediately for playerId:", playerId, "Error:", err)
 		if self.activeMovementCoroutines[playerId] == co then
 			self.activeMovementCoroutines[playerId] = nil
 		end
-		
-		if playerId == player.UserId then
-			self:EnableControls()
-			self:UpdateCurrentTileUI(path[#path])
-		end
-		
+		self:UpdateCurrentTileUI(path[#path])
+
 		if requiresConfirmation and playerId == player.UserId then
 			self:ConfirmMovementCompletion(playerId, path[#path])
 		end
@@ -160,45 +149,42 @@ end
 
 function BoardController:MovePlayerAlongPath(playerId, path, availableDirections, requiresConfirmation)
 	local currentCoroutine = coroutine.running()
+	local movementSuccess = true
+	local lastReachedTileIndex = 1
+
+	local function cleanup(reason)
+		warn("[BoardController] Cleaning up movement for playerId:", playerId, "Reason:", reason)
+		if self.activeMovementCoroutines[playerId] == currentCoroutine then
+			self.activeMovementCoroutines[playerId] = nil
+		end
+		local finalTileId = path[lastReachedTileIndex]
+		if finalTileId then self:UpdateCurrentTileUI(finalTileId) end
+
+		if requiresConfirmation and playerId == player.UserId then
+			self:ConfirmMovementCompletion(playerId, finalTileId)
+		end
+	end
 
 	local targetPlayer = Players:GetPlayerByUserId(playerId)
-	if not targetPlayer then
-		warn("[BoardController] Player not found:", playerId)
-		if self.activeMovementCoroutines[playerId] == currentCoroutine then self.activeMovementCoroutines[playerId] = nil end
-		if playerId == player.UserId then self:EnableControls(); self:UpdateCurrentTileUI(path[#path]) end
-		if requiresConfirmation and playerId == player.UserId then self:ConfirmMovementCompletion(playerId, path[#path]) end
-		return
-	end
+	if not targetPlayer then return cleanup("Player not found") end
 
 	local character = targetPlayer.Character or targetPlayer.CharacterAdded:Wait(5)
-	if not character then
-		warn("[BoardController] Character not found for player:", playerId)
-		if self.activeMovementCoroutines[playerId] == currentCoroutine then self.activeMovementCoroutines[playerId] = nil end
-		if playerId == player.UserId then self:EnableControls(); self:UpdateCurrentTileUI(path[#path]) end
-		if requiresConfirmation and playerId == player.UserId then self:ConfirmMovementCompletion(playerId, path[#path]) end
-		return
-	end
+	if not character then return cleanup("Character not found") end
 
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	local rootPart = character:FindFirstChild("HumanoidRootPart")
-	if not humanoid or not rootPart then
-		warn("[BoardController] Humanoid or RootPart not found for player:", playerId)
-		if self.activeMovementCoroutines[playerId] == currentCoroutine then self.activeMovementCoroutines[playerId] = nil end
-		if playerId == player.UserId then self:EnableControls(); self:UpdateCurrentTileUI(path[#path]) end
-		if requiresConfirmation and playerId == player.UserId then self:ConfirmMovementCompletion(playerId, path[#path]) end
-		return
-	end
+	if not humanoid or not rootPart then return cleanup("Humanoid or RootPart not found") end
+
+	if self.activeMovementCoroutines[playerId] ~= currentCoroutine then return cleanup("Coroutine replaced before start") end
 
 	if rootPart.Anchored then rootPart.Anchored = false end
 	humanoid.WalkSpeed = 16
 
-	local movementSuccess = true
-	local lastReachedTileIndex = 1
-	
 	for i = 2, #path do
 		if self.activeMovementCoroutines[playerId] ~= currentCoroutine or coroutine.status(currentCoroutine) == "dead" then
 			movementSuccess = false
-			break
+			cleanup("Coroutine interrupted during path traversal")
+			return
 		end
 
 		local nextTileId = path[i]
@@ -209,90 +195,90 @@ function BoardController:MovePlayerAlongPath(playerId, path, availableDirections
 			local success, result = pcall(function() return humanoid.MoveToFinished:Wait(STEP_TIMEOUT) end)
 
 			if not success then
-				warn("[BoardController] MoveToFinished Wait errored for playerId:", playerId, "Error:", result)
+				warn("[BoardController] MoveToFinished Wait errored for playerId:", playerId, "Step:", i, "Tile:", nextTileId, "Error:", result)
 				rootPart.CFrame = CFrame.new(targetPosition + Vector3.new(0, 3, 0))
 				movementSuccess = false
-				break
+				lastReachedTileIndex = i
+				cleanup("MoveToFinished errored, teleported")
+				return
 			elseif not result then
-				warn("[BoardController] MoveTo timed out for playerId:", playerId, "Teleporting to target.")
+				warn("[BoardController] MoveTo timed out for playerId:", playerId, "Step:", i, "Tile:", nextTileId, ". Teleporting.")
 				rootPart.CFrame = CFrame.new(targetPosition + Vector3.new(0, 3, 0))
 				lastReachedTileIndex = i
 			else
 				lastReachedTileIndex = i
 			end
-			
+
 			task.wait(DELAY_BETWEEN_STEPS)
 		else
-			warn("[BoardController] Target position not found for Tile ID:", nextTileId, "for playerId:", playerId)
+			warn("[BoardController] Target position not found for Tile ID:", nextTileId, "at step:", i, "for playerId:", playerId)
 			movementSuccess = false
-			break
+			cleanup("Target tile position not found")
+			return
 		end
 	end
 
 	local finalTileId = path[lastReachedTileIndex]
 
 	if self.activeMovementCoroutines[playerId] ~= currentCoroutine then
-		-- Coroutine was replaced or cancelled
-	else
-		if movementSuccess then
-			task.wait(MOVEMENT_COMPLETE_DELAY)
-
-			if self.activeMovementCoroutines[playerId] ~= currentCoroutine then
-				-- Coroutine changed during delay
-			elseif playerId == player.UserId then
-				if availableDirections and #availableDirections > 0 then
-					self:UpdateCurrentTileUI(finalTileId)
-					self:ShowPathSelectionUI(availableDirections)
-				else
-					self.activeMovementCoroutines[playerId] = nil
-					self:EnableControls()
-					self:UpdateCurrentTileUI(finalTileId)
-					if requiresConfirmation then
-						self:ConfirmMovementCompletion(playerId, finalTileId)
-					end
-				end
-			else
-				self.activeMovementCoroutines[playerId] = nil
-			end
-		else
-			warn("[BoardController] Movement failed or interrupted for playerId:", playerId, "Last reached Tile:", finalTileId)
-			self.activeMovementCoroutines[playerId] = nil
-			if playerId == player.UserId then
-				self:EnableControls()
-				self:UpdateCurrentTileUI(finalTileId)
-			end
-			if requiresConfirmation and playerId == player.UserId then
-				self:ConfirmMovementCompletion(playerId, finalTileId)
-			end
-		end
+		return cleanup("Coroutine replaced after path traversal")
 	end
 
-	if playerId == player.UserId and self.controlsDisabled and not self.activeMovementCoroutines[playerId] then
-		self:EnableControls()
+	if movementSuccess then
+		task.wait(MOVEMENT_COMPLETE_DELAY)
+
+		if self.activeMovementCoroutines[playerId] ~= currentCoroutine then
+			return cleanup("Coroutine replaced during final delay")
+		end
+
+		if playerId == player.UserId then
+			if availableDirections and #availableDirections > 0 then
+				self:UpdateCurrentTileUI(finalTileId)
+				self:ShowPathSelectionUI(availableDirections)
+			else
+				self.activeMovementCoroutines[playerId] = nil
+				self:UpdateCurrentTileUI(finalTileId)
+				if requiresConfirmation then
+					self:ConfirmMovementCompletion(playerId, finalTileId)
+				end
+			end
+		else
+			self.activeMovementCoroutines[playerId] = nil
+		end
+	else
+		warn("[BoardController] Movement finished with failure status for playerId:", playerId, "Last reached Tile:", finalTileId)
+	end
+
+	if playerId == player.UserId and not self.activeMovementCoroutines[playerId] then
 		if finalTileId then self:UpdateCurrentTileUI(finalTileId) end
 	end
 end
+
 
 function BoardController:ConfirmMovementCompletion(playerId, finalTileId)
 	if playerId ~= player.UserId then return end
 
 	local pendingData = self.pendingMovementConfirmations[playerId]
 	if not pendingData then
+		print("[BoardController] No pending confirmation data found for playerId:", playerId)
 		if finalTileId then self:UpdateCurrentTileUI(finalTileId) end
 		return
 	end
 
 	if pendingData.finalTileId ~= finalTileId then
-		warn("[BoardController] Mismatched finalTileId for confirmation. Expected:", pendingData.finalTileId, "Got:", finalTileId, ". Sending confirmation for the received tile anyway.")
+		warn("[BoardController] Mismatched finalTileId for confirmation. Expected:", pendingData.finalTileId, "Got:", finalTileId, ". Sending confirmation for the *received* tile ID.")
 	end
 
+	print("[BoardController] Sending MovementVisualizationComplete for playerId:", playerId, "Tile:", finalTileId)
 	self.pendingMovementConfirmations[playerId] = nil
 	self.remotes.movementVisualizationComplete:FireServer(finalTileId)
 	self:UpdateCurrentTileUI(finalTileId)
 end
 
 function BoardController:UpdateCurrentTileUI(tileId)
-	if not CurrentTileText then return end
+	if not CurrentTileText then
+		return
+	end
 
 	if tileId then
 		CurrentTileText.Text = "Tile: " .. tostring(tileId)
@@ -305,11 +291,11 @@ end
 
 function BoardController:ShowPathSelectionUI(availableDirections)
 	if not PathSelectionContainer or not RemainingStepsText or not ForwardButton or not LeftButton or not RightButton then
-		warn("[BoardController] Cannot show Path Selection UI - Elements missing.")
+		warn("[BoardController] Cannot show Path Selection UI - Critical elements missing.")
 		if self.activeMovementCoroutines[player.UserId] then
+			task.spawn(coroutine.close, self.activeMovementCoroutines[player.UserId])
 			self.activeMovementCoroutines[player.UserId] = nil
 		end
-		self:EnableControls()
 		return
 	end
 
@@ -323,32 +309,35 @@ function BoardController:ShowPathSelectionUI(availableDirections)
 	LeftButton.Visible = false
 	RightButton.Visible = false
 
-	local steps = availableDirections[1] and availableDirections[1].stepsRemaining or "N/A"
+	local steps = "N/A"
+	if availableDirections[1] and availableDirections[1].stepsRemaining then
+		steps = tostring(availableDirections[1].stepsRemaining)
+	end
 	RemainingStepsText.Text = "Steps: " .. steps
 
 	local buttonVisibleCount = 0
 	for _, dirInfo in ipairs(availableDirections) do
-		local button
-		local directionEnum
-		
-		if dirInfo.direction == DIRECTIONS.FRONT then 
+		local button = nil
+		local directionEnum = nil
+
+		if dirInfo.direction == DIRECTIONS.FRONT then
 			button, directionEnum = ForwardButton, DIRECTIONS.FRONT
-		elseif dirInfo.direction == DIRECTIONS.LEFT then 
+		elseif dirInfo.direction == DIRECTIONS.LEFT then
 			button, directionEnum = LeftButton, DIRECTIONS.LEFT
-		elseif dirInfo.direction == DIRECTIONS.RIGHT then 
+		elseif dirInfo.direction == DIRECTIONS.RIGHT then
 			button, directionEnum = RightButton, DIRECTIONS.RIGHT
+		else
+			warn("[BoardController] Unknown direction received in availableDirections:", dirInfo.direction)
 		end
 
-		if button then
+		if button and directionEnum then
 			button.Visible = true
 			buttonVisibleCount = buttonVisibleCount + 1
 			local connection = button.Activated:Connect(function()
 				if PathSelectionContainer.Visible then
 					self:ChooseDirection(directionEnum)
 				else
-					warn("[BoardController] PathSelectionContainer was already hidden when button activated.")
-					if self.activeMovementCoroutines[player.UserId] then self.activeMovementCoroutines[player.UserId] = nil end
-					self:EnableControls()
+					warn("[BoardController] PathSelectionContainer was hidden when button activated. Ignoring.")
 				end
 			end)
 			table.insert(self.uiConnections, connection)
@@ -356,18 +345,26 @@ function BoardController:ShowPathSelectionUI(availableDirections)
 	end
 
 	if buttonVisibleCount == 0 then
-		warn("[BoardController] No valid direction buttons to show in Path Selection UI.")
+		warn("[BoardController] No valid direction buttons to show in Path Selection UI. Hiding UI.")
 		PathSelectionContainer.Visible = false
 		if self.activeMovementCoroutines[player.UserId] then
+			task.spawn(coroutine.close, self.activeMovementCoroutines[player.UserId])
 			self.activeMovementCoroutines[player.UserId] = nil
 		end
-		self:EnableControls()
+		local pendingConfirmation = self.pendingMovementConfirmations[player.UserId]
+		if pendingConfirmation then
+			self:ConfirmMovementCompletion(player.UserId, pendingConfirmation.finalTileId)
+		end
 	end
 end
 
 function BoardController:ChooseDirection(direction)
-	if not PathSelectionContainer then return end
+	if not PathSelectionContainer or not PathSelectionContainer.Visible then
+		warn("[BoardController] ChooseDirection called while PathSelectionContainer is hidden or missing.")
+		return
+	end
 
+	print("[BoardController] Player chose direction:", direction)
 	PathSelectionContainer.Visible = false
 
 	for _, connection in pairs(self.uiConnections) do
@@ -379,8 +376,6 @@ function BoardController:ChooseDirection(direction)
 		self.activeMovementCoroutines[player.UserId] = nil
 	end
 
-	self:EnableControls()
-
 	local pendingConfirmation = self.pendingMovementConfirmations[player.UserId]
 	if pendingConfirmation then
 		self:ConfirmMovementCompletion(player.UserId, pendingConfirmation.finalTileId)
@@ -389,46 +384,22 @@ function BoardController:ChooseDirection(direction)
 	self.remotes.choosePath:FireServer(direction)
 end
 
-function BoardController:DisableControls()
-	if self.controlsDisabled then return end
-	
-	if Controls and typeof(Controls.Disable) == "function" then
-		pcall(function() Controls:Disable() end)
-	end
-	
-	self.controlsDisabled = true
-end
-
-function BoardController:EnableControls()
-	if self.activeMovementCoroutines[player.UserId] then
-		return
-	end
-	
-	if not self.controlsDisabled then
-		return
-	end
-	
-	if Controls and typeof(Controls.Enable) == "function" then
-		pcall(function() Controls:Enable() end)
-	end
-	
-	self.controlsDisabled = false
-end
-
 function BoardController:GetTilePosition(tileId)
 	if self.tilePositions[tileId] then
 		return self.tilePositions[tileId]
 	end
-	
+
 	local tilesFolder = Workspace:FindFirstChild("BoardTiles")
 	if not tilesFolder then warn("[BoardController] BoardTiles folder not found!") return nil end
-	
+
 	local tileName1 = "Tile" .. tostring(tileId)
 	local tileName2 = tostring(tileId)
 	local tilePart = tilesFolder:FindFirstChild(tileName1) or tilesFolder:FindFirstChild(tileName2)
-	
-	if not tilePart or not tilePart:IsA("BasePart") then return nil end
-	
+
+	if not tilePart or not tilePart:IsA("BasePart") then
+		return nil
+	end
+
 	self.tilePositions[tileId] = tilePart.Position
 	return tilePart.Position
 end
@@ -436,77 +407,94 @@ end
 function BoardController:ShowTileEffect(playerId, tileId, tileType)
 	local tilePosition = self:GetTilePosition(tileId)
 	if not tilePosition then return end
-	
-	local lowerTileType = string.lower(tostring(tileType or ""))
+
+	local lowerTileType = string.lower(tostring(tileType or "unknown"))
 	local color = Color3.fromRGB(200, 200, 200)
-	
-	if lowerTileType == "shop" then 
-		color = Color3.fromRGB(255, 215, 0)
-	elseif lowerTileType == "battle" then 
-		color = Color3.fromRGB(255, 0, 0)
-	elseif lowerTileType == "item" then 
-		color = Color3.fromRGB(0, 255, 0)
-	elseif lowerTileType == "money" then 
-		color = Color3.fromRGB(255, 255, 0)
-	elseif lowerTileType == "casino" then 
-		color = Color3.fromRGB(255, 0, 255)
-	elseif lowerTileType == "bank" then 
-		color = Color3.fromRGB(0, 0, 255)
-	elseif lowerTileType == "castle" then 
-		color = Color3.fromRGB(128, 0, 128)
+
+	if lowerTileType == "shop" then color = Color3.fromRGB(255, 215, 0)
+	elseif lowerTileType == "battle" then color = Color3.fromRGB(255, 0, 0)
+	elseif lowerTileType == "item" then color = Color3.fromRGB(0, 255, 0)
+	elseif lowerTileType == "money" then color = Color3.fromRGB(255, 255, 0)
+	elseif lowerTileType == "casino" then color = Color3.fromRGB(255, 0, 255)
+	elseif lowerTileType == "bank" then color = Color3.fromRGB(0, 0, 255)
+	elseif lowerTileType == "castle" then color = Color3.fromRGB(128, 0, 128)
 	end
-	
-	self:CreateParticleEffect(tilePosition, color, tileType and tileType:upper() or "UNKNOWN")
+
+	self:CreateParticleEffect(tilePosition, color, tileType and string.upper(tostring(tileType)) or "UNKNOWN")
 	self:PlayTileSound(lowerTileType, playerId, tileId)
 end
 
 function BoardController:CreateParticleEffect(position, color, effectType)
 	local effectContainer = Instance.new("Model", Workspace.CurrentCamera)
 	effectContainer.Name = "TileEffect_" .. effectType .. "_" .. math.random(1000)
-	Debris:AddItem(effectContainer, 1.5)
-	
+	Debris:AddItem(effectContainer, 2.0)
+
 	local effectPart = Instance.new("Part")
 	effectPart.Anchored = true
 	effectPart.CanCollide = false
-	effectPart.Transparency = 0.5
-	effectPart.Size = Vector3.new(4, 0.5, 4)
-	effectPart.Position = position + Vector3.new(0, 0.5, 0)
+	effectPart.Transparency = 1
+	effectPart.Size = Vector3.new(5, 0.2, 5)
+	effectPart.Position = position + Vector3.new(0, 0.1, 0)
 	effectPart.Color = color
 	effectPart.Material = Enum.Material.Neon
 	effectPart.Shape = Enum.PartType.Cylinder
 	effectPart.Orientation = Vector3.new(0, 0, 90)
 	effectPart.Parent = effectContainer
-	
+
 	local emitter = Instance.new("ParticleEmitter", effectPart)
 	emitter.Color = ColorSequence.new(color)
-	emitter.LightEmission = 0.5
-	emitter.Size = NumberSequence.new(0.5, 0.1)
-	emitter.Transparency = NumberSequence.new(0, 1)
-	emitter.Lifetime = NumberRange.new(0.5, 1.5)
-	emitter.Rate = 30
-	emitter.Speed = NumberRange.new(2, 5)
+	emitter.LightEmission = 0.6
+	emitter.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.5),
+		NumberSequenceKeypoint.new(0.5, 0.8),
+		NumberSequenceKeypoint.new(1, 0.1)
+	})
+	emitter.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.2),
+		NumberSequenceKeypoint.new(0.7, 0.8),
+		NumberSequenceKeypoint.new(1, 1)
+	})
+	emitter.Lifetime = NumberRange.new(0.8, 1.5)
+	emitter.Rate = 40
+	emitter.Speed = NumberRange.new(3, 6)
 	emitter.SpreadAngle = Vector2.new(360, 360)
+	emitter.Rotation = NumberRange.new(0, 360)
+	emitter.RotSpeed = NumberRange.new(-90, 90)
 	emitter.Enabled = true
-	
-	local tween = TweenService:Create(effectPart, TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), 
-		{ Orientation = effectPart.Orientation + Vector3.new(0, 360, 0), Transparency = 1, Size = effectPart.Size * 0.1 })
+
+	local tweenInfo = TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local tween = TweenService:Create(effectPart, tweenInfo, {
+		Orientation = effectPart.Orientation + Vector3.new(0, 180, 0),
+		Transparency = 1,
+		Size = effectPart.Size * 0.1
+	})
 	tween:Play()
-	tween.Completed:Connect(function() if emitter and emitter.Parent then emitter.Enabled = false end end)
+
+	task.delay(1.3, function()
+		if emitter and emitter.Parent then
+			emitter.Enabled = false
+		end
+	end)
 end
 
 function BoardController:PlayTileSound(tileType, playerId, tileId)
-	local soundId = "rbxassetid://4067980844" -- Default sound
+	local soundId = "rbxassetid://4067980844"
+	if tileType == "shop" then soundId = "rbxassetid://132089340"
+	elseif tileType == "battle" then soundId = "rbxassetid://122224253"
+	elseif tileType == "item" then soundId = "rbxassetid://184661655"
+	end
+
 	local sound = Instance.new("Sound")
 	sound.SoundId = soundId
 	sound.Volume = 0.6
-	
-	local soundParent
+
+	local soundParent = nil
 	local targetPlayerInstance = Players:GetPlayerByUserId(playerId)
-	if targetPlayerInstance then 
+	if targetPlayerInstance then
 		local character = targetPlayerInstance.Character
-		soundParent = character and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")) 
+		soundParent = character and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart"))
 	end
-	
+
 	if not soundParent then
 		local tilePos = self:GetTilePosition(tileId)
 		if tilePos then
@@ -516,22 +504,24 @@ function BoardController:PlayTileSound(tileType, playerId, tileId)
 			soundPart.Transparency = 1
 			soundPart.Position = tilePos
 			soundPart.Size = Vector3.one
-			soundPart.Name = "TempSoundPart"
+			soundPart.Name = "TempSoundPart_" .. tileId
 			sound.Parent = soundPart
 			local soundDuration = (sound.TimeLength > 0 and sound.TimeLength) or 2
 			Debris:AddItem(soundPart, soundDuration + 0.5)
-		else 
+		else
+			warn("[BoardController] Cannot find position to play sound for tile:", tileId)
 			sound:Destroy()
-			return 
+			return
 		end
 	else
 		sound.Parent = soundParent
 		local soundDuration = (sound.TimeLength > 0 and sound.TimeLength) or 2
 		Debris:AddItem(sound, soundDuration + 0.5)
 	end
-	
+
 	sound:Play()
 end
+
 
 local instance = BoardController.new()
 return instance
