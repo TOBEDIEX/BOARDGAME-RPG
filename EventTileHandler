@@ -1,6 +1,6 @@
 -- EventTileHandler.client.lua
 -- Manages special tile events on the client side
--- Version: 8.0.0 (Optimized)
+-- Version: 8.1.0 (เพิ่มการรองรับช่อง Item)
 
 -- Services
 local Players = game:GetService("Players")
@@ -578,6 +578,19 @@ local function setupConnections()
 			createNotification("You landed on a casino tile! Try your luck?", 2, CASINO_COLOR)
 		elseif tileType == "item" then
 			createNotification("You landed on an item tile! Getting random item...", 2, ITEM_COLOR)
+			
+			-- เรียกใช้ฟังก์ชัน HandleItemTile ถ้ามี
+			if _G.HandleItemTile then
+				_G.HandleItemTile()
+			else
+				-- ขอไอเทมจากเซิร์ฟเวอร์โดยตรงถ้าไม่มีฟังก์ชัน HandleItemTile
+				local itemEventRemote = eventTileRemotes:FindFirstChild("ItemEvent")
+				if itemEventRemote then
+					itemEventRemote:FireServer("giveRandomItem")
+				else
+					warn("[EventTileHandler] ItemEvent remote not found!")
+				end
+			end
 		end
 	end)
 
