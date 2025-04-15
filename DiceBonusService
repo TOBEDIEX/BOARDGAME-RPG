@@ -1,6 +1,6 @@
 -- DiceBonusService.server.lua
 -- บริการจัดการโบนัสลูกเต๋าฝั่งเซิร์ฟเวอร์
--- Version: 1.0.0
+-- Version: 1.1.0 (ปรับปรุงการเชื่อมต่อกับระบบอื่น)
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
@@ -62,6 +62,9 @@ function DiceBonusService.SetPlayerDiceBonus(player, bonusAmount)
 	-- แจ้ง client เกี่ยวกับโบนัสลูกเต๋า
 	diceBonusEvent:FireClient(playerObj, bonusAmount)
 
+	-- ส่งข้อมูลให้ BoardService ด้วย (เพิ่มเติม)
+	diceBonusEvent:FireServer(bonusAmount)
+
 	log("ตั้งค่าโบนัสลูกเต๋าสำหรับ " .. playerObj.Name .. " เป็น +" .. bonusAmount)
 	return true
 end
@@ -69,7 +72,14 @@ end
 -- ฟังก์ชันล้างโบนัสลูกเต๋าของผู้เล่น
 function DiceBonusService.ClearPlayerDiceBonus(player)
 	local playerId = typeof(player) == "number" and player or player.UserId
+	local playerObj = typeof(player) == "number" and Players:GetPlayerByUserId(player) or player
+
 	playerDiceBonuses[playerId] = nil
+
+	-- แจ้ง client ว่าล้างโบนัสแล้ว (เพิ่มเติม)
+	if playerObj then
+		diceBonusEvent:FireClient(playerObj, 0)
+	end
 
 	log("ล้างโบนัสลูกเต๋าสำหรับผู้เล่น UserId: " .. playerId)
 	return true
@@ -92,6 +102,9 @@ function DiceBonusService.AddPlayerDiceBonus(player, bonusAmount)
 
 	-- แจ้ง client เกี่ยวกับโบนัสลูกเต๋า
 	diceBonusEvent:FireClient(playerObj, newBonus)
+
+	-- ส่งข้อมูลให้ BoardService ด้วย (เพิ่มเติม)
+	diceBonusEvent:FireServer(newBonus)
 
 	log("เพิ่มโบนัสลูกเต๋า +" .. bonusAmount .. " สำหรับ " .. playerObj.Name .. " (รวมเป็น +" .. newBonus .. ")")
 	return true
@@ -118,15 +131,48 @@ function DiceBonusService.TestSetBonus(player, bonusAmount)
 	return DiceBonusService.SetPlayerDiceBonus(player, bonusAmount)
 end
 
+-- ฟังก์ชันใหม่: ส่งค่าโบนัสลูกเต๋าให้ทุกระบบ
+function DiceBonusService.BroadcastDiceBonus(player, bonusAmount)
+	local playerId = typeof(player) == "number" and player or player.UserId
+	local playerObj = typeof(player) == "number" and Players:GetPlayerByUserId(player) or player
+
+	if not playerObj then return false end
+
+	-- บันทึกค่าในระบบนี้
+	playerDiceBonuses[playerId] = bonusAmount
+
+	-- ส่งให้ Client
+	diceBonusEvent:FireClient(playerObj, bonusAmount)
+
+	-- ส่งให้ระบบอื่นๆ
+	diceBonusEvent:FireServer(bonusAmount)
+
+	-- ส่งให้ GameManager (ถ้ามี)
+	if _G.GameManager and _G.GameManager.boardService then
+		if _G.GameManager.boardService.SetDiceBonus then
+			_G.GameManager.boardService.SetDiceBonus(playerId, bonusAmount)
+		end
+	end
+
+	log("Broadcast dice bonus +" .. bonusAmount .. " for player " .. playerObj.Name)
+	return true
+end
+
 -- ====== รายการเชื่อมต่อกับระบบอื่นๆ ======
 
 -- ตรวจสอบเมื่อผู้เล่นทอยลูกเต๋า
 rollDiceEvent.OnServerEvent:Connect(function(player, diceResult)
 	-- ตรวจสอบว่ามีโบนัสอยู่หรือไม่ (ควรถูกคำนวณจาก client แล้ว)
 	if playerDiceBonuses[player.UserId] then
+		-- แสดงข้อมูลการใช้โบนัส
+		log("ผู้เล่น " .. player.Name .. " ได้ใช้โบนัสลูกเต๋า +" .. playerDiceBonuses[player.UserId] .. 
+			" และทอยได้ " .. diceResult)
+
 		-- หลังจากทอยลูกเต๋าแล้ว ล้างโบนัสทิ้ง
-		log("ผู้เล่น " .. player.Name .. " ได้ใช้โบนัสลูกเต๋า +" .. playerDiceBonuses[player.UserId])
 		playerDiceBonuses[player.UserId] = nil
+
+		-- แจ้ง client ว่าล้างโบนัสแล้ว
+		diceBonusEvent:FireClient(player, 0)
 	end
 end)
 
@@ -135,6 +181,12 @@ updateTurnEvent.OnServerEvent:Connect(function(_, currentPlayerId)
 	-- ตรวจสอบว่ามีโบนัสค้างอยู่จากเทิร์นก่อนหน้า
 	for playerId, bonus in pairs(playerDiceBonuses) do
 		if playerId ~= currentPlayerId then
+			-- แจ้ง client ว่าล้างโบนัสแล้ว
+			local player = Players:GetPlayerByUserId(playerId)
+			if player then
+				diceBonusEvent:FireClient(player, 0)
+			end
+
 			-- ล้างโบนัสของผู้เล่นที่ไม่ใช่ผู้เล่นปัจจุบัน
 			playerDiceBonuses[playerId] = nil
 			log("ล้างโบนัสลูกเต๋าสำหรับผู้เล่น UserId: " .. playerId .. " เนื่องจากหมดเทิร์น")
@@ -146,6 +198,14 @@ end)
 Players.PlayerRemoving:Connect(function(player)
 	playerDiceBonuses[player.UserId] = nil
 	log("ล้างโบนัสลูกเต๋าสำหรับ " .. player.Name .. " เนื่องจากออกจากเกม")
+end)
+
+-- เพิ่มฟังก์ชันเพื่อรับข้อมูลโบนัสจากระบบอื่นๆ
+diceBonusEvent.OnServerEvent:Connect(function(player, bonusAmount)
+	if player and typeof(bonusAmount) == "number" then
+		playerDiceBonuses[player.UserId] = bonusAmount
+		log("Received bonus data from external system: " .. bonusAmount .. " for player " .. player.Name)
+	end
 end)
 
 -- เพิ่มฟังก์ชันทดสอบใน global
