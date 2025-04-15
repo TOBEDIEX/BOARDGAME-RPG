@@ -1,6 +1,6 @@
 -- EventTileHandler.client.lua
 -- Manages special tile events on the client side
--- Version: 8.1.0 (เพิ่มการรองรับช่อง Item)
+-- Version: 8.2.0 (แก้ไขให้แสดงการ์ดไอเทมหลังถึงช่องปลายทาง)
 
 -- Services
 local Players = game:GetService("Players")
@@ -25,6 +25,7 @@ local PlayerGui = player:WaitForChild("PlayerGui")
 -- State variables
 local state = {
 	pendingMoneyTile = false,
+	pendingItemTile = false, -- เพิ่มตัวแปรสถานะสำหรับช่องไอเทม
 	moneyAmount = 0,
 	lastTileId = nil,
 	lastTileType = nil,
@@ -35,7 +36,7 @@ local state = {
 }
 
 -- Remote events (initialized in initRemotes function)
-local remotes, eventTileRemotes, moneyEventRemote
+local remotes, eventTileRemotes, moneyEventRemote, itemEventRemote
 local uiRemotes, statChangedEvent
 local boardRemotes, tileTriggerEvent, playerArrivedAtTile, movementVisualizationComplete
 local showPathSelection, startPlayerMovementPath, activityComplete
@@ -83,6 +84,13 @@ local function initRemotes()
 		moneyEventRemote.Parent = eventTileRemotes
 	end
 
+	itemEventRemote = eventTileRemotes:FindFirstChild("ItemEvent")
+	if not itemEventRemote then
+		itemEventRemote = Instance.new("RemoteEvent")
+		itemEventRemote.Name = "ItemEvent"
+		itemEventRemote.Parent = eventTileRemotes
+	end
+
 	-- UI Remotes
 	uiRemotes = remotes:WaitForChild("UIRemotes")
 	statChangedEvent = uiRemotes:FindFirstChild("StatChanged")
@@ -93,7 +101,7 @@ local function initRemotes()
 	playerArrivedAtTile = boardRemotes:WaitForChild("PlayerArrivedAtTile")
 	movementVisualizationComplete = boardRemotes:FindFirstChild("MovementVisualizationComplete")
 	showPathSelection = boardRemotes:FindFirstChild("ShowPathSelection")
-	startPlayerMovementPath = boardRemotes:WaitForChild("StartPlayerMovementPath")
+	startPlayerMovementPath = boardRemotes:FindFirstChild("StartPlayerMovementPath")
 	activityComplete = boardRemotes:FindFirstChild("ActivityComplete")
 end
 
@@ -494,6 +502,18 @@ local function checkEndTile()
 			showMoneyAnimation(state.moneyAmount)
 			state.isProcessingEvent = false
 		end)
+	elseif state.pendingItemTile then  -- ตรวจสอบสถานะช่องไอเทม
+		state.isProcessingEvent = true
+		state.pendingItemTile = false
+
+		-- Show notification
+		createNotification("Reached end tile! Getting random item...", NOTIFY_DURATION, ITEM_COLOR)
+
+		task.delay(DELAY_BEFORE_UI, function()
+			-- ขอไอเทมจากเซิร์ฟเวอร์
+			itemEventRemote:FireServer("giveRandomItem")
+			state.isProcessingEvent = false
+		end)
 	end
 
 	state.hasReachedEndTile = false
@@ -577,20 +597,8 @@ local function setupConnections()
 		elseif tileType == "casino" then
 			createNotification("You landed on a casino tile! Try your luck?", 2, CASINO_COLOR)
 		elseif tileType == "item" then
-			createNotification("You landed on an item tile! Getting random item...", 2, ITEM_COLOR)
-			
-			-- เรียกใช้ฟังก์ชัน HandleItemTile ถ้ามี
-			if _G.HandleItemTile then
-				_G.HandleItemTile()
-			else
-				-- ขอไอเทมจากเซิร์ฟเวอร์โดยตรงถ้าไม่มีฟังก์ชัน HandleItemTile
-				local itemEventRemote = eventTileRemotes:FindFirstChild("ItemEvent")
-				if itemEventRemote then
-					itemEventRemote:FireServer("giveRandomItem")
-				else
-					warn("[EventTileHandler] ItemEvent remote not found!")
-				end
-			end
+			createNotification("You landed on an item tile! Item will be given when you reach the end tile", 2, ITEM_COLOR)
+			state.pendingItemTile = true  -- ตั้งค่าสถานะรอรับไอเทม
 		end
 	end)
 
@@ -631,7 +639,7 @@ local function setupConnections()
 						state.isMoving = false
 
 						task.delay(DELAY_BEFORE_UI, function()
-							if state.pendingMoneyTile and not state.isMoving then
+							if (state.pendingMoneyTile or state.pendingItemTile) and not state.isMoving then
 								state.hasReachedEndTile = true
 								checkEndTile()
 							end
@@ -642,6 +650,22 @@ local function setupConnections()
 		end
 	end)
 end
+
+-- เพิ่มฟังก์ชันสำหรับเรียกใช้งานจากภายนอก (เปลี่ยนจากการใช้ HandleItemTile โดยตรง)
+local function notifyItemTile()
+	-- เพิ่มเข้าคิวรอ
+	state.pendingItemTile = true
+	createNotification("You landed on an item tile! Item will be given when you reach the end tile", 2, ITEM_COLOR)
+
+	-- ถ้าไม่กำลังเคลื่อนที่และถึงช่องปลายทางแล้ว ให้แสดงทันที (กรณีมีการเรียกโดยตรงจากคำสั่งในเซิร์ฟเวอร์)
+	if not state.isMoving then
+		state.hasReachedEndTile = true
+		checkEndTile()
+	end
+end
+
+-- สร้างฟังก์ชันเดิมเพื่อความเข้ากันได้กับโค้ดเดิม
+_G.HandleItemTile = notifyItemTile
 
 -- Initialize system
 local function initialize()
