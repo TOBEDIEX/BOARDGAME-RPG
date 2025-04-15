@@ -1,9 +1,7 @@
 -- ClassData.lua
 -- ข้อมูลและคุณสมบัติของคลาสต่างๆ ในเกม
--- Version: 3.1.0 (Level 1 Base Stats Only)
+-- Version: 3.2.0 (แก้ไขปัญหาชื่อ BaseStats)
 -- วางที่: ReplicatedStorage/SharedModules/ClassData.lua
--- หมายเหตุ: BaseStats ในเวอร์ชันนี้เก็บเฉพาะค่าสถานะเริ่มต้น ณ เลเวล 1
---         ส่วนการเติบโตของสเตตัสต่อเลเวล จะต้องจัดการในระบบอื่น (เช่น PlayerManager หรือ LevelingSystem)
 
 local ClassData = {}
 
@@ -15,10 +13,10 @@ ClassData.Classes = {
 		Description = "A sword man",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1
-			HP = 125, -- MaxHP เริ่มต้น
-			MP = 50,  -- MaxMP เริ่มต้น
-			ATK = 95, -- ATK เริ่มต้น
-			MAG = 10, -- MAGIC เริ่มต้น
+			MaxHP = 125, -- ใช้ MaxHP แทน HP (ตามที่ระบบคาดหวัง)
+			MaxMP = 50,  -- ใช้ MaxMP แทน MP (ตามที่ระบบคาดหวัง)
+			ATK = 95,    -- พลังโจมตี
+			MAGIC = 10,  -- ใช้ MAGIC แทน MAG (ตามที่ระบบคาดหวัง)
 		},
 		NextClass = "Knight",
 		UpgradeCondition = { Type = "Level", Value = 10 },
@@ -30,10 +28,10 @@ ClassData.Classes = {
 		Description = "A thief man",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1
-			HP = 100,
-			MP = 60,
+			MaxHP = 100,
+			MaxMP = 60,
 			ATK = 75,
-			MAG = 30,
+			MAGIC = 30,
 		},
 		NextClass = "Assassin",
 		UpgradeCondition = { Type = "Level", Value = 10 },
@@ -45,10 +43,10 @@ ClassData.Classes = {
 		Description = "A magic man",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1
-			HP = 85,
-			MP = 120,
+			MaxHP = 85,
+			MaxMP = 120,
 			ATK = 25,
-			MAG = 95,
+			MAGIC = 95,
 		},
 		NextClass = "Wizard",
 		UpgradeCondition = { Type = "Level", Value = 10 },
@@ -60,10 +58,10 @@ ClassData.Classes = {
 		Description = "นักรบผู้ช่ำชอง เกราะหนาและพลังโจมตีที่หนักหน่วงขึ้น สามารถปกป้องเพื่อนร่วมทีมได้",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1 (เมื่อเปลี่ยนคลาส)
-			HP = 180,
-			MP = 65,
+			MaxHP = 180,
+			MaxMP = 65,
 			ATK = 120,
-			MAG = 15,
+			MAGIC = 15,
 		},
 		NextClass = "Paladin",
 		UpgradeCondition = { Type = "Quest", Value = "ProveYourValor" },
@@ -74,10 +72,10 @@ ClassData.Classes = {
 		Description = "อัศวินศักดิ์สิทธิ์ ผู้ผสานพลังแห่งการต่อสู้เข้ากับการปกป้องและเวทมนตร์สนับสนุน",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1 (เมื่อเปลี่ยนคลาส)
-			HP = 250,
-			MP = 100,
+			MaxHP = 250,
+			MaxMP = 100,
 			ATK = 150,
-			MAG = 50,
+			MAGIC = 50,
 		},
 		NextClass = nil, -- คลาสสูงสุดในสายนี้
 		UpgradeCondition = nil,
@@ -89,10 +87,10 @@ ClassData.Classes = {
 		Description = "เชี่ยวชาญเวทมนตร์ธาตุต่างๆ มีพลังทำลายล้างสูงขึ้นและคาถาที่ซับซ้อนกว่าเดิม",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1 (เมื่อเปลี่ยนคลาส)
-			HP = 110,
-			MP = 180,
+			MaxHP = 110,
+			MaxMP = 180,
 			ATK = 35,
-			MAG = 130,
+			MAGIC = 130,
 		},
 		NextClass = "Archmage",
 		UpgradeCondition = { Type = "Item", Value = "AncientGrimoire" },
@@ -103,10 +101,10 @@ ClassData.Classes = {
 		Description = "ผู้บรรลุศาสตร์แห่งเวทมนตร์ขั้นสูงสุด ควบคุมพลังอันมหาศาลและคาถาที่เปลี่ยนแปลงสนามรบได้",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1 (เมื่อเปลี่ยนคลาส)
-			HP = 140,
-			MP = 250,
+			MaxHP = 140,
+			MaxMP = 250,
 			ATK = 45,
-			MAG = 180,
+			MAGIC = 180,
 		},
 		NextClass = nil,
 		UpgradeCondition = nil,
@@ -118,10 +116,10 @@ ClassData.Classes = {
 		Description = "เชี่ยวชาญการลอบสังหาร สร้างความเสียหายคริติคอลอย่างรุนแรงและเคลื่อนไหวในเงามืด",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1 (เมื่อเปลี่ยนคลาส)
-			HP = 130,
-			MP = 80,
+			MaxHP = 130,
+			MaxMP = 80,
 			ATK = 110,
-			MAG = 40,
+			MAGIC = 40,
 		},
 		NextClass = "Shadow",
 		UpgradeCondition = { Type = "Skill", Value = "MasterStealth" },
@@ -132,25 +130,87 @@ ClassData.Classes = {
 		Description = "ปรมาจารย์แห่งเงา ผู้ใช้ทักษะลอบเร้นและการโจมตีที่ศัตรูไม่อาจคาดเดาได้",
 		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
 		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1 (เมื่อเปลี่ยนคลาส)
-			HP = 160,
-			MP = 100,
+			MaxHP = 160,
+			MaxMP = 100,
 			ATK = 140,
-			MAG = 55,
+			MAGIC = 55,
 		},
 		NextClass = nil,
 		UpgradeCondition = nil,
 	},
 }
 
+-- กำหนดค่าดีฟอลต์สำหรับกรณีเรียกไม่ได้
+local DEFAULT_CLASS_STATS = {
+	Warrior = {
+		MaxHP = 125,
+		MaxMP = 50,
+		ATK = 95,
+		MAGIC = 10
+	},
+	Mage = {
+		MaxHP = 85,
+		MaxMP = 120,
+		ATK = 25,
+		MAGIC = 95
+	},
+	Thief = {
+		MaxHP = 100,
+		MaxMP = 60,
+		ATK = 75,
+		MAGIC = 30
+	}
+}
+
 -- ฟังก์ชันช่วยเหลือ
 function ClassData:GetClassInfo(className)
-	return self.Classes[className]
+	-- ป้องกันกรณีไม่มีชื่อคลาส
+	if not className or className == "" then
+		warn("[ClassData] Warning: Attempted to get info for nil or empty className")
+		return nil
+	end
+
+	local classInfo = self.Classes[className]
+
+	-- ถ้าไม่พบข้อมูลคลาส แสดงคำเตือน
+	if not classInfo then
+		warn("[ClassData] Warning: Class not found: " .. tostring(className))
+	end
+
+	return classInfo
 end
 
 -- ดึงค่าสถานะเริ่มต้น ณ เลเวล 1
 function ClassData:GetBaseStats(className)
 	local info = self:GetClassInfo(className)
-	return info and info.BaseStats
+
+	-- ถ้าไม่พบข้อมูลคลาส ใช้ค่าดีฟอลต์ (ถ้ามี)
+	if not info or not info.BaseStats then
+		if className and DEFAULT_CLASS_STATS[className] then
+			print("[ClassData] Using default stats for class: " .. className)
+			return DEFAULT_CLASS_STATS[className]
+		end
+
+		warn("[ClassData] No BaseStats found for class: " .. tostring(className))
+		return nil
+	end
+
+	return info.BaseStats
+end
+
+function ClassData:GetDefaultStats(className)
+	-- กรณีแก้ปัญหาเร่งด่วน ถ้าไม่พบคลาส ใช้ดีฟอลต์
+	if className and DEFAULT_CLASS_STATS[className] then
+		return DEFAULT_CLASS_STATS[className]
+	end
+
+	-- ถ้าไม่มีคลาสเลย กำหนดค่าพื้นฐาน
+	return {
+		MaxHP = 100,
+		MaxMP = 50,
+		ATK = 10,
+		MAGIC = 10
+	}
 end
 
 function ClassData:GetNextClass(className)
