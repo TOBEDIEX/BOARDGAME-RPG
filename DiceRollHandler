@@ -1,6 +1,6 @@
 -- DiceRollHandler.lua
 -- Manages dice roll interface and path selection
--- Version: 2.0.0 (Optimized)
+-- Version: 2.3.0 (Final Dice Bonus Implementation)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -48,6 +48,21 @@ local showPathSelectionEvent = boardRemotes:WaitForChild("ShowPathSelection")
 local choosePathEvent = boardRemotes:WaitForChild("ChoosePath")
 local updateTurnEvent = gameRemotes:WaitForChild("UpdateTurn")
 
+-- สร้าง Remote สำหรับ DiceBonus
+local inventoryRemotes = remotes:WaitForChild("InventoryRemotes", 5)
+if not inventoryRemotes then
+	inventoryRemotes = Instance.new("Folder")
+	inventoryRemotes.Name = "InventoryRemotes"
+	inventoryRemotes.Parent = remotes
+end
+
+local diceBonusEvent = inventoryRemotes:FindFirstChild("DiceBonus")
+if not diceBonusEvent then
+	diceBonusEvent = Instance.new("RemoteEvent")
+	diceBonusEvent.Name = "DiceBonus"
+	diceBonusEvent.Parent = inventoryRemotes
+end
+
 -- Constants
 local DICE_ANIMATION_DURATION = 2
 local DICE_VALUES = {1, 2, 3, 4, 5, 6}
@@ -56,6 +71,7 @@ local DIRECTIONS = {
 	LEFT = "LEFT",
 	RIGHT = "RIGHT"
 }
+-- ไม่มีการจำกัดจำนวนก้าวสูงสุดแล้ว
 
 -- Variables
 local isRolling = false
@@ -63,6 +79,173 @@ local canRoll = false
 local currentDiceResult = nil
 local currentPathChoices = nil
 local remainingSteps = 0
+local activeDiceBonus = 0 -- เพิ่มตัวแปรสำหรับเก็บค่าโบนัสลูกเต๋า
+local bonusDiceResults = {} -- เก็บผลลัพธ์ของลูกเต๋าโบนัสแต่ละลูก
+
+-- ฟังก์ชันสร้างลูกเต๋าเพิ่มเติม (วางซ้าย/ขวา)
+local function createBonusDice(numBonusDice)
+	-- ลบลูกเต๋าเก่าออกก่อน
+	for i, dice in pairs(DiceWheel:GetChildren()) do
+		if dice.Name:find("BonusDice") or dice.Name == "TotalResult" then
+			dice:Destroy()
+		end
+	end
+
+	bonusDiceResults = {}
+
+	-- สร้างลูกเต๋าใหม่ตามจำนวนโบนัส
+	for i = 1, numBonusDice do
+		local bonusDice = DiceResult:Clone()
+
+		-- ตำแหน่งลูกเต๋า: ถ้าเป็นคี่ให้วางทางซ้าย ถ้าเป็นคู่ให้วางทางขวา
+		local isEven = (i % 2 == 0)
+		local position
+
+		if isEven then
+			-- ลูกคู่ (2, 4, ...) ไปด้านขวา
+			position = UDim2.new(0.5 + (math.ceil(i/2) * 0.25), 0, 0.5, 0)
+		else
+			-- ลูกคี่ (1, 3, ...) ไปด้านซ้าย
+			position = UDim2.new(0.5 - (math.ceil(i/2) * 0.25), 0, 0.5, 0)
+		end
+
+		bonusDice.Name = "BonusDice_" .. i
+		bonusDice.Position = position
+		bonusDice.AnchorPoint = Vector2.new(0.5, 0.5)
+		bonusDice.TextColor3 = Color3.fromRGB(50, 220, 50) -- สีเขียวอ่อน
+		bonusDice.Text = ""
+		bonusDice.Parent = DiceWheel
+
+		bonusDiceResults[i] = 0
+	end
+
+	return bonusDiceResults
+end
+
+-- ฟังก์ชันสร้างผลรวมเหนือลูกเต๋าหลัก
+local function createTotalResult(total)
+	-- ลบผลรวมเดิม
+	local oldTotal = DiceWheel:FindFirstChild("TotalResult")
+	if oldTotal then
+		oldTotal:Destroy()
+	end
+
+	-- สร้างกรอบแสดงผลรวม
+	local totalFrame = Instance.new("Frame")
+	totalFrame.Name = "TotalResult"
+	totalFrame.Size = UDim2.new(0, 80, 0, 30)
+	totalFrame.Position = UDim2.new(0.5, 0, 0.3, 0) -- ด้านบนลูกเต๋าหลัก
+	totalFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+	totalFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	totalFrame.BackgroundTransparency = 0.3
+	totalFrame.ZIndex = 5
+	totalFrame.Parent = DiceWheel
+
+	-- เพิ่มขอบมน
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = totalFrame
+
+	-- เพิ่มข้อความแสดงผลรวม
+	local totalText = Instance.new("TextLabel")
+	totalText.Name = "TotalText"
+	totalText.Size = UDim2.new(1, 0, 1, 0)
+	totalText.Position = UDim2.new(0.5, 0, 0.5, 0)
+	totalText.AnchorPoint = Vector2.new(0.5, 0.5)
+	totalText.BackgroundTransparency = 1
+	totalText.TextColor3 = Color3.fromRGB(255, 255, 100) -- สีเหลือง
+	totalText.Font = Enum.Font.GothamBold
+	totalText.TextSize = 18
+	totalText.Text = "Total: " .. total
+	totalText.ZIndex = 6
+	totalText.Parent = totalFrame
+
+	-- แอนิเมชั่นแสดงผล
+	totalFrame.Size = UDim2.new(0, 0, 0, 30)
+	totalText.TextTransparency = 1
+
+	-- แอนิเมชั่นขยายกรอบ
+	local frameTween = TweenService:Create(
+		totalFrame,
+		TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+		{Size = UDim2.new(0, 80, 0, 30)}
+	)
+	frameTween:Play()
+
+	-- แอนิเมชั่นแสดงข้อความ
+	frameTween.Completed:Connect(function()
+		local textTween = TweenService:Create(
+			totalText,
+			TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{TextTransparency = 0}
+		)
+		textTween:Play()
+	end)
+
+	return totalFrame
+end
+
+-- ฟังก์ชันสร้างการแจ้งเตือนโบนัสด้านขวาบน
+local function createBonusNotification(bonusAmount)
+	-- ลบการแจ้งเตือนเดิมออกก่อน
+	local oldNotification = PlayerGui:FindFirstChild("DiceBonusNotification")
+	if oldNotification then
+		oldNotification:Destroy()
+	end
+
+	-- สร้างการแจ้งเตือนใหม่
+	local notification = Instance.new("Frame")
+	notification.Name = "DiceBonusNotification"
+	notification.Size = UDim2.new(0, 160, 0, 40)
+	notification.Position = UDim2.new(1, -170, 0, 10) -- มุมขวาบน
+	notification.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	notification.BackgroundTransparency = 0.2
+	notification.BorderSizePixel = 0
+	notification.Parent = PlayerGui
+
+	-- เพิ่มขอบมน
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = notification
+
+	-- ข้อความแจ้งเตือน
+	local text = Instance.new("TextLabel")
+	text.Name = "NotificationText"
+	text.Size = UDim2.new(1, -10, 1, 0)
+	text.Position = UDim2.new(0.5, 0, 0.5, 0)
+	text.AnchorPoint = Vector2.new(0.5, 0.5)
+	text.BackgroundTransparency = 1
+	text.Font = Enum.Font.GothamSemibold
+	text.TextSize = 14
+	text.TextColor3 = Color3.fromRGB(120, 255, 120)
+	text.Text = "Dice Bonus: +" .. bonusAmount
+	text.Parent = notification
+
+	-- ไอคอน
+	local icon = Instance.new("ImageLabel")
+	icon.Name = "Icon"
+	icon.Size = UDim2.new(0, 24, 0, 24)
+	icon.Position = UDim2.new(0, 8, 0.5, 0)
+	icon.AnchorPoint = Vector2.new(0, 0.5)
+	icon.BackgroundTransparency = 1
+	icon.Image = "rbxassetid://7228017567" -- รูปลูกเต๋า
+	icon.ImageColor3 = Color3.fromRGB(120, 255, 120)
+	icon.Parent = notification
+
+	-- ปรับขนาดข้อความให้อยู่ด้านขวาของไอคอน
+	text.Position = UDim2.new(0.6, 0, 0.5, 0)
+
+	-- แอนิเมชั่น
+	notification.Size = UDim2.new(0, 0, 0, 40)
+	local sizeTween = TweenService:Create(
+		notification,
+		TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+		{Size = UDim2.new(0, 160, 0, 40)}
+	)
+	sizeTween:Play()
+
+	return notification
+end
 
 -- Show dice roll UI
 local function showDiceRollUI()
@@ -81,6 +264,19 @@ local function showDiceRollUI()
 	currentDiceResult = nil
 	currentPathChoices = nil
 	remainingSteps = 0
+
+	-- แสดงแจ้งเตือนโบนัส (ถ้ามี)
+	if activeDiceBonus > 0 then
+		createBonusNotification(activeDiceBonus)
+		createBonusDice(activeDiceBonus)
+	else
+		-- ลบลูกเต๋าโบนัสที่อาจมีอยู่
+		for i, dice in pairs(DiceWheel:GetChildren()) do
+			if dice.Name:find("BonusDice") or dice.Name == "TotalResult" then
+				dice:Destroy()
+			end
+		end
+	end
 end
 
 -- Hide dice roll UI
@@ -90,12 +286,17 @@ local function hideDiceRollUI()
 	canRoll = false
 end
 
--- Animate dice roll
+-- Animate dice roll (แก้ไขให้รองรับการทอยหลายลูก)
 local function animateDiceRoll(finalResult)
 	if isRolling then return end
 
 	isRolling = true
 	RollButton.Visible = false
+
+	-- สร้างลูกเต๋าโบนัสตามจำนวน
+	if activeDiceBonus > 0 then
+		createBonusDice(activeDiceBonus)
+	end
 
 	-- Create animation sequence
 	local startTime = tick()
@@ -109,9 +310,18 @@ local function animateDiceRoll(finalResult)
 		if currentTime - lastUpdate >= frameRate then
 			lastUpdate = currentTime
 
-			-- Show random value
+			-- แสดงค่าสุ่มสำหรับลูกเต๋าหลัก
 			local randomValue = DICE_VALUES[math.random(1, #DICE_VALUES)]
 			DiceResult.Text = tostring(randomValue)
+
+			-- สุ่มค่าสำหรับลูกเต๋าโบนัสทุกลูก
+			for i = 1, activeDiceBonus do
+				local bonusDice = DiceWheel:FindFirstChild("BonusDice_" .. i)
+				if bonusDice then
+					local bonusValue = DICE_VALUES[math.random(1, #DICE_VALUES)]
+					bonusDice.Text = tostring(bonusValue)
+				end
+			end
 
 			-- Slow down animation near end
 			local timeLeft = endTime - currentTime
@@ -123,10 +333,30 @@ local function animateDiceRoll(finalResult)
 		end
 	end
 
-	-- Show final result
-	DiceResult.Text = tostring(finalResult)
+	-- สุ่มค่าจริงสำหรับลูกเต๋าหลักและลูกเต๋าโบนัส
+	local mainDiceResult = finalResult
+	local totalResult = mainDiceResult
 
-	-- Tween effect for final result
+	-- สุ่มผลลัพธ์สำหรับลูกเต๋าโบนัสและคำนวณผลรวม
+	for i = 1, activeDiceBonus do
+		local bonusDice = DiceWheel:FindFirstChild("BonusDice_" .. i)
+		if bonusDice then
+			local bonusValue = math.random(1, 6)
+			bonusDiceResults[i] = bonusValue
+			bonusDice.Text = tostring(bonusValue)
+			totalResult = totalResult + bonusValue
+		end
+	end
+
+	-- แสดงผลลัพธ์ดั้งเดิม
+	DiceResult.Text = tostring(mainDiceResult)
+
+	-- แสดงผลรวมด้านบน
+	if activeDiceBonus > 0 then
+		createTotalResult(totalResult)
+	end
+
+	-- แอนิเมชั่นขยายลูกเต๋า
 	local resultTween = TweenService:Create(
 		DiceResult,
 		TweenInfo.new(0.5, Enum.EasingStyle.Bounce, Enum.EasingDirection.Out),
@@ -134,9 +364,22 @@ local function animateDiceRoll(finalResult)
 	)
 	resultTween:Play()
 
+	-- แอนิเมชั่นสำหรับลูกเต๋าโบนัส
+	for i = 1, activeDiceBonus do
+		local bonusDice = DiceWheel:FindFirstChild("BonusDice_" .. i)
+		if bonusDice then
+			local bonusTween = TweenService:Create(
+				bonusDice,
+				TweenInfo.new(0.5, Enum.EasingStyle.Bounce, Enum.EasingDirection.Out),
+				{TextSize = 60}
+			)
+			bonusTween:Play()
+		end
+	end
+
 	wait(0.5)
 
-	-- Reset size
+	-- ย่อกลับ
 	local resetTween = TweenService:Create(
 		DiceResult,
 		TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
@@ -144,16 +387,46 @@ local function animateDiceRoll(finalResult)
 	)
 	resetTween:Play()
 
+	-- ย่อลูกเต๋าโบนัสกลับ
+	for i = 1, activeDiceBonus do
+		local bonusDice = DiceWheel:FindFirstChild("BonusDice_" .. i)
+		if bonusDice then
+			local resetBonusTween = TweenService:Create(
+				bonusDice,
+				TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+				{TextSize = 36}
+			)
+			resetBonusTween:Play()
+		end
+	end
+
 	isRolling = false
-	currentDiceResult = finalResult
-	remainingSteps = finalResult
+	currentDiceResult = totalResult  -- เก็บค่าที่รวมทุกลูกแล้ว
+	remainingSteps = totalResult     -- ใช้ค่านี้เป็นจำนวนก้าวที่เดินได้จริง
 
 	wait(0.3)
 
-	-- Send result to server
-	rollDiceEvent:FireServer(finalResult)
+	-- ส่งผลลัพธ์ไปยังเซิร์ฟเวอร์
+	rollDiceEvent:FireServer(totalResult)  -- ส่งผลรวมไปเลย ไม่มีการจำกัด
 
-	return finalResult
+	-- รีเซ็ตโบนัสหลังใช้
+	activeDiceBonus = 0
+
+	-- ลบการแจ้งเตือนโบนัส
+	local notification = PlayerGui:FindFirstChild("DiceBonusNotification")
+	if notification then
+		local hideTween = TweenService:Create(
+			notification,
+			TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+			{Size = UDim2.new(0, 0, 0, 40)}
+		)
+		hideTween:Play()
+		hideTween.Completed:Connect(function()
+			notification:Destroy()
+		end)
+	end
+
+	return totalResult
 end
 
 -- Show path choices
@@ -237,6 +510,28 @@ updateTurnEvent.OnClientEvent:Connect(function(currentPlayerId)
 	end
 end)
 
+-- ฟังก์ชันรับ Dice Bonus (เพิ่มใหม่)
+diceBonusEvent.OnClientEvent:Connect(function(bonusAmount)
+	activeDiceBonus = bonusAmount
+	print("[DiceRollHandler] ได้รับโบนัสลูกเต๋า: +" .. bonusAmount)
+
+	-- แสดงการแจ้งเตือนว่าโบนัสทำงานแล้ว
+	local notificationSound = Instance.new("Sound")
+	notificationSound.SoundId = "rbxassetid://6026984224"  -- เสียงการแจ้งเตือน
+	notificationSound.Volume = 0.5
+	notificationSound.Parent = DiceRollUI
+	notificationSound:Play()
+	game:GetService("Debris"):AddItem(notificationSound, 2)
+
+	-- สร้างการแจ้งเตือนในมุมขวาบน
+	createBonusNotification(bonusAmount)
+
+	-- อัพเดต UI ทันทีถ้ากำลังแสดง DiceRollUI อยู่
+	if DiceRollUI.Visible then
+		showDiceRollUI()
+	end
+end)
+
 -- Initial setup
 DiceRollUI.Visible = false
 
@@ -244,5 +539,8 @@ DiceRollUI.Visible = false
 local DiceRollHandler = {}
 DiceRollHandler.ShowUI = showDiceRollUI
 DiceRollHandler.HideUI = hideDiceRollUI
+
+-- ทำให้สามารถเข้าถึงได้จาก script อื่น
+_G.DiceRollHandler = DiceRollHandler
 
 return DiceRollHandler
