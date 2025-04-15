@@ -1,6 +1,6 @@
 -- BoardSystem.lua
 -- Core module for board system and character movement
--- Version: 3.0.0 (Optimized)
+-- Version: 3.1.0 (Support for unlimited steps from dice bonus)
 
 local BoardSystem = {}
 BoardSystem.__index = BoardSystem
@@ -143,6 +143,7 @@ function BoardSystem:GenerateAutoPath(playerId, startTileId, prevTileId, stepsRe
 	local path = {currentTileId}
 	local remainingSteps = stepsRemaining
 
+	-- แก้ไขให้รองรับจำนวนก้าวไม่จำกัด (ไม่ใช่แค่ 6)
 	while remainingSteps > 0 do
 		-- Get available directions
 		local availableDirections = self:GetAvailableDirections(currentTileId, currentPrevTileId)
@@ -185,6 +186,9 @@ function BoardSystem:ProcessPlayerMove(playerId, diceResult)
 	local prevTileId = self.playerLastTile[playerId]
 
 	if not currentTileId then return false end
+
+	-- แสดงผลลัพธ์ลูกเต๋า (รองรับทั้งค่าน้อยและมากได้)
+	print("[BoardSystem] Player ID " .. playerId .. " rolled: " .. diceResult .. " from tile " .. currentTileId)
 
 	-- Store remaining steps
 	self.playerRemainingSteps = self.playerRemainingSteps or {}
