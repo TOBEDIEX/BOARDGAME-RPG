@@ -1,6 +1,6 @@
 -- InventoryService.server.lua
 -- บริการจัดการระบบ Inventory ฝั่งเซิร์ฟเวอร์ (ไม่ใช้ DataStore)
--- Version: 3.1.0 (แก้ไขให้ฟื้น HP เต็มเมื่อใส่อุปกรณ์)
+-- Version: 3.3.0 (แก้ไขปัญหา HP รีเซ็ตด้วยเทคนิค delay)
 
 -- Services
 local ServerStorage = game:GetService("ServerStorage")
@@ -367,7 +367,7 @@ function InventoryService.UpdateStatsWithoutHP(player, equipmentStats)
 	return true
 end
 
--- Handle equipment changes (แก้ไขล่าสุด)
+-- Handle equipment changes (แก้ไขด้วยเทคนิค delay)
 function InventoryService.EquipItemForPlayer(player, inventoryId)
 	local inventory = InventoryService.GetPlayerInventory(player)
 	if not inventory then
@@ -396,43 +396,109 @@ function InventoryService.EquipItemForPlayer(player, inventoryId)
 				playerHealedItems[player.UserId] = {}
 			end
 
+			-- เก็บค่า HP ปัจจุบันไว้ก่อนอัปเดตสถานะ
+			local currentHP = playerData.stats.hp
+			local currentMaxHP = playerData.stats.maxHp
+
 			-- อัปเดตสถิติก่อน (รวม MaxHP)
 			local equipmentStats = inventory:CalculateEquipmentStats()
 			if equipmentStats then
 				-- อัปเดตค่าสถิติโดยใช้ฟังก์ชันพิเศษที่ไม่อัปเดต HP
 				InventoryService.UpdateStatsWithoutHP(player, equipmentStats)
 
+				-- ดึงค่า MaxHP หลังจากอัปเดต
+				local newMaxHP = playerData.stats.maxHp
+
 				-- ตรวจสอบว่าอุปกรณ์ชิ้นนี้เคยใช้ฟื้น HP แล้วหรือไม่
 				if not playerHealedItems[player.UserId][itemId] then
 					-- ฟื้น HP เต็ม (หลังจากอัปเดต MaxHP แล้ว)
-					local fullHP = playerData.stats.maxHp
+					local fullHP = newMaxHP
 					playerData.stats.hp = fullHP
 
-					-- อัปเดต HP โดยตรง (ไม่ผ่านฟังก์ชันอัปเดตสถานะอื่น)
-					if player.Character and player.Character:FindFirstChild("Humanoid") then
-						player.Character.Humanoid.MaxHealth = fullHP
-						player.Character.Humanoid.Health = fullHP
-					end
-
-					-- อัปเดตให้ client โดยตรง
-					if _G.GameManager.playerManager.statChangedEvent then
-						_G.GameManager.playerManager.statChangedEvent:FireClient(player, {
-							hp = {
-								oldValue = playerData.stats.hp,
-								newValue = fullHP
-							}
-						})
-					end
+					print("[InventoryService] Full HP restore from equipping new item: " .. itemId .. 
+						" (HP: " .. currentHP .. " -> " .. fullHP .. ", MaxHP: " .. currentMaxHP .. " -> " .. newMaxHP .. ")")
 
 					-- บันทึกว่าอุปกรณ์ชิ้นนี้ได้ใช้ฟื้น HP แล้ว
 					playerHealedItems[player.UserId][itemId] = true
 
-					print("[InventoryService] Full HP restore from equipping new item: " .. itemId .. " (HP = " .. fullHP .. "/" .. playerData.stats.maxHp .. ")")
+					-- ใช้เทคนิค delay เพื่อให้แน่ใจว่าค่า HP จะเป็นค่าที่ถูกต้องหลังจากโค้ดอื่นทำงานเสร็จแล้ว
+					-- เราจะใช้ task.delay ที่มีความล่าช้าเล็กน้อยเพื่อให้โค้ดอื่นทำงานก่อน
+					task.delay(0.1, function()
+						if player and player.Parent and playerData then
+							print("[InventoryService] FINAL HP FIX - Setting HP to: " .. fullHP)
 
-					-- เรียกใช้ SyncPlayerStats (แต่ไม่ผ่าน UpdatePlayerHP)
-					_G.GameManager.playerManager:SyncPlayerStats(player)
+							-- ตั้งค่า HP ในข้อมูลผู้เล่นอีกครั้ง
+							playerData.stats.hp = fullHP
+
+							-- อัปเดต HP โดยตรง (ไม่ผ่านฟังก์ชันอัปเดตสถานะอื่น)
+							if player.Character and player.Character:FindFirstChild("Humanoid") then
+								player.Character.Humanoid.MaxHealth = newMaxHP
+								player.Character.Humanoid.Health = fullHP
+							end
+
+							-- อัปเดตให้ client โดยตรง แทนที่จะใช้ SyncPlayerStats
+							if _G.GameManager.playerManager.updatePlayerStatsEvent then
+								local statsToSync = {
+									hp = fullHP,
+									maxHp = newMaxHP,
+									mp = playerData.stats.mp,
+									maxMp = playerData.stats.maxMp,
+									attack = playerData.stats.attack,
+									defense = playerData.stats.defense,
+									magic = playerData.stats.magic,
+									level = playerData.stats.level or 1,
+									class = playerData.class,
+									money = playerData.stats.money
+								}
+
+								_G.GameManager.playerManager.updatePlayerStatsEvent:FireClient(
+									player, 
+									player.UserId, 
+									statsToSync
+								)
+							end
+
+							-- แทนที่ healthChanged connection ชั่วคราว
+							if _G.GameManager.playerManager.healthSyncConnections and 
+								_G.GameManager.playerManager.healthSyncConnections[player.UserId] and
+								_G.GameManager.playerManager.healthSyncConnections[player.UserId].healthChanged then
+
+								local oldConnection = _G.GameManager.playerManager.healthSyncConnections[player.UserId].healthChanged
+								oldConnection:Disconnect()
+
+								if player.Character and player.Character:FindFirstChild("Humanoid") then
+									-- สร้าง connection ใหม่หลังจากตั้งค่า HP แล้ว
+									local humanoid = player.Character:FindFirstChild("Humanoid")
+									local newConnection = humanoid.HealthChanged:Connect(function(newHealth)
+										if newHealth < humanoid.Health then
+											local damage = humanoid.Health - newHealth
+
+											local currentPlayerData = _G.GameManager.playerManager:GetPlayerData(player)
+											if currentPlayerData then
+												local newStatsHP = math.max(0, currentPlayerData.stats.hp - damage)
+												_G.GameManager.playerManager:UpdatePlayerHP(player, newStatsHP)
+
+												if _G.GameManager.playerManager.playerDamagedEvent then
+													_G.GameManager.playerManager.playerDamagedEvent:FireClient(player, {
+														oldHP = currentPlayerData.stats.hp + damage,
+														newHP = newStatsHP,
+														maxHP = currentPlayerData.stats.maxHp,
+														damage = damage,
+														source = "Humanoid"
+													})
+												end
+											end
+										end
+									end)
+
+									_G.GameManager.playerManager.healthSyncConnections[player.UserId].healthChanged = newConnection
+								end
+							end
+						end
+					end)
 				else
-					print("[InventoryService] Item already used for HP restore before: " .. itemId)
+					print("[InventoryService] Item already used for HP restore before: " .. itemId .. 
+						" (HP remains at: " .. playerData.stats.hp .. "/" .. newMaxHP .. ")")
 				end
 			end
 		else
@@ -502,7 +568,53 @@ function InventoryService.HandleEquipmentSlotClick(player, slotType)
 	return true, "Equipment inspection successful"
 end
 
--- Handle using items
+-- เพิ่มฟังก์ชันเพื่อการรีเซ็ตค่า HP หลังจากใช้ไอเทมฟื้นพลัง
+function InventoryService.ForceHealToFull(player)
+	local playerData = _G.GameManager and _G.GameManager.playerManager:GetPlayerData(player)
+	if not playerData then return false end
+
+	local fullHP = playerData.stats.maxHp
+
+	-- ตั้งค่า HP ใหม่
+	playerData.stats.hp = fullHP
+
+	-- อัปเดต Humanoid โดยตรง
+	if player.Character and player.Character:FindFirstChild("Humanoid") then
+		player.Character.Humanoid.Health = fullHP
+	end
+
+	-- ส่งข้อมูลให้ client
+	if _G.GameManager.playerManager.updatePlayerStatsEvent then
+		local statsToSync = {
+			hp = fullHP,
+			maxHp = playerData.stats.maxHp,
+			mp = playerData.stats.mp,
+			maxMp = playerData.stats.maxMp,
+			attack = playerData.stats.attack,
+			defense = playerData.stats.defense,
+			magic = playerData.stats.magic,
+			level = playerData.stats.level or 1,
+			class = playerData.class,
+			money = playerData.stats.money
+		}
+
+		_G.GameManager.playerManager.updatePlayerStatsEvent:FireClient(
+			player, 
+			player.UserId, 
+			statsToSync
+		)
+	end
+
+	-- รีเซ็ตประวัติการฟื้น HP ของอุปกรณ์ทั้งหมด
+	if playerHealedItems[player.UserId] then
+		playerHealedItems[player.UserId] = {}
+	end
+
+	print("[InventoryService] Force healed player to full: " .. fullHP .. "/" .. playerData.stats.maxHp)
+	return true
+end
+
+-- Handle using items (แก้ไขให้ใช้เทคนิค delay)
 function InventoryService.UseItemForPlayer(player, inventoryId)
 	local inventory = InventoryService.GetPlayerInventory(player)
 	if not inventory then
@@ -556,12 +668,55 @@ function InventoryService.UseItemForPlayer(player, inventoryId)
 							-- รีเซ็ตประวัติการฟื้น HP สำหรับทุกอุปกรณ์
 							playerHealedItems[player.UserId] = {}
 							print("[InventoryService] Reset healing history after using healing item")
+
+							-- ใช้เทคนิค delay เพื่อให้แน่ใจว่า HP จะไม่ถูกรีเซ็ตหลังจากใช้ไอเทม
+							task.delay(0.1, function()
+								-- ฟื้น HP ตามปกติด้วยฟังก์ชันของเรา (ไม่ใช้ UpdatePlayerStats)
+								if _G.GameManager and playerData then
+									local newHP = math.min(playerData.stats.hp, playerData.stats.maxHp)
+									print("[InventoryService] Ensuring HP is correct after item use: " .. newHP)
+
+									-- อัปเดต HP โดยตรง (ไม่ผ่านฟังก์ชันอัปเดตสถานะอื่น)
+									if player.Character and player.Character:FindFirstChild("Humanoid") then
+										player.Character.Humanoid.Health = newHP
+									end
+
+									-- อัปเดตให้ client โดยตรง
+									if _G.GameManager.playerManager.updatePlayerStatsEvent then
+										local statsToSync = {
+											hp = newHP,
+											maxHp = playerData.stats.maxHp,
+											mp = playerData.stats.mp,
+											maxMp = playerData.stats.maxMp,
+											attack = playerData.stats.attack,
+											defense = playerData.stats.defense,
+											magic = playerData.stats.magic,
+											level = playerData.stats.level or 1,
+											class = playerData.class,
+											money = playerData.stats.money
+										}
+
+										_G.GameManager.playerManager.updatePlayerStatsEvent:FireClient(
+											player, 
+											player.UserId, 
+											statsToSync
+										)
+									end
+								end
+							end)
 						end
 
 						-- อัปเดตสถิติถ้ามีการเปลี่ยนแปลง
 						if changed then
-							if _G.GameManager then
-								_G.GameManager.playerManager:UpdatePlayerStats(player)
+							-- ใช้ ForceHealToFull ถ้าเป็นไอเทมฟื้น HP
+							if itemData.stats.hp and itemData.stats.hp > 0 then
+								task.delay(0.05, function()
+									InventoryService.ForceHealToFull(player)
+								end)
+							else
+								if _G.GameManager then
+									_G.GameManager.playerManager:UpdatePlayerStats(player)
+								end
 							end
 
 							-- ส่งข้อความยืนยัน
@@ -617,7 +772,9 @@ function InventoryService.ResetItemHealingHistory(player, itemId)
 	if player and player.UserId and playerHealedItems[player.UserId] and itemId then
 		playerHealedItems[player.UserId][itemId] = nil
 		print("[InventoryService] Reset healing history for item: " .. itemId)
+		return true
 	end
+	return false
 end
 
 -- เพิ่มฟังก์ชัน Reset HP Healing History สำหรับทุกผู้เล่น
