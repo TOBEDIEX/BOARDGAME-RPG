@@ -1,6 +1,6 @@
 -- BoardSystem.lua
 -- Core module for board system and character movement
--- Version: 3.1.0 (Support for unlimited steps from dice bonus)
+-- Version: 3.2.0 (Fixed Unlimited Steps Support)
 
 local BoardSystem = {}
 BoardSystem.__index = BoardSystem
@@ -14,6 +14,9 @@ local DirectionalPathfinder = require(script.Parent:WaitForChild("DirectionalPat
 
 -- Constants for board directions
 local DIRECTIONS = DirectionalPathfinder.DIRECTIONS
+
+-- DEBUG MODE (เพิ่มการตรวจสอบจำนวนก้าวที่ละเอียดขึ้น)
+local DEBUG_MOVEMENT = true
 
 function BoardSystem.new()
 	local self = setmetatable({}, BoardSystem)
@@ -137,48 +140,116 @@ function BoardSystem:GetPlayersOnTile(tileId)
 	return players
 end
 
+-- ฟังก์ชันแก้ไขสำหรับรองรับจำนวนก้าวที่มากขึ้น
 function BoardSystem:GenerateAutoPath(playerId, startTileId, prevTileId, stepsRemaining)
+	if DEBUG_MOVEMENT then
+		print("[BoardSystem] GenerateAutoPath: Player " .. playerId .. 
+			" from tile " .. startTileId .. " with " .. stepsRemaining .. " steps remaining")
+	end
+
 	local currentTileId = startTileId
 	local currentPrevTileId = prevTileId
 	local path = {currentTileId}
 	local remainingSteps = stepsRemaining
 
-	-- แก้ไขให้รองรับจำนวนก้าวไม่จำกัด (ไม่ใช่แค่ 6)
-	while remainingSteps > 0 do
+	-- บันทึกทางเดินที่เคยผ่านมาแล้วเพื่อป้องกันการวนซ้ำ
+	local visitedTiles = {[currentTileId] = true}
+	local maxIteration = 100 -- ป้องกันการลูปไม่สิ้นสุด
+	local iteration = 0
+
+	-- รองรับก้าวไม่จำกัด ไม่ว่าจะกี่ก้าวก็ตาม
+	while remainingSteps > 0 and iteration < maxIteration do
+		iteration = iteration + 1
+
 		-- Get available directions
 		local availableDirections = self:GetAvailableDirections(currentTileId, currentPrevTileId)
+
+		if DEBUG_MOVEMENT and #availableDirections == 0 then
+			print("[BoardSystem] -> Dead end at tile " .. currentTileId)
+		end
 
 		-- Stop if dead end
 		if #availableDirections == 0 then break end
 
-		-- Auto-move only when there's only one way forward
-		if #availableDirections == 1 then
-			local nextTileId = availableDirections[1].tileId
+		-- กรองทางเลือกที่ไม่ใช่ก้าวถอยหลัง (ย้อนกลับไปทางเดิม)
+		local validDirections = {}
+		for _, dirInfo in ipairs(availableDirections) do
+			-- ตรวจสอบว่าไม่ใช่การย้อนกลับและไม่เคยผ่านช่องนี้มาแล้ว
+			if dirInfo.tileId ~= currentPrevTileId and not visitedTiles[dirInfo.tileId] then
+				table.insert(validDirections, dirInfo)
+			end
+		end
 
-			-- Make sure we're not going backwards
-			if nextTileId ~= currentPrevTileId then
-				table.insert(path, nextTileId)
-				currentPrevTileId = currentTileId
-				currentTileId = nextTileId
-				remainingSteps = remainingSteps - 1
-			else
-				break -- Found previous tile, treat as fork
+		-- Auto-move only when there's only one valid way forward
+		if #validDirections == 1 then
+			local nextTileId = validDirections[1].tileId
+
+			-- บันทึกช่องที่เดินผ่าน
+			visitedTiles[nextTileId] = true
+
+			-- เดินไปยังช่องถัดไป
+			table.insert(path, nextTileId)
+			currentPrevTileId = currentTileId
+			currentTileId = nextTileId
+			remainingSteps = remainingSteps - 1
+
+			if DEBUG_MOVEMENT then
+				print("[BoardSystem] -> Auto-move to tile " .. nextTileId .. 
+					", remaining steps: " .. remainingSteps)
 			end
 		else
-			break -- Multiple directions, player must choose
+			-- Multiple directions or dead end, player must choose
+			if DEBUG_MOVEMENT then
+				print("[BoardSystem] -> Found fork with " .. #validDirections .. " options at tile " .. currentTileId)
+			end
+			break
 		end
 	end
 
-	-- Return path info
-	return {
+	if iteration >= maxIteration then
+		print("[BoardSystem] WARNING: Max iteration reached for player " .. playerId .. 
+			". Possible infinite loop detected.")
+	end
+
+	-- ตรวจสอบว่าใช้ก้าวหมดหรือไม่
+	local autoComplete = (remainingSteps == 0)
+
+	if DEBUG_MOVEMENT then
+		print("[BoardSystem] Path generation complete: " .. #path .. 
+			" steps, auto-complete: " .. tostring(autoComplete) .. 
+			", remaining steps: " .. remainingSteps)
+	end
+
+	-- ข้อมูลทางเดินที่จะส่งกลับ
+	local pathInfo = {
 		path = path,
-		autoComplete = remainingSteps == 0,
+		autoComplete = autoComplete,
 		endTileId = path[#path],
 		stepsRemaining = remainingSteps,
-		endPrevTileId = path[#path-1] or currentPrevTileId,
-		availableDirections = remainingSteps > 0 and 
-			self:GetAvailableDirections(path[#path], path[#path-1] or currentPrevTileId) or {}
+		endPrevTileId = path[#path-1] or currentPrevTileId
 	}
+
+	-- คำนวณทิศทางที่เลือกได้ ถ้ายังมีก้าวเหลือและไม่ใช่ตัน
+	if remainingSteps > 0 then
+		pathInfo.availableDirections = self:GetAvailableDirections(path[#path], path[#path-1] or currentPrevTileId)
+
+		-- กรองทิศทางที่อาจจะวนกลับไปทางเดิม
+		local filteredDirections = {}
+		for _, dirInfo in ipairs(pathInfo.availableDirections) do
+			if not visitedTiles[dirInfo.tileId] or #pathInfo.availableDirections <= 1 then
+				table.insert(filteredDirections, dirInfo)
+			end
+		end
+
+		-- ถ้าทุกทางเคยเดินผ่านหมดแล้ว ให้ใช้ทุกทาง
+		if #filteredDirections > 0 then
+			pathInfo.availableDirections = filteredDirections
+		end
+	else
+		pathInfo.availableDirections = {}
+	end
+
+	return pathInfo
 end
 
 function BoardSystem:ProcessPlayerMove(playerId, diceResult)
@@ -187,8 +258,11 @@ function BoardSystem:ProcessPlayerMove(playerId, diceResult)
 
 	if not currentTileId then return false end
 
-	-- แสดงผลลัพธ์ลูกเต๋า (รองรับทั้งค่าน้อยและมากได้)
-	print("[BoardSystem] Player ID " .. playerId .. " rolled: " .. diceResult .. " from tile " .. currentTileId)
+	-- แสดงผลลัพธ์ลูกเต๋า
+	if DEBUG_MOVEMENT then
+		print("[BoardSystem] Player ID " .. playerId .. " rolled: " .. diceResult .. 
+			" from tile " .. currentTileId)
+	end
 
 	-- Store remaining steps
 	self.playerRemainingSteps = self.playerRemainingSteps or {}
@@ -243,6 +317,22 @@ function BoardSystem:ProcessPlayerMove(playerId, diceResult)
 		-- Update remaining steps
 		self.playerRemainingSteps[playerId] = pathInfo.stepsRemaining
 
+		-- แสดงจำนวนก้าวที่เหลือในทางเลือกแต่ละทาง
+		if DEBUG_MOVEMENT then
+			print("[BoardSystem] Player ID " .. playerId .. " needs to choose direction")
+			print("[BoardSystem] Available directions: " .. #pathInfo.availableDirections)
+			for i, dirInfo in ipairs(pathInfo.availableDirections) do
+				print("  " .. i .. ". Direction: " .. dirInfo.direction .. 
+					", Tile: " .. dirInfo.tileId)
+			end
+			print("[BoardSystem] Steps remaining: " .. pathInfo.stepsRemaining)
+		end
+
+		-- เพิ่มข้อมูลจำนวนก้าวที่เหลือในแต่ละทางเลือก
+		for i, dirInfo in ipairs(pathInfo.availableDirections) do
+			dirInfo.stepsRemaining = pathInfo.stepsRemaining
+		end
+
 		return {
 			autoPath = pathInfo.path,
 			endTileId = pathInfo.endTileId,
@@ -259,11 +349,23 @@ function BoardSystem:ProcessDirectionChoice(playerId, direction)
 	local prevTileId = self.playerLastTile[playerId]
 	local stepsRemaining = self.playerRemainingSteps[playerId] or 0
 
-	if stepsRemaining <= 0 then return false end
+	if DEBUG_MOVEMENT then
+		print("[BoardSystem] ProcessDirectionChoice: Player " .. playerId .. 
+			" chose " .. direction .. ", from tile " .. currentTileId .. 
+			", with " .. stepsRemaining .. " steps remaining")
+	end
+
+	if stepsRemaining <= 0 then 
+		print("[BoardSystem] ERROR: No steps remaining but ProcessDirectionChoice was called")
+		return false 
+	end
 
 	-- Get next tile based on direction
 	local nextTileId = self:GetNextTileFromDirection(currentTileId, direction, prevTileId)
-	if not nextTileId then return false end
+	if not nextTileId then 
+		print("[BoardSystem] ERROR: No next tile found for direction " .. direction)
+		return false 
+	end
 
 	-- Move one step in chosen direction
 	self:SetPlayerPosition(playerId, nextTileId, currentTileId)
@@ -271,6 +373,11 @@ function BoardSystem:ProcessDirectionChoice(playerId, direction)
 	-- Reduce remaining steps
 	stepsRemaining = stepsRemaining - 1
 	self.playerRemainingSteps[playerId] = stepsRemaining
+
+	if DEBUG_MOVEMENT then
+		print("[BoardSystem] -> Moved to tile " .. nextTileId .. 
+			", remaining steps: " .. stepsRemaining)
+	end
 
 	-- Continue movement if steps remain
 	if stepsRemaining > 0 then
@@ -323,6 +430,11 @@ function BoardSystem:ProcessDirectionChoice(playerId, direction)
 			-- Update remaining steps
 			self.playerRemainingSteps[playerId] = pathInfo.stepsRemaining
 
+			-- เพิ่มข้อมูลจำนวนก้าวที่เหลือในแต่ละทางเลือก
+			for i, dirInfo in ipairs(pathInfo.availableDirections) do
+				dirInfo.stepsRemaining = pathInfo.stepsRemaining
+			end
+
 			return {
 				autoPath = pathInfo.path,
 				endTileId = pathInfo.endTileId,
@@ -346,6 +458,10 @@ function BoardSystem:ProcessDirectionChoice(playerId, direction)
 		-- Call path complete callback
 		if self.onPlayerPathComplete then
 			self.onPlayerPathComplete(playerId, nextTileId)
+		end
+
+		if DEBUG_MOVEMENT then
+			print("[BoardSystem] Movement complete, all steps used")
 		end
 
 		return {
