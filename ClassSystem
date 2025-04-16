@@ -222,9 +222,8 @@ function ClassSystem:UpdatePlayerStatsFromClass(player, playerManager)
 
 		-- Update combat stats - ใช้ค่าที่มีหรือค่าพื้นฐานถ้าไม่มี
 		playerData.stats.attack = baseStats.ATK or 10
-		playerData.stats.defense = 10  -- แก้ไข: ค่าพื้นฐานถ้าไม่มี DEF
+		playerData.stats.defense = 0  -- แก้ไข: ค่าพื้นฐานถ้าไม่มี DEF
 		playerData.stats.magic = baseStats.MAGIC or 10
-		playerData.stats.magicDefense = 10  -- แก้ไข: ค่าพื้นฐานถ้าไม่มี MDEF
 		playerData.stats.agility = 10  -- แก้ไข: ค่าพื้นฐานถ้าไม่มี AGI
 
 		-- Store class
