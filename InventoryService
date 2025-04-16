@@ -1,6 +1,6 @@
 -- InventoryService.server.lua
--- Server-side inventory management service (Optimized + Crystal + HP Fix)
--- Version: 4.0.0
+-- Server-side inventory management service (Fixed HP & Crystal Usage)
+-- Version: 4.1.0
 
 -- Services
 local ServerStorage = game:GetService("ServerStorage")
@@ -36,7 +36,6 @@ else
 				iconId = "",
 				stats = { hp = 50 }
 			},
-			-- Add DiceBonus item
 			dice_bonus_1 = {
 				id = "dice_bonus_1",
 				name = "Lucky Dice +1",
@@ -49,7 +48,6 @@ else
 				consumable = true,
 				stats = { diceRollBonus = 1 }
 			},
-			-- Add Crystal items
 			crystal_1 = {
 				id = "crystal_1",
 				name = "Crystal 1",
@@ -129,9 +127,11 @@ local remoteEvents = {
 	"TransferItem",
 	"InspectItem",
 	"EquipmentSlotClicked",
-	"DiceBonus", -- Add Remote for DiceBonus
-	"CrystalMove", -- Add Remote for Crystal movement
-	"CrystalUIReset" -- Add Remote for Crystal UI reset
+	"DiceBonus",
+	"CrystalMove",
+	"CrystalUIReset",
+	"CrystalMoveComplete", -- For explicit crystal movement completion
+	"ItemPermissionUpdate" -- NEW: For item permission updates
 }
 
 -- Create required RemoteEvents
@@ -180,6 +180,20 @@ local function getGameManager()
 	end
 
 	return _G.GameManager
+end
+
+-- IMPROVED: Get BoardSystem for crystal movements
+local function getBoardSystem()
+	if _G.BoardSystem then
+		return _G.BoardSystem
+	end
+
+	local gameManager = getGameManager()
+	if gameManager and gameManager.boardSystem then
+		return gameManager.boardSystem
+	end
+
+	return nil
 end
 
 -- Safe function to get player data
@@ -346,7 +360,7 @@ function InventoryService.RemoveItemFromPlayer(player, inventoryId, quantity)
 	return success, message
 end
 
--- Fully heal a player
+-- IMPROVED: Fully heal a player
 function InventoryService.HealToMax(player)
 	if not player then return false end
 
@@ -366,24 +380,29 @@ function InventoryService.HealToMax(player)
 
 	-- Update client
 	local gameManager = getGameManager()
-	if gameManager and gameManager.playerManager and gameManager.playerManager.updatePlayerStatsEvent then
-		local statsToSync = {
-			hp = playerData.stats.maxHp,
-			maxHp = playerData.stats.maxHp
-		}
+	if gameManager and gameManager.playerManager then
+		-- Use appropriate update method
+		if gameManager.playerManager.UpdatePlayerHP then
+			gameManager.playerManager:UpdatePlayerHP(player, playerData.stats.maxHp)
+		elseif gameManager.playerManager.updatePlayerStatsEvent then
+			local statsToSync = {
+				hp = playerData.stats.maxHp,
+				maxHp = playerData.stats.maxHp
+			}
 
-		gameManager.playerManager.updatePlayerStatsEvent:FireClient(
-			player, 
-			player.UserId, 
-			statsToSync
-		)
+			gameManager.playerManager.updatePlayerStatsEvent:FireClient(
+				player, 
+				player.UserId, 
+				statsToSync
+			)
+		end
 	end
 
 	print("[InventoryService] HealToMax: Player HP updated from " .. oldHp .. " to " .. playerData.stats.maxHp)
 	return true
 end
 
--- Update player stats based on equipment (improved for HP handling)
+-- IMPROVED: Update player stats based on equipment (better HP handling)
 function InventoryService.UpdatePlayerStats(player, equipmentStats)
 	-- If there's a player manager, update stats
 	local gameManager = getGameManager()
@@ -394,25 +413,37 @@ function InventoryService.UpdatePlayerStats(player, equipmentStats)
 		return false
 	end
 
-	-- Store base stats
-	local baseStats = playerData.baseStats
+	-- FIXED: Create consistent baseStats based on class if missing
+	if not playerData.baseStats or type(playerData.baseStats) ~= "table" then
+		print("[InventoryService] Creating new baseStats from class data...")
 
-	-- Check if baseStats exists
-	if not baseStats then
-		print("[InventoryService] Warning: baseStats not found, creating new baseStats...")
+		-- Create baseStats by getting fresh class stats
+		local className = playerData.class
+		local freshStats = nil
 
-		-- Create baseStats from current values
-		baseStats = {
-			maxHp = playerData.stats.maxHp,
-			hp = playerData.stats.hp,
-			maxMp = playerData.stats.maxMp,
-			mp = playerData.stats.mp,
-			attack = playerData.stats.attack,
-			defense = playerData.stats.defense,
-			magic = playerData.stats.magic,
-			money = playerData.stats.money or 100
-		}
-		playerData.baseStats = baseStats
+		-- Get default class stats using playerManager's method
+		if gameManager.playerManager.GetDefaultStatsForClass then
+			freshStats = gameManager.playerManager:GetDefaultStatsForClass(className)
+		end
+
+		-- If we got fresh stats, use them as base
+		if freshStats then
+			playerData.baseStats = table.clone(freshStats)
+			print("[InventoryService] Created baseStats from class defaults for " .. (className or "Unknown"))
+		else
+			-- Otherwise create from current values
+			playerData.baseStats = {
+				maxHp = playerData.stats.maxHp,
+				hp = playerData.stats.hp,
+				maxMp = playerData.stats.maxMp,
+				mp = playerData.stats.mp,
+				attack = playerData.stats.attack,
+				defense = playerData.stats.defense,
+				magic = playerData.stats.magic,
+				money = playerData.stats.money or 100
+			}
+			print("[InventoryService] Created baseStats from current stats")
+		end
 	end
 
 	-- Remember old values for comparison
@@ -420,44 +451,74 @@ function InventoryService.UpdatePlayerStats(player, equipmentStats)
 	local oldHp = playerData.stats.hp
 	local hpRatio = oldMaxHp > 0 and (oldHp / oldMaxHp) or 1
 
-	-- Calculate total stats from base plus equipment
-	for statName, baseValue in pairs(baseStats) do
-		if equipmentStats[statName] then
-			playerData.stats[statName] = baseValue + equipmentStats[statName]
+	-- Store the values for debugging
+	print("[InventoryService] Before stat update - HP: " .. oldHp .. "/" .. oldMaxHp .. " (ratio: " .. string.format("%.2f", hpRatio) .. ")")
+
+	-- Create a copy of base stats for calculation
+	local newStats = {}
+	for statName, baseValue in pairs(playerData.baseStats) do
+		newStats[statName] = baseValue
+	end
+
+	-- Apply equipment stats to the copy
+	for statName, statValue in pairs(equipmentStats) do
+		if newStats[statName] ~= nil then
+			newStats[statName] = newStats[statName] + statValue
 		else
-			playerData.stats[statName] = baseValue
+			newStats[statName] = statValue
 		end
 	end
 
-	-- Fix: Add defense from equipment directly to maxHp
-	-- Defense 1 point adds 5 maxHp
-	local defBonus = equipmentStats.defense or 0
-	local hpFromDef = defBonus * 5  -- Ratio: defense 1 = maxHp 5
+	-- IMPROVED: Apply defense bonus to maxHp more consistently
+	if equipmentStats.defense then
+		local defBonus = equipmentStats.defense
+		local hpFromDef = defBonus * 5  -- Ratio: defense 1 = maxHp 5
 
-	-- Add MaxHP from defense
-	playerData.stats.maxHp = baseStats.maxHp + hpFromDef
+		-- Calculate new maxHp
+		newStats.maxHp = playerData.baseStats.maxHp + hpFromDef
+	end
 
-	-- Handle HP changes based on maxHp difference
-	local maxHpDiff = playerData.stats.maxHp - oldMaxHp
+	-- IMPROVED: Calculate new HP based on ratio
+	local newMaxHp = newStats.maxHp
+	local maxHpDiff = newMaxHp - oldMaxHp
+	local newHp = 0
 
-	if maxHpDiff > 0 then
-		-- If maxHp increased, add the difference to current HP
-		playerData.stats.hp = oldHp + maxHpDiff
-		print("[InventoryService] MaxHp increased by " .. maxHpDiff .. ", HP set to " .. playerData.stats.hp)
-	elseif maxHpDiff < 0 then
-		-- If maxHp decreased, maintain the same HP ratio
-		playerData.stats.hp = math.floor(playerData.stats.maxHp * hpRatio)
-		print("[InventoryService] MaxHp decreased by " .. -maxHpDiff .. ", HP ratio " .. 
-			string.format("%.2f", hpRatio) .. " maintained, new HP: " .. playerData.stats.hp)
+	if maxHpDiff >= 0 then
+		-- If maxHp increased or stayed the same, scale HP by ratio
+		newHp = math.floor(newMaxHp * hpRatio)
+
+		-- But never go below current HP (unless max decreased)
+		newHp = math.max(newHp, oldHp)
+	else
+		-- If maxHp decreased, scale HP by ratio
+		newHp = math.floor(newMaxHp * hpRatio)
 	end
 
 	-- Ensure HP is within valid range
-	playerData.stats.hp = math.max(1, math.min(playerData.stats.hp, playerData.stats.maxHp))
+	newHp = math.max(1, math.min(newHp, newMaxHp))
+
+	-- Update HP in the new stats
+	newStats.hp = newHp
+
+	-- Log the changes
+	print("[InventoryService] After stat update - HP: " .. newHp .. "/" .. newMaxHp .. 
+		" (maxHp diff: " .. maxHpDiff .. ", new ratio: " .. 
+		string.format("%.2f", newHp/newMaxHp) .. ")")
+
+	-- Update player.stats with new values
+	for statName, newValue in pairs(newStats) do
+		playerData.stats[statName] = newValue
+	end
 
 	-- Update player stats through game manager
-	pcall(function()
-		gameManager.playerManager:UpdatePlayerStats(player)
-	end)
+	if gameManager.playerManager.UpdatePlayerStats then
+		gameManager.playerManager:UpdatePlayerStats(player, playerData.stats)
+	elseif gameManager.playerManager.SyncPlayerStats then
+		gameManager.playerManager:SyncPlayerStats(player)
+	elseif gameManager.playerManager.UpdatePlayerHP then
+		-- At minimum, update HP
+		gameManager.playerManager:UpdatePlayerHP(player, newHp)
+	end
 
 	-- Double-check humanoid health
 	if player.Character and player.Character:FindFirstChild("Humanoid") then
@@ -467,7 +528,7 @@ function InventoryService.UpdatePlayerStats(player, equipmentStats)
 	return true
 end
 
--- Function to equip an item (improved for HP handling)
+-- IMPROVED: Function to equip an item (improved for HP handling)
 function InventoryService.EquipItemForPlayer(player, inventoryId)
 	local inventory = InventoryService.GetPlayerInventory(player)
 	if not inventory then
@@ -494,25 +555,26 @@ function InventoryService.EquipItemForPlayer(player, inventoryId)
 		-- Update player stats (includes HP handling)
 		InventoryService.UpdatePlayerStats(player, equipmentStats)
 
-		-- Special handling for full HP restoration if maxHp increased substantially
+		-- IMPROVED: More consistent healing logic for equipment
 		if playerData and playerData.stats then
 			local newMaxHp = playerData.stats.maxHp
 			local hpIncrease = newMaxHp - oldMaxHp
 
-			-- If HP increased by 10% or more, restore full HP
-			if hpIncrease >= (oldMaxHp * 0.1) or hpIncrease >= 20 then
-				print("[InventoryService] Significant MaxHP increase detected, restoring full HP")
+			-- FIXED: Only restore full HP in very specific cases
+			-- If HP increased SIGNIFICANTLY (25% or more), restore full HP
+			if hpIncrease >= (oldMaxHp * 0.25) then
+				print("[InventoryService] Major MaxHP increase detected (25%+), restoring full HP")
 				InventoryService.HealToMax(player)
-				end
-				end
+			end
+		end
 
-				-- Send updated inventory to client
-InventoryService.SendInventoryToClient(player)
+		-- Send updated inventory to client
+		InventoryService.SendInventoryToClient(player)
 
-print("[InventoryService] Player " .. player.Name .. " equipped item " .. inventoryId)
-end
+		print("[InventoryService] Player " .. player.Name .. " equipped item " .. inventoryId)
+	end
 
-return success, message
+	return success, message
 end
 
 -- Function to unequip an item (improved for HP handling)
@@ -520,22 +582,6 @@ function InventoryService.UnequipItemForPlayer(player, slotType)
 	local inventory = InventoryService.GetPlayerInventory(player)
 	if not inventory then
 		return false, "Failed to get player inventory"
-	end
-
-	-- Get player data and current HP before unequipping
-	local playerData = getPlayerData(player)
-	local oldMaxHp = 0
-	local oldHp = 0
-	local hpRatio = 1.0
-
-	if playerData and playerData.stats then
-		oldMaxHp = playerData.stats.maxHp
-		oldHp = playerData.stats.hp
-
-		-- Calculate current HP ratio
-		if oldMaxHp > 0 then
-			hpRatio = oldHp / oldMaxHp
-		end
 	end
 
 	-- Unequip the item
@@ -579,41 +625,7 @@ function InventoryService.HandleEquipmentSlotClick(player, slotType)
 	return true
 end
 
--- Safe function to update player stats without errors
-function InventoryService.SafeUpdatePlayerStats(player, stats)
-	if not player then return false end
-
-	local gameManager = getGameManager()
-	if not gameManager or not gameManager.playerManager then
-		return false
-	end
-
-	local playerData = gameManager.playerManager:GetPlayerData(player)
-	if not playerData or not playerData.stats then
-		return false
-	end
-
-	-- Safe way to update stats without errors
-	local success = pcall(function()
-		-- Update modified stats
-		for statName, statValue in pairs(stats) do
-			if playerData.stats[statName] ~= nil then
-				playerData.stats[statName] = statValue
-			end
-		end
-
-		-- Call update function if it exists
-		if gameManager.playerManager.UpdatePlayerStats then
-			gameManager.playerManager:UpdatePlayerStats(player)
-		elseif gameManager.playerManager.updatePlayerStatsEvent then
-			gameManager.playerManager.updatePlayerStatsEvent:FireClient(player, player.UserId, playerData.stats)
-		end
-	end)
-
-	return success
-end
-
--- Check if player is using a crystal
+-- IMPROVED: Check if player is using a crystal
 function InventoryService.IsPlayerUsingCrystal(player)
 	if not player then return false end
 
@@ -625,9 +637,14 @@ function InventoryService.IsPlayerUsingCrystal(player)
 	end
 
 	-- Check board system
-	local boardSystem = _G.BoardSystem or (getGameManager() and getGameManager().boardSystem)
+	local boardSystem = getBoardSystem()
 	if not boardSystem then
 		return false
+	end
+
+	-- Check if crystalMovements exists in BoardService
+	if boardSystem.activeCrystalMovements and boardSystem.activeCrystalMovements[playerId] then
+		return true
 	end
 
 	-- Check last movement data for crystal flag
@@ -653,7 +670,7 @@ function InventoryService.IsPlayerUsingCrystal(player)
 	return false
 end
 
--- Handle using items (Updated for Crystal support and optimized)
+-- IMPROVED: Handle using items (Better crystal support)
 function InventoryService.UseItemForPlayer(player, inventoryId)
 	local inventory = InventoryService.GetPlayerInventory(player)
 	if not inventory then
@@ -674,78 +691,105 @@ function InventoryService.UseItemForPlayer(player, inventoryId)
 		return false, "Item cannot be used"
 	end
 
-	-- Check if player is already using a crystal
+	-- DEBUG: Log item usage attempt for troubleshooting
+	print("[InventoryService] Player " .. player.Name .. " trying to use item: " .. itemName .. " (ID: " .. itemId .. ")")
+
+	-- IMPROVED: Check if player is already using a crystal
 	if InventoryService.IsPlayerUsingCrystal(player) then
+		print("[InventoryService] Blocked item use - crystal movement already active")
 		return false, "You can't use items while crystal movement is active"
+	end
+
+	-- Check if it's a Crystal item
+	local isCrystal = item.stats and item.stats.move and item.stats.move > 0
+
+	if isCrystal then
+		-- Check if it's player's turn
+		local gameManager = getGameManager()
+		local turnSystem = gameManager and gameManager.turnSystem
+		if not turnSystem then
+			print("[InventoryService] Turn system not available")
+			return false, "Turn system not available"
 		end
 
-		-- Check if it's a Crystal item
-local isCrystal = item.stats and item.stats.move and item.stats.move > 0
+		-- Check player's turn status
+		local isPlayerTurn = turnSystem:GetCurrentPlayerTurn() == player.UserId
+		print("[InventoryService] Is player's turn: " .. tostring(isPlayerTurn) .. 
+			" (Current turn: " .. tostring(turnSystem:GetCurrentPlayerTurn()) .. 
+			", Player ID: " .. player.UserId .. ")")
 
-if isCrystal then
-	-- Check if it's player's turn
-	local gameManager = getGameManager()
-	local turnSystem = gameManager and gameManager.turnSystem
-	if not turnSystem then
-		return false, "Turn system not available"
-	end
-
-	if turnSystem:GetCurrentPlayerTurn() ~= player.UserId then
-		return false, "You can only use crystals during your turn"
-	end
-
-	-- Check if player is already moving
-	local boardSystem = _G.BoardSystem or (gameManager and gameManager.boardSystem)
-	if not boardSystem then
-		return false, "Board system not available"
-	end
-
-	-- Check if player is in movement state
-	if boardSystem.playerMovementState and 
-		boardSystem.playerMovementState[player.UserId] and
-		(boardSystem.playerMovementState[player.UserId] == "auto_complete" or 
-			boardSystem.playerMovementState[player.UserId] == "need_choice") then
-		return false, "You cannot use crystals while moving"
-	end
-
-	-- Check for remaining steps
-	if boardSystem.playerRemainingSteps and 
-		boardSystem.playerRemainingSteps[player.UserId] and 
-		boardSystem.playerRemainingSteps[player.UserId] > 0 then
-		return false, "You cannot use crystals while moving"
-	end
-
-	-- Number of steps to move
-	local steps = item.stats.move
-
-	-- Mark player as using crystal
-	playerCrystalMovements[player.UserId] = {
-		steps = steps,
-		timestamp = os.time(),
-		itemId = itemId
-	}
-
-	-- Start crystal movement
-	if boardSystem.ProcessCrystalMove then
-		local success = boardSystem:ProcessCrystalMove(player, steps)
-
-		-- Clear crystal movement if failed
-		if not success then
-			playerCrystalMovements[player.UserId] = nil
-			return false, "Cannot use crystal at this time"
+		if not isPlayerTurn then
+			return false, "You can only use crystals during your turn"
 		end
 
-		-- Add cleanup timer
-		task.delay(10, function()
-			playerCrystalMovements[player.UserId] = nil
-		end)
+		-- Check if player is already moving
+		local boardSystem = getBoardSystem()
+		if not boardSystem then
+			return false, "Board system not available"
+		end
 
-		-- Message crystal movement started (will be consumed by normal item use process)
-		return true, "Moving with crystal " .. steps .. " step(s)"
-	else
+		-- Check if player is in movement state
+		if boardSystem.playerMovementState and 
+			boardSystem.playerMovementState[player.UserId] and
+			(boardSystem.playerMovementState[player.UserId] == "auto_complete" or 
+				boardSystem.playerMovementState[player.UserId] == "need_choice") then
+			return false, "You cannot use crystals while moving"
+		end
+
+		-- Check for remaining steps
+		if boardSystem.playerRemainingSteps and 
+			boardSystem.playerRemainingSteps[player.UserId] and 
+			boardSystem.playerRemainingSteps[player.UserId] > 0 then
+			return false, "You cannot use crystals while moving"
+		end
+
+		-- Number of steps to move
+		local steps = item.stats.move
+
+		-- Mark player as using crystal
+		playerCrystalMovements[player.UserId] = {
+			steps = steps,
+			timestamp = os.time(),
+			itemId = itemId
+		}
+
+		-- Start crystal movement
+		if boardSystem.ProcessCrystalMove then
+			local success = boardSystem:ProcessCrystalMove(player, steps)
+
+			-- Clear crystal movement if failed
+			if not success then
+				playerCrystalMovements[player.UserId] = nil
+				return false, "Cannot use crystal at this time"
+			end
+
+			-- Notify client about crystal usage
+			local crystalMoveEvent = inventoryRemotes:FindFirstChild("CrystalMove")
+			if crystalMoveEvent then
+				crystalMoveEvent:FireClient(player, steps)
+				end
+
+				-- Add cleanup timer
+task.delay(15, function()
+	if playerCrystalMovements[player.UserId] then
 		playerCrystalMovements[player.UserId] = nil
-		return false, "Board system does not support crystal movement"
+		print("[InventoryService] Cleaned up crystal movement state after timeout")
 	end
+end)
+
+-- Remove item from inventory (crystal is consumed)
+local success, message = inventory:RemoveItem(inventoryId, 1)
+if success then
+	-- Update client inventory
+	InventoryService.SendInventoryToClient(player)
+end
+
+-- Message crystal movement started (will be consumed by normal item use process)
+return true, "Moving with crystal " .. steps .. " step(s)"
+else
+	playerCrystalMovements[player.UserId] = nil
+	return false, "Board system does not support crystal movement"
+end
 end
 
 -- Check if it's a DiceBonus item
@@ -756,17 +800,24 @@ if isDiceBonus then
 	local gameManager = getGameManager()
 	local turnSystem = gameManager and gameManager.turnSystem
 	if not turnSystem then
+		print("[InventoryService] Turn system not available")
 		return false, "Turn system not available"
-	end
+		end
 
-	if turnSystem:GetCurrentPlayerTurn() ~= player.UserId then
-		return false, "You can only use this item during your turn"
-	end
+		-- Check player's turn status with detailed debugging
+local isPlayerTurn = turnSystem:GetCurrentPlayerTurn() == player.UserId
+print("[InventoryService] DiceBonus - Is player's turn: " .. tostring(isPlayerTurn) .. 
+	" (Current turn: " .. tostring(turnSystem:GetCurrentPlayerTurn()) .. 
+	", Player ID: " .. player.UserId .. ")")
 
-	-- Check if player already used a DiceBonus item this turn
-	if playerDiceBonusUses[player.UserId] then
-		return false, "You already used a dice bonus item this turn"
-	end
+if not isPlayerTurn then
+	return false, "You can only use this item during your turn"
+end
+
+-- Check if player already used a DiceBonus item this turn
+if playerDiceBonusUses[player.UserId] then
+	return false, "You already used a dice bonus item this turn"
+end
 end
 
 -- Define use function (from event script or other system)
@@ -810,32 +861,8 @@ else
 								warn("[InventoryService] Cannot find DiceBonusService to apply bonus")
 							end
 						elseif statName == "move" then
-							-- Handle crystal movement
-							local gameManager = getGameManager()
-							local boardSystem = _G.BoardSystem or (gameManager and gameManager.boardSystem)
-
-							if boardSystem and boardSystem.ProcessCrystalMove then
-								-- Mark player as using crystal
-								playerCrystalMovements[player.UserId] = {
-									steps = statValue,
-									timestamp = os.time(),
-									itemId = itemId
-								}
-
-								-- Start crystal movement
-								local moveSuccess = boardSystem:ProcessCrystalMove(player, statValue)
-
-								-- Clear crystal movement if failed
-								if not moveSuccess then
-									playerCrystalMovements[player.UserId] = nil
-									return false, "Cannot use crystal at this time"
-								end
-
-								changed = true
-								print("[InventoryService] Player " .. player.Name .. " used crystal for " .. statValue .. " steps")
-							else
-								return false, "Board system does not support crystal movement"
-							end
+							-- Handle crystal movement (already handled above)
+							return true, "Moving with crystal " .. statValue .. " step(s)"
 						elseif playerData.stats[statName] ~= nil then
 							playerData.stats[statName] = playerData.stats[statName] + statValue
 							changed = true
@@ -916,34 +943,11 @@ else
 			end
 		elseif itemData.stats and itemData.stats.move and itemData.stats.move > 0 then
 			-- If it's a crystal (backup handling)
-			local gameManager = getGameManager()
-			local boardSystem = _G.BoardSystem or (gameManager and gameManager.boardSystem)
+			return true, "Moving with crystal " .. itemData.stats.move .. " step(s)"
+		end
 
-			if boardSystem and boardSystem.ProcessCrystalMove then
-				-- Mark player as using crystal
-				playerCrystalMovements[player.UserId] = {
-					steps = itemData.stats.move,
-					timestamp = os.time(),
-					itemId = itemId
-				}
-
-				-- Start crystal movement
-				local success = boardSystem:ProcessCrystalMove(player, itemData.stats.move)
-
-				-- Clear crystal movement if failed
-				if not success then
-					playerCrystalMovements[player.UserId] = nil
-					return false, "Cannot use crystal at this time"
-					end
-
-					return true, "Moving with crystal " .. itemData.stats.move .. " step(s)"
-else
-	return false, "Board system does not support crystal movement"
-end
-end
-
-return true, "Used " .. itemData.name
-end
+		return true, "Used " .. itemData.name
+	end
 end
 
 -- Set use function
@@ -985,6 +989,16 @@ function InventoryService.ResetCrystalMovement(player)
 	if playerCrystalMovements[playerId] then
 		playerCrystalMovements[playerId] = nil
 		print("[InventoryService] Reset crystal movement for player: " .. playerId)
+
+		-- Notify client about reset
+		local crystalUIResetEvent = inventoryRemotes:FindFirstChild("CrystalUIReset")
+		if crystalUIResetEvent then
+			local playerObj = typeof(player) == "Instance" and player or Players:GetPlayerByUserId(playerId)
+			if playerObj then
+				crystalUIResetEvent:FireClient(playerObj)
+			end
+		end
+
 		return true
 	end
 
@@ -1049,21 +1063,59 @@ local function setupRemoteEvents()
 		end
 	end)
 
+	-- IMPROVED: Add handler for explicit crystal movement completion
+	local crystalMoveCompleteEvent = inventoryRemotes:FindFirstChild("CrystalMoveComplete")
+	if crystalMoveCompleteEvent then
+		crystalMoveCompleteEvent.OnServerEvent:Connect(function(player)
+			local playerId = player.UserId
+
+			-- Reset crystal movement state
+			if playerCrystalMovements[playerId] then
+				playerCrystalMovements[playerId] = nil
+				print("[InventoryService] Received crystal move complete event from player " .. playerId)
+
+				-- Notify BoardService
+				local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
+				local serverCrystalCompleteEvent = boardRemotes:FindFirstChild("CrystalMoveComplete")
+				if serverCrystalCompleteEvent then
+					serverCrystalCompleteEvent:FireServer()
+				end
+			end
+		end)
+	end
+
 	-- Crystal Movement Event
 	local crystalMoveEvent = inventoryRemotes:FindFirstChild("CrystalMove")
 	if crystalMoveEvent then
 		crystalMoveEvent.OnServerEvent:Connect(function(player, steps)
 			-- Get board system
-			local gameManager = getGameManager()
-			local boardSystem = _G.BoardSystem or (gameManager and gameManager.boardSystem)
+			local boardSystem = getBoardSystem()
 			if boardSystem and boardSystem.ProcessCrystalMove then
 				boardSystem:ProcessCrystalMove(player, steps)
 			end
 		end)
 	end
+
+	-- IMPROVED: Handle item permission update requests
+	local ItemPermissionEvent = inventoryRemotes:FindFirstChild("ItemPermissionUpdate")
+	if ItemPermissionEvent then
+		ItemPermissionEvent.OnServerEvent:Connect(function(player)
+			-- A client is requesting permission validation
+			local gameManager = getGameManager()
+			local turnSystem = gameManager and gameManager.turnSystem
+
+			if turnSystem then
+				local isPlayerTurn = turnSystem:GetCurrentPlayerTurn() == player.UserId
+				print("[InventoryService] Explicit permission check for " .. player.Name .. ": " .. tostring(isPlayerTurn))
+
+				-- Respond with current permission status
+				ItemPermissionEvent:FireClient(player, isPlayerTurn)
+			end
+		end)
+	end
 end
 
--- Create a remote event to handle UI restoration
+-- IMPROVED: Create a remote event to handle UI restoration
 local crystalUIResetEvent = inventoryRemotes:FindFirstChild("CrystalUIReset")
 if not crystalUIResetEvent then
 	crystalUIResetEvent = Instance.new("RemoteEvent")
@@ -1092,12 +1144,30 @@ local function setupCrystalUIResetEvents()
 	end)
 end
 
--- Set up player events
+-- IMPROVED: Set up player events
 local function setupPlayerEvents()
 	-- Player joining
 	Players.PlayerAdded:Connect(function(player)
 		-- Initialize inventory when player joins
 		InventoryService.InitializePlayer(player)
+
+		-- IMPROVED: Add HP check on join to ensure consistent HP for same class
+		task.delay(3, function()
+			-- Get player data
+			local playerData = getPlayerData(player)
+			if not playerData or not playerData.stats then return end
+
+			-- Get maximum HP
+			local maxHp = playerData.stats.maxHp
+			local currentHp = playerData.stats.hp
+
+			-- If HP is not at maximum, but greater than 80% of maximum, set to max
+			if currentHp < maxHp and currentHp >= (maxHp * 0.8) then
+				print("[InventoryService] Setting player HP to max on join (was at " .. 
+					string.format("%.0f%%", (currentHp/maxHp)*100) .. ")")
+				InventoryService.HealToMax(player)
+			end
+		end)
 	end)
 
 	-- Player leaving
@@ -1143,15 +1213,36 @@ local function setupPlayerEvents()
 						print("[InventoryService] Reset dice bonus use for player " .. pid .. " on turn change")
 					end
 				end
+
+				-- Reset crystal movement for old player
+				for pid, _ in pairs(playerCrystalMovements) do
+					if pid ~= playerId then
+						playerCrystalMovements[pid] = nil
+						print("[InventoryService] Reset crystal movement for player " .. pid .. " on turn change")
+					end
+				end
+
+				-- IMPROVED: Create an explicit turn item permission event
+				-- Let all clients know about turn change for permissions update
+				print("[InventoryService] Broadcasting turn item permissions update for player " .. playerId)
+				local ItemPermissionEvent = inventoryRemotes:FindFirstChild("ItemPermissionUpdate")
+				if not ItemPermissionEvent then
+					ItemPermissionEvent = Instance.new("RemoteEvent")
+					ItemPermissionEvent.Name = "ItemPermissionUpdate"
+					ItemPermissionEvent.Parent = inventoryRemotes
+				end
+
+				-- Tell all clients about the turn change, so they can update permissions
+				ItemPermissionEvent:FireAllClients(playerId)
 			end)
 		end
 	end
 
 	-- Setup Crystal UI reset events
 	setupCrystalUIResetEvents()
-	end
+end
 
-	-- Initialize the service
+-- Initialize the service
 local function init()
 	print("Initializing InventoryService...")
 
@@ -1167,6 +1258,29 @@ local function init()
 
 	-- Connect to Player Events
 	setupPlayerEvents()
+
+	-- Create ItemPermissionUpdate event if needed
+	local ItemPermissionEvent = inventoryRemotes:FindFirstChild("ItemPermissionUpdate")
+	if not ItemPermissionEvent then
+		ItemPermissionEvent = Instance.new("RemoteEvent")
+		ItemPermissionEvent.Name = "ItemPermissionUpdate"
+		ItemPermissionEvent.Parent = inventoryRemotes
+
+		-- Add listener for permission updates
+		ItemPermissionEvent.OnServerEvent:Connect(function(player)
+			-- A player is explicitly requesting permission validation
+			local gameManager = getGameManager()
+			local turnSystem = gameManager and gameManager.turnSystem
+
+			if turnSystem then
+				local isPlayerTurn = turnSystem:GetCurrentPlayerTurn() == player.UserId
+				print("[InventoryService] Permission check for " .. player.Name .. ": " .. tostring(isPlayerTurn))
+
+				-- Respond with permission status
+				ItemPermissionEvent:FireClient(player, isPlayerTurn)
+			end
+		end)
+	end
 
 	print("InventoryService initialized successfully")
 
@@ -1235,7 +1349,7 @@ local function init()
 		end
 
 		-- Get board system
-		local boardSystem = _G.BoardSystem or (gameManager and gameManager.boardSystem)
+		local boardSystem = getBoardSystem()
 		if boardSystem and boardSystem.ProcessCrystalMove then
 			local success = boardSystem:ProcessCrystalMove(player, steps)
 			if success then
@@ -1261,9 +1375,9 @@ local function init()
 
 		return InventoryService.HealToMax(player)
 	end
-	end
+end
 
-	-- Start the initialization
+-- Start the initialization
 init()
 
 return InventoryService
