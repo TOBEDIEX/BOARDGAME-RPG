@@ -146,19 +146,22 @@ local DEFAULT_CLASS_STATS = {
 		MaxHP = 125,
 		MaxMP = 50,
 		ATK = 95,
-		MAGIC = 10
+		MAGIC = 10,
+		DEF = 0
 	},
 	Mage = {
 		MaxHP = 85,
 		MaxMP = 120,
 		ATK = 25,
-		MAGIC = 95
+		MAGIC = 95,
+		DEF = 0
 	},
 	Thief = {
 		MaxHP = 100,
 		MaxMP = 60,
 		ATK = 75,
-		MAGIC = 30
+		MAGIC = 30,
+        DEF = 0
 	}
 }
 
@@ -239,4 +242,4 @@ function ClassData:IsStarterClass(className)
 	return false
 end
 
-return ClassData
+return ClassData	
