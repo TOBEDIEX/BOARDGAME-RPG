@@ -1,6 +1,6 @@
 -- BoardService.server.lua
 -- Server-side service for board system management
--- Version: 3.4.0 (Fixed dice validation bug)
+-- Version: 3.5.0 (Added Crystal Movement Support)
 
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -14,7 +14,7 @@ local MapData = require(ServerStorage.GameData.MapData)
 
 -- Enable debug mode
 local DEBUG_MOVEMENT = true
-local TRUST_CLIENT_DICE = true -- ให้เชื่อถือค่าลูกเต๋าจาก Client
+local TRUST_CLIENT_DICE = true -- Trust dice roll values from client
 
 -- Create required RemoteEvents
 local function ensureRemoteEvents()
@@ -28,7 +28,8 @@ local function ensureRemoteEvents()
 		"TileTriggerEvent",
 		"ActivityComplete",
 		"StartPlayerMovementPath",
-		"MovementVisualizationComplete"
+		"MovementVisualizationComplete",
+		"CrystalMove" -- Add new Remote for crystal
 	}
 
 	for _, eventName in ipairs(requiredEvents) do
@@ -57,7 +58,7 @@ local function getGameManager()
 	return _G.GameManager
 end
 
--- ฟังก์ชันดึง DiceBonusService
+-- Function to get DiceBonusService
 local function getDiceBonusService()
 	if _G.DiceBonusService then
 		return _G.DiceBonusService
@@ -74,7 +75,7 @@ end
 -- Store movement completion state
 local pendingMovementCompletions = {}
 
--- Storage for player dice bonuses (redundant เพื่อป้องกันการใช้งานผิดพลาด)
+-- Storage for player dice bonuses (redundant to prevent usage errors)
 local playerDiceBonus = {}
 
 -- Main service initialization function
@@ -92,6 +93,9 @@ local function initializeBoardService()
 	local gameManager = getGameManager()
 	if not gameManager then return end
 	gameManager.boardSystem = boardSystem
+
+	-- Add variable to store latest movement data
+	boardSystem.lastMovementData = {}
 
 	-- Set up callbacks
 	boardSystem:SetupCallbacks(
@@ -162,7 +166,131 @@ local function initializeBoardService()
 		end
 	)
 
-	-- ฟังก์ชันเพื่อบันทึกโบนัสลูกเต๋า
+	-- Function for processing crystal movement
+	function boardSystem:ProcessCrystalMove(player, steps)
+		local playerId = player.UserId
+
+		-- Check if it's player's turn
+		if gameManager.turnSystem and gameManager.turnSystem:GetCurrentPlayerTurn() ~= playerId then
+			print("[BoardService] Rejected crystal move from player " .. playerId .. " - not their turn")
+			return false
+		end
+
+		-- Check if player is already moving
+		if self.playerMovementState and self.playerMovementState[playerId] and 
+			(self.playerMovementState[playerId] == "auto_complete" or 
+				self.playerMovementState[playerId] == "need_choice") then
+			print("[BoardService] Rejected crystal move from player " .. playerId .. " - already moving")
+			return false
+		end
+
+		-- Get player's current position
+		local currentTileId = self:GetPlayerTile(playerId)
+		if not currentTileId then
+			print("[BoardService] Player " .. playerId .. " has no current position")
+			return false
+		end
+
+		local prevTileId = self.playerLastTile[playerId]
+
+		if DEBUG_MOVEMENT then
+			print("[BoardService] Processing crystal move for player " .. playerId .. 
+				" with " .. steps .. " steps from tile " .. currentTileId)
+		end
+
+		-- Use ProcessPlayerMove like dice roll but with crystal steps
+		local moveInfo = self:ProcessPlayerMove(playerId, steps)
+
+		if moveInfo and moveInfo.autoPath and #moveInfo.autoPath > 0 then
+			-- Send movement data to client
+			local movementData = {
+				path = moveInfo.autoPath,
+				directions = moveInfo.requiresChoice and moveInfo.availableDirections or nil,
+				requiresConfirmation = true,
+				isCrystalMove = true -- Add flag to identify as crystal movement
+			}
+
+			if DEBUG_MOVEMENT then
+				print("[BoardService] Sending crystal movement path to player " .. playerId)
+				print("  Path length: " .. #moveInfo.autoPath)
+				print("  Requires choice: " .. tostring(moveInfo.requiresChoice))
+				print("  Auto-complete: " .. tostring(moveInfo.autoComplete))
+			end
+
+			-- Store movement data
+			self.lastMovementData = self.lastMovementData or {}
+			self.lastMovementData[playerId] = movementData
+
+			-- Send movement data to client
+			local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
+			boardRemotes.StartPlayerMovementPath:FireClient(player, playerId, movementData)
+
+			-- Notify client to show crystal effect
+			local crystalMoveEvent = boardRemotes:FindFirstChild("CrystalMove")
+			if crystalMoveEvent then
+				crystalMoveEvent:FireClient(player, steps)
+			end
+
+			-- If there are choices (fork in path), automatically select first direction
+			if moveInfo.requiresChoice and moveInfo.availableDirections and #moveInfo.availableDirections > 0 then
+				task.delay(1.5, function()
+					-- Make sure player hasn't already made a choice
+					if not self.playerMovementState or self.playerMovementState[playerId] ~= "need_choice" then
+						return -- Player already made a choice or completed movement
+					end
+
+					-- Automatically select first direction
+					local direction = moveInfo.availableDirections[1].direction
+
+					if DEBUG_MOVEMENT then
+						print("[BoardService] Auto-selecting direction " .. direction .. " for crystal move")
+					end
+
+					-- Process direction choice as if player chose it
+					local moveResult = self:ProcessDirectionChoice(playerId, direction)
+
+					if moveResult and moveResult.autoPath and #moveResult.autoPath > 0 then
+						-- Update movement data
+						local newMovementData = {
+							path = moveResult.autoPath,
+							directions = moveResult.requiresChoice and moveResult.availableDirections or nil,
+							requiresConfirmation = true,
+							isCrystalMove = true
+						}
+
+						-- Store updated movement data
+						self.lastMovementData[playerId] = newMovementData
+
+						-- Send updated movement data to client
+						boardRemotes.StartPlayerMovementPath:FireClient(player, playerId, newMovementData)
+
+						-- If there are more choices, recursively handle them
+						if moveResult.requiresChoice and moveResult.availableDirections and #moveResult.availableDirections > 0 then
+							-- We need to wait again and select another direction
+							task.delay(1.5, function()
+								-- Auto-select first direction again
+								if self.playerMovementState and self.playerMovementState[playerId] == "need_choice" then
+									local nextDirection = moveResult.availableDirections[1].direction
+									self:ProcessDirectionChoice(playerId, nextDirection)
+								end
+							end)
+						end
+					end
+				end)
+			end
+
+			return true
+		else
+			-- If no movement path generated
+			if DEBUG_MOVEMENT then
+				print("[BoardService] No movement path generated for crystal move from player " .. playerId)
+			end
+
+			return false
+		end
+	end
+
+	-- Function to record dice bonus
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
 	local inventoryRemotes = remotes:WaitForChild("InventoryRemotes")
 
@@ -189,56 +317,55 @@ local function initializeBoardService()
 			return 
 		end
 
-		-- ดึงค่าโบนัสลูกเต๋า
+		-- Get dice bonus
 		local diceBonusService = getDiceBonusService()
 
-		-- ใช้ค่าจาก storage ภายในก่อน (เพิ่มเติม)
+		-- Use internal storage value first
 		local diceBonus = playerDiceBonus[playerId] or 0
 
-		-- ถ้าไม่มีในระบบภายใน ให้ลองดึงจาก service
+		-- If not in internal system, try to get from service
 		if diceBonus == 0 and diceBonusService then
 			diceBonus = diceBonusService.GetPlayerDiceBonus(playerId) or 0
 
-			-- เก็บค่าไว้ใช้ในภายหลัง
+			-- Store value for later use
 			if diceBonus > 0 then
 				playerDiceBonus[playerId] = diceBonus
 			end
 		end
 
-		-- ตรวจสอบการส่งค่าลูกเต๋า
+		-- Check dice roll value
 		print("[BoardService] Player " .. player.Name .. " rolled " .. diceResult .. 
 			" (Bonus dice: " .. diceBonus .. ")")
 
-		-- ใช้ค่าจาก Client โดยตรงถ้าได้รับการกำหนดให้เชื่อถือ Client
+		-- Use value from client directly if configured to trust clients
 		if TRUST_CLIENT_DICE then
-			-- เพิ่มการตรวจสอบขั้นต่ำเพื่อความปลอดภัย (ค่าต้องไม่ติดลบและไม่เกินจำนวนที่เป็นไปได้สูงสุด)
-			local maxReasonableDiceResult = 100 -- คือไม่น่าจะทอยได้เกินนี้ในกรณีปกติ
+			-- Add minimum safety checks (value must not be negative and not exceed maximum possible)
+			local maxReasonableDiceResult = 100 -- Shouldn't reasonably exceed this in normal cases
 
 			if diceResult < 1 then
 				diceResult = 1
 				print("[BoardService] WARNING: Player sent negative dice result, using 1 instead")
 			elseif diceResult > maxReasonableDiceResult then
-				diceResult = 6 + (diceBonus * 6) -- ค่าสูงสุดที่เป็นไปได้จริง
+				diceResult = 6 + (diceBonus * 6) -- Maximum possible real value
 				print("[BoardService] WARNING: Player sent unreasonably high dice result, using " .. diceResult .. " instead")
 			end
 		else
-			-- ถ้าไม่เชื่อถือ client ใช้การตรวจสอบแบบเดิม 
-			-- แต่แก้ไขให้ใช้เงื่อนไขที่ถูกต้อง
+			-- If not trusting client, use previous validation
 			local minPossibleResult = 1 
 			local maxPossibleResult = 6
 
-			-- คำนวณช่วงที่เป็นไปได้ตามโบนัส
+			-- Calculate possible range based on bonus
 			if diceBonus > 0 then
-				minPossibleResult = 1 + diceBonus -- ต่ำสุดคือลูกหลัก 1 + โบนัสลูกละ 1
-				maxPossibleResult = 6 + (diceBonus * 6) -- สูงสุดคือลูกหลัก 6 + โบนัสลูกละ 6
+				minPossibleResult = 1 + diceBonus -- Minimum is main die 1 + bonus of 1 per die
+				maxPossibleResult = 6 + (diceBonus * 6) -- Maximum is main die 6 + bonus of 6 per die
 			end
 
-			-- ตรวจสอบว่าค่าอยู่ในช่วงที่เป็นไปได้หรือไม่
+			-- Check if value is within possible range
 			if diceResult < minPossibleResult or diceResult > maxPossibleResult then
 				warn("[BoardService] Invalid dice result from player " .. player.Name .. ": " .. diceResult .. 
 					" (Expected range: " .. minPossibleResult .. "-" .. maxPossibleResult .. ")")
 
-				-- สุ่มใหม่โดยสุ่มค่าลูกเต๋าหลัก + โบนัส
+				-- Generate new random value for main die + bonus
 				local baseDiceRoll = math.random(1, 6)
 				local totalResult = baseDiceRoll
 
@@ -273,6 +400,9 @@ local function initializeBoardService()
 				end
 			end
 
+			-- Store latest movement data
+			boardSystem.lastMovementData[playerId] = movementData
+
 			boardRemotes.StartPlayerMovementPath:FireClient(player, playerId, movementData)
 		else
 			-- End turn if no movement
@@ -287,13 +417,13 @@ local function initializeBoardService()
 		-- Reset dice bonus
 		playerDiceBonus[playerId] = nil
 
-		-- ล้าง Dice Bonus หลังจากใช้ไปแล้ว
+		-- Clear Dice Bonus after use
 		if diceBonus > 0 and diceBonusService then
 			diceBonusService.ClearPlayerDiceBonus(playerId)
 			print("[BoardService] Cleared dice bonus for player " .. player.Name .. " after use")
 		end
 
-		-- ล้าง Dice Bonus ใน InventoryService (ถ้ามี)
+		-- Clear Dice Bonus in InventoryService (if exists)
 		if gameManager.inventoryService and gameManager.inventoryService.ResetDiceBonusUse then
 			gameManager.inventoryService.ResetDiceBonusUse(playerId)
 		end
@@ -335,6 +465,9 @@ local function initializeBoardService()
 				directions = moveResult.requiresChoice and moveResult.availableDirections or nil,
 				requiresConfirmation = true
 			}
+
+			-- Store latest movement data
+			boardSystem.lastMovementData[playerId] = movementData
 
 			if DEBUG_MOVEMENT then
 				print("[BoardService] Sending movement path after direction choice")
@@ -381,6 +514,33 @@ local function initializeBoardService()
 
 		-- End turn if still same player
 		if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
+			-- Check if this was a crystal movement
+			local isCrystalMove = false
+
+			-- Check if movement data contains isCrystalMove flag
+			if boardSystem.lastMovementData and 
+				boardSystem.lastMovementData[playerId] and
+				boardSystem.lastMovementData[playerId].isCrystalMove then
+				isCrystalMove = true
+			end
+
+			-- If it was crystal movement, end turn immediately
+			if isCrystalMove then
+				if DEBUG_MOVEMENT then
+					print("[BoardService] Crystal movement complete, ending turn for player " .. playerId)
+				end
+
+				-- Reset isCrystalMove flag
+				if boardSystem.lastMovementData and boardSystem.lastMovementData[playerId] then
+					boardSystem.lastMovementData[playerId].isCrystalMove = nil
+				end
+
+				-- End turn immediately
+				task.wait(0.5) -- Short delay for animations
+				gameManager.turnSystem:EndPlayerTurn(playerId, "crystal_move_complete")
+				return
+			end
+
 			-- Check if movement is complete (no more choices)
 			local hasChoices = boardSystem.playerMovementState[playerId] == "need_choice"
 
@@ -407,6 +567,14 @@ local function initializeBoardService()
 		-- Clear pending confirmation
 		pendingMovementCompletions[playerId] = nil
 	end)
+
+	-- Add Handler for CrystalMove Remote
+	local crystalMoveEvent = boardRemotes:FindFirstChild("CrystalMove")
+	if not crystalMoveEvent then
+		crystalMoveEvent = Instance.new("RemoteEvent")
+		crystalMoveEvent.Name = "CrystalMove"
+		crystalMoveEvent.Parent = boardRemotes
+	end
 
 	return boardSystem
 end
