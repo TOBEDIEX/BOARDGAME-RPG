@@ -103,6 +103,63 @@ ItemData.Items = {
 	}
 }
 
+ItemData.Equipment = {
+	Crystal = {
+		id = "Crystal_1",
+		name = "Crystal 1",
+		description = " It allows the user to move exactly 1 space.",
+		type = ITEM_TYPES.GENERAL,
+		rarity = 1,
+		stackable = true,
+		maxStack = 5,
+		sellPrice =100,
+		buyPrice = 500,
+		usable = false,
+		iconId = "rbxassetid://6675226140",
+		stats = {
+			move = 1
+		}
+	}
+}
+
+ItemData.Equipment = {
+	Crystal2 = {
+		id = "Crystal_2",
+		name = "Crystal 2",
+		description = " It allows the user to move exactly 2 space.",
+		type = ITEM_TYPES.GENERAL,
+		rarity = 2,
+		stackable = true,
+		maxStack = 5,
+		sellPrice = 200,
+		buyPrice = 700,
+		usable = false,
+		iconId = "rbxassetid://6675226140",
+		stats = {
+			move = 2
+		}
+	}
+}
+
+ItemData.Equipment = {
+	Crystal3 = {
+		id = "Crystal_3",
+		name = "Crystal 3",
+		description = " It allows the user to move exactly 3 space.",
+		type = ITEM_TYPES.GENERAL,
+		rarity = 3,
+		stackable = true,
+		maxStack = 5,
+		sellPrice = 300,
+		buyPrice = 1000,
+		usable = false,
+		iconId = "rbxassetid://6675226140",
+		stats = {
+			move = 3
+		}
+	}
+}
+
 -- อุปกรณ์ทดสอบ
 ItemData.Equipment = {
 	-- อุปกรณ์ทดสอบ
@@ -129,9 +186,12 @@ ItemData.Equipment = {
 -- รายการไอเทมที่อาจได้รับจากช่อง Item
 ItemData.ItemTilePool = {
 	-- เรียงตามความถี่ในการออกไอเทม (เปอร์เซ็นต์โดยประมาณ)
-	{id = "health_potion", weight = 50},   -- 70%
-	{id = "dice_bonus_1", weight = 45},    -- 25%
-	{id = "dice_bonus_2", weight = 5}      -- 5%
+	{id = "health_potion", weight = 25},
+	{id = "dice_bonus_1", weight = 15},    
+	{id = "dice_bonus_2", weight = 15},
+	{id = "Crystal_1", weight = 15},
+	{id = "Crystal_2", weight = 15},
+	{id = "Crystal_3", weight = 15},
 }
 
 -- ค้นหาไอเทมจาก ID
