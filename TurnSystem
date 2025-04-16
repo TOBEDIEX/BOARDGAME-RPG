@@ -1,6 +1,6 @@
 -- TurnSystem.lua
 -- Module for managing turn system and player order
--- Version: 3.0.0 (Optimized)
+-- Version: 3.1.0 (Fixed Crystal Management)
 
 local TurnSystem = {}
 TurnSystem.__index = TurnSystem
@@ -13,6 +13,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TURN_TIME_LIMIT = 60
 local INACTIVITY_WARNING_TIME = 15
 local MOVEMENT_SAFETY_DELAY = 0.8
+local CRYSTAL_MOVEMENT_MAX_TIME = 20 -- Maximum time to complete crystal movement
 
 function TurnSystem.new()
 	local self = setmetatable({}, TurnSystem)
@@ -26,6 +27,7 @@ function TurnSystem.new()
 	self.turnStates = {}
 	self.skipTurnPlayers = {}
 	self.pendingEndTurn = {}
+	self.activeCrystalMovements = {} -- NEW: Track crystal movements
 	self.onTurnStart = nil
 	self.onTurnEnd = nil
 	self.onTurnTimerUpdate = nil
@@ -58,6 +60,29 @@ function TurnSystem:InitializeRemotes(gameRemotes)
 	self.remotes.turnAction.OnServerEvent:Connect(function(player, actionType, actionData)
 		self:HandleTurnAction(player, actionType, actionData)
 	end)
+
+	-- Create Crystal Movement event if needed
+	local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
+	local crystalMoveCompleteEvent = boardRemotes:FindFirstChild("CrystalMoveComplete")
+	if not crystalMoveCompleteEvent then
+		crystalMoveCompleteEvent = Instance.new("RemoteEvent")
+		crystalMoveCompleteEvent.Name = "CrystalMoveComplete"
+		crystalMoveCompleteEvent.Parent = boardRemotes
+	end
+
+	-- Connect to crystal move complete event
+	crystalMoveCompleteEvent.OnServerEvent:Connect(function(player)
+		self:HandleCrystalMoveComplete(player)
+	end)
+
+	-- Create ItemPermissionUpdate event for turn changes
+	local inventoryRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("InventoryRemotes")
+	local itemPermissionEvent = inventoryRemotes:FindFirstChild("ItemPermissionUpdate")
+	if not itemPermissionEvent then
+		itemPermissionEvent = Instance.new("RemoteEvent")
+		itemPermissionEvent.Name = "ItemPermissionUpdate"
+		itemPermissionEvent.Parent = inventoryRemotes
+	end
 
 	return self.remotes
 end
@@ -108,6 +133,57 @@ function TurnSystem:StartTurnSystem()
 	return true
 end
 
+-- NEW: Check if player is using a crystal
+function TurnSystem:IsPlayerUsingCrystal(playerID)
+	return self.activeCrystalMovements[playerID] ~= nil
+end
+
+-- NEW: Register crystal movement
+function TurnSystem:RegisterCrystalMovement(playerID, steps)
+	if not playerID then return false end
+
+	-- Check if it's player's turn
+	if playerID ~= self.currentPlayerTurn then
+		return false
+	end
+
+	self.activeCrystalMovements[playerID] = {
+		steps = steps,
+		startTime = os.time(),
+		completed = false
+	}
+
+	print("[TurnSystem] Registered crystal movement for player " .. playerID .. " with " .. steps .. " steps")
+	return true
+end
+
+-- NEW: Handle crystal movement completion
+function TurnSystem:HandleCrystalMoveComplete(player)
+	local playerID = player.UserId
+
+	-- Check if there's an active crystal movement
+	if not self.activeCrystalMovements[playerID] then
+		return false
+	end
+
+	print("[TurnSystem] Processing crystal movement completion for player " .. playerID)
+
+	-- Mark as completed
+	self.activeCrystalMovements[playerID].completed = true
+
+	-- Check if it's player's turn
+	if playerID == self.currentPlayerTurn then
+		-- End turn with special reason
+		task.wait(0.5) -- Short delay for animations
+		self:EndPlayerTurn(playerID, "crystal_move_complete")
+	end
+
+	-- Clear crystal movement state
+	self.activeCrystalMovements[playerID] = nil
+
+	return true
+end
+
 function TurnSystem:StartPlayerTurn(playerID)
 	if not playerID then return false end
 
@@ -133,8 +209,31 @@ function TurnSystem:StartPlayerTurn(playerID)
 	self.isTurnActive = true
 	self.turnTimeRemaining = TURN_TIME_LIMIT
 
+	-- Add debug log for turn start
+	print("[TurnSystem] Starting turn for playerID: " .. playerID)
+
 	-- Clear pending end turn state
 	self.pendingEndTurn[playerID] = nil
+
+	-- IMPROVED: Clear any other states that might block item usage
+	if not self.turnStates[playerID] then
+		self.turnStates[playerID] = {}
+	end
+
+	if self.turnStates[playerID].blockItemUsage then
+		self.turnStates[playerID].blockItemUsage = nil
+		print("[TurnSystem] Cleared blockItemUsage flag for player " .. playerID)
+	end
+
+	-- Initialize turn state with explicit item usage permission
+	self.turnStates[playerID].canUseItems = true
+
+	-- Clear player dice bonus uses (should be done at turn start too)
+	if _G.GameManager and _G.GameManager.inventoryService and 
+		_G.GameManager.inventoryService.ResetDiceBonusUse then
+		print("[TurnSystem] Resetting dice bonus usage at turn start")
+		_G.GameManager.inventoryService.ResetDiceBonusUse(playerID)
+	end
 
 	-- Notify clients
 	self.remotes.updateTurn:FireAllClients(playerID)
@@ -142,8 +241,17 @@ function TurnSystem:StartPlayerTurn(playerID)
 	-- Send additional turn state to the player
 	self.remotes.turnState:FireClient(player, {
 		timeLimit = TURN_TIME_LIMIT,
-		isYourTurn = true
+		isYourTurn = true,
+		canUseItems = true  -- Explicitly tell client it can use items
 	})
+
+	-- Broadcast item permission update
+	local remotes = ReplicatedStorage:WaitForChild("Remotes")
+	local inventoryRemotes = remotes:WaitForChild("InventoryRemotes")
+	local itemPermissionEvent = inventoryRemotes:FindFirstChild("ItemPermissionUpdate")
+	if itemPermissionEvent then
+		itemPermissionEvent:FireAllClients(playerID)
+	end
 
 	-- Start turn timer
 	self:StartTurnTimer()
@@ -198,6 +306,40 @@ function TurnSystem:StartTurnTimer()
 			if self.turnTimeRemaining <= 0 then
 				self:EndPlayerTurn(self.currentPlayerTurn, "timeout")
 			end
+
+			-- IMPROVED: Check for stalled crystal movements
+			for playerID, crystalData in pairs(self.activeCrystalMovements) do
+				if playerID == self.currentPlayerTurn and not crystalData.completed then
+					local crystalElapsedTime = os.time() - crystalData.startTime
+
+					-- If crystal movement has taken too long, force completion
+					if crystalElapsedTime > CRYSTAL_MOVEMENT_MAX_TIME then
+						print("[TurnSystem] Crystal movement timeout for player " .. playerID)
+
+						-- Mark as completed
+						self.activeCrystalMovements[playerID].completed = true
+
+						-- End turn
+						self:EndPlayerTurn(playerID, "crystal_move_timeout")
+
+						-- Clear crystal movement state
+						self.activeCrystalMovements[playerID] = nil
+
+						-- Notify all clients
+						local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
+						local crystalMoveCompleteEvent = boardRemotes:FindFirstChild("CrystalMoveComplete")
+						if crystalMoveCompleteEvent then
+							crystalMoveCompleteEvent:FireAllClients(playerID)
+						end
+
+						-- Also update inventory
+						local gameManager = _G.GameManager
+						if gameManager and gameManager.inventoryService and gameManager.inventoryService.ResetCrystalMovement then
+							gameManager.inventoryService.ResetCrystalMovement(playerID)
+						end
+					end
+				end
+			end
 		end
 	end)
 end
@@ -213,6 +355,12 @@ function TurnSystem:EndPlayerTurn(playerID, reason)
 	-- Check if it's the correct player's turn
 	if playerID ~= self.currentPlayerTurn then 
 		return false 
+	end
+
+	-- IMPROVED: Handle crystal movements specially
+	if reason == "crystal_move_complete" or reason == "crystal_move_timeout" then
+		-- End turn immediately for crystal movements
+		return self:ExecuteEndTurn(playerID, reason)
 	end
 
 	-- For movement-related reasons, add a delay for animation completion
@@ -274,8 +422,20 @@ function TurnSystem:ExecuteEndTurn(playerID, reason)
 		self.remotes.turnState:FireClient(player, {
 			isYourTurn = false,
 			turnEnded = true,
-			reason = reason
+			reason = reason,
+			canUseItems = false  -- Explicitly tell client it cannot use items
 		})
+	end
+
+	-- Clear any active crystal movements for this player
+	if self.activeCrystalMovements[endingPlayerID] then
+		self.activeCrystalMovements[endingPlayerID] = nil
+
+		-- Also update inventory
+		local gameManager = _G.GameManager
+		if gameManager and gameManager.inventoryService and gameManager.inventoryService.ResetCrystalMovement then
+			gameManager.inventoryService.ResetCrystalMovement(endingPlayerID)
+		end
 	end
 
 	-- Brief pause before next turn
@@ -319,15 +479,48 @@ function TurnSystem:GetCurrentPlayerTurn()
 end
 
 function TurnSystem:IsPlayerTurn(playerID)
-	return playerID == self.currentPlayerTurn
+	local result = playerID == self.currentPlayerTurn
+
+	-- Add debug logging
+	print("[TurnSystem] IsPlayerTurn check for player " .. tostring(playerID) .. 
+		": " .. tostring(result) .. " (current turn: " .. tostring(self.currentPlayerTurn) .. ")")
+
+	return result
 end
 
 function TurnSystem:HandleTurnAction(player, actionType, actionData)
 	local playerID = player.UserId
 
+	-- Add debug logging for all turn actions
+	print("[TurnSystem] Handling action " .. actionType .. " from player " .. playerID)
+	print("[TurnSystem] Current turn player: " .. tostring(self.currentPlayerTurn))
+
 	-- Check if it's player's turn
-	if not self:IsPlayerTurn(playerID) then 
+	local isPlayerTurn = self:IsPlayerTurn(playerID)
+	if not isPlayerTurn then 
+		print("[TurnSystem] Blocked action - not player's turn")
 		return false 
+	end
+
+	-- IMPROVED: Block normal turn actions during crystal movement
+	if self:IsPlayerUsingCrystal(playerID) and actionType ~= "completeCrystalMove" then
+		print("[TurnSystem] Blocked action " .. actionType .. " during crystal movement")
+		return false
+	end
+
+	-- For item usage, make sure we ALWAYS allow it if it's the player's turn
+	if actionType == "useItem" then
+		print("[TurnSystem] Allowing item usage for player " .. playerID)
+
+		-- Explicitly clear any potential item usage blockers
+		if not self.turnStates[playerID] then
+			self.turnStates[playerID] = {}
+		end
+
+		self.turnStates[playerID].blockItemUsage = nil
+		self.turnStates[playerID].canUseItems = true
+
+		return true -- Explicitly allow item usage
 	end
 
 	-- Handle different action types
@@ -335,8 +528,9 @@ function TurnSystem:HandleTurnAction(player, actionType, actionData)
 		return self:EndPlayerTurn(playerID, "player_choice")
 	elseif actionType == "rollDice" then
 		return true -- Handled by other systems
-	elseif actionType == "useItem" then
-		return true -- Handled by other systems
+	elseif actionType == "completeCrystalMove" then
+		-- NEW: Handle explicit crystal movement completion
+		return self:HandleCrystalMoveComplete(player)
 	end
 
 	return false
@@ -362,6 +556,7 @@ function TurnSystem:HandlePlayerLeaving(playerID)
 	self.skipTurnPlayers[playerID] = nil
 	self.turnStates[playerID] = nil
 	self.pendingEndTurn[playerID] = nil
+	self.activeCrystalMovements[playerID] = nil
 
 	return true
 end
@@ -382,6 +577,7 @@ function TurnSystem:Reset()
 	self.turnStates = {}
 	self.skipTurnPlayers = {}
 	self.pendingEndTurn = {}
+	self.activeCrystalMovements = {}
 
 	return true
 end
