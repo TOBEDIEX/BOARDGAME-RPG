@@ -1,6 +1,6 @@
 -- BoardService.server.lua
 -- Server-side service for board system management
--- Version: 3.5.0 (Added Crystal Movement Support)
+-- Version: 3.6.0 (Fixed Crystal Movement & Turn Management)
 
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -29,7 +29,8 @@ local function ensureRemoteEvents()
 		"ActivityComplete",
 		"StartPlayerMovementPath",
 		"MovementVisualizationComplete",
-		"CrystalMove" -- Add new Remote for crystal
+		"CrystalMove", -- For crystal movement
+		"CrystalMoveComplete" -- NEW: For explicit crystal movement completion
 	}
 
 	for _, eventName in ipairs(requiredEvents) do
@@ -74,6 +75,9 @@ end
 
 -- Store movement completion state
 local pendingMovementCompletions = {}
+
+-- Track active crystal movements
+local activeCrystalMovements = {}
 
 -- Storage for player dice bonuses (redundant to prevent usage errors)
 local playerDiceBonus = {}
@@ -124,12 +128,13 @@ local function initializeBoardService()
 				pendingMovementCompletions[playerId] = {
 					finalTileId = finalTileId,
 					timestamp = os.time(),
-					confirmed = false
+					confirmed = false,
+					isCrystalMove = activeCrystalMovements[playerId] ~= nil
 				}
 
-				-- Set up backup timer in case client doesn't respond (30 seconds)
+				-- Set up backup timer in case client doesn't respond (reduced to 15 seconds)
 				task.spawn(function()
-					task.wait(30)
+					task.wait(15)
 					if pendingMovementCompletions[playerId] and not pendingMovementCompletions[playerId].confirmed then
 						-- If not confirmed after timeout, consider completed
 						pendingMovementCompletions[playerId].confirmed = true
@@ -140,7 +145,18 @@ local function initializeBoardService()
 
 						-- End turn if still same player
 						if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
-							gameManager.turnSystem:EndPlayerTurn(playerId, "move_timeout")
+							-- Check if it was crystal movement
+							local isCrystalMove = activeCrystalMovements[playerId] ~= nil
+
+							-- Clear crystal movement state
+							activeCrystalMovements[playerId] = nil
+
+							-- End turn with appropriate reason
+							if isCrystalMove then
+								gameManager.turnSystem:EndPlayerTurn(playerId, "crystal_move_timeout")
+							else
+								gameManager.turnSystem:EndPlayerTurn(playerId, "move_timeout")
+							end
 						end
 					end
 				end)
@@ -166,7 +182,7 @@ local function initializeBoardService()
 		end
 	)
 
-	-- Function for processing crystal movement
+	-- IMPROVED: Function for processing crystal movement
 	function boardSystem:ProcessCrystalMove(player, steps)
 		local playerId = player.UserId
 
@@ -197,6 +213,14 @@ local function initializeBoardService()
 			print("[BoardService] Processing crystal move for player " .. playerId .. 
 				" with " .. steps .. " steps from tile " .. currentTileId)
 		end
+
+		-- Track this as an active crystal movement
+		activeCrystalMovements[playerId] = {
+			steps = steps,
+			startTime = os.time(),
+			startTile = currentTileId,
+			completed = false
+		}
 
 		-- Use ProcessPlayerMove like dice roll but with crystal steps
 		local moveInfo = self:ProcessPlayerMove(playerId, steps)
@@ -231,9 +255,15 @@ local function initializeBoardService()
 				crystalMoveEvent:FireClient(player, steps)
 			end
 
-			-- If there are choices (fork in path), automatically select first direction
+			-- IMPROVED: If there are choices (fork in path), handle it more robustly
 			if moveInfo.requiresChoice and moveInfo.availableDirections and #moveInfo.availableDirections > 0 then
+				-- Auto-path selection for crystals
 				task.delay(1.5, function()
+					-- Make sure it's still a crystal movement and still active
+					if not activeCrystalMovements[playerId] or activeCrystalMovements[playerId].completed then
+						return -- Movement was already completed or canceled
+					end
+
 					-- Make sure player hasn't already made a choice
 					if not self.playerMovementState or self.playerMovementState[playerId] ~= "need_choice" then
 						return -- Player already made a choice or completed movement
@@ -249,6 +279,7 @@ local function initializeBoardService()
 					-- Process direction choice as if player chose it
 					local moveResult = self:ProcessDirectionChoice(playerId, direction)
 
+					-- If process was successful
 					if moveResult and moveResult.autoPath and #moveResult.autoPath > 0 then
 						-- Update movement data
 						local newMovementData = {
@@ -264,13 +295,19 @@ local function initializeBoardService()
 						-- Send updated movement data to client
 						boardRemotes.StartPlayerMovementPath:FireClient(player, playerId, newMovementData)
 
-						-- If there are more choices, recursively handle them
+						-- If there are more choices (this can happen with complex paths)
 						if moveResult.requiresChoice and moveResult.availableDirections and #moveResult.availableDirections > 0 then
-							-- We need to wait again and select another direction
+							-- We need to wait again and select another direction (recursive handling)
 							task.delay(1.5, function()
+								-- Check if still active crystal movement
+								if not activeCrystalMovements[playerId] or activeCrystalMovements[playerId].completed then
+									return -- Movement was already completed or canceled
+								end
+
 								-- Auto-select first direction again
 								if self.playerMovementState and self.playerMovementState[playerId] == "need_choice" then
 									local nextDirection = moveResult.availableDirections[1].direction
+									-- Process this next fork
 									self:ProcessDirectionChoice(playerId, nextDirection)
 								end
 							end)
@@ -285,6 +322,9 @@ local function initializeBoardService()
 			if DEBUG_MOVEMENT then
 				print("[BoardService] No movement path generated for crystal move from player " .. playerId)
 			end
+
+			-- Clear crystal movement state
+			activeCrystalMovements[playerId] = nil
 
 			return false
 		end
@@ -315,6 +355,12 @@ local function initializeBoardService()
 					" - not their turn")
 			end
 			return 
+		end
+
+		-- IMPROVED: Check if player is already in crystal movement
+		if activeCrystalMovements[playerId] then
+			print("[BoardService] Rejected dice roll from player " .. playerId .. " - crystal movement active")
+			return
 		end
 
 		-- Get dice bonus
@@ -463,7 +509,8 @@ local function initializeBoardService()
 			local movementData = {
 				path = moveResult.autoPath,
 				directions = moveResult.requiresChoice and moveResult.availableDirections or nil,
-				requiresConfirmation = true
+				requiresConfirmation = true,
+				isCrystalMove = activeCrystalMovements[playerId] ~= nil
 			}
 
 			-- Store latest movement data
@@ -492,7 +539,7 @@ local function initializeBoardService()
 		end
 	end)
 
-	-- Handle movement completion confirmation from client
+	-- IMPROVED: Handle movement completion confirmation from client
 	boardRemotes.MovementVisualizationComplete.OnServerEvent:Connect(function(player, finalTileId)
 		local playerId = player.UserId
 
@@ -515,29 +562,31 @@ local function initializeBoardService()
 		-- End turn if still same player
 		if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
 			-- Check if this was a crystal movement
-			local isCrystalMove = false
+			local isCrystalMove = activeCrystalMovements[playerId] ~= nil
 
-			-- Check if movement data contains isCrystalMove flag
-			if boardSystem.lastMovementData and 
-				boardSystem.lastMovementData[playerId] and
-				boardSystem.lastMovementData[playerId].isCrystalMove then
-				isCrystalMove = true
-			end
-
-			-- If it was crystal movement, end turn immediately
+			-- If it was crystal movement, mark as completed
 			if isCrystalMove then
 				if DEBUG_MOVEMENT then
 					print("[BoardService] Crystal movement complete, ending turn for player " .. playerId)
 				end
 
-				-- Reset isCrystalMove flag
-				if boardSystem.lastMovementData and boardSystem.lastMovementData[playerId] then
-					boardSystem.lastMovementData[playerId].isCrystalMove = nil
+				-- Mark crystal movement as completed
+				if activeCrystalMovements[playerId] then
+					activeCrystalMovements[playerId].completed = true
 				end
 
-				-- End turn immediately
+				-- Notify clients that crystal movement is complete
+				local crystalMoveCompleteEvent = boardRemotes:FindFirstChild("CrystalMoveComplete")
+				if crystalMoveCompleteEvent then
+					crystalMoveCompleteEvent:FireAllClients(playerId)
+				end
+
+				-- End turn with crystal-specific reason
 				task.wait(0.5) -- Short delay for animations
 				gameManager.turnSystem:EndPlayerTurn(playerId, "crystal_move_complete")
+
+				-- Clear crystal movement state
+				activeCrystalMovements[playerId] = nil
 				return
 			end
 
@@ -568,12 +617,91 @@ local function initializeBoardService()
 		pendingMovementCompletions[playerId] = nil
 	end)
 
+	-- NEW: Add explicit crystal move complete handler
+	local crystalMoveCompleteEvent = boardRemotes:FindFirstChild("CrystalMoveComplete")
+	if not crystalMoveCompleteEvent then
+		crystalMoveCompleteEvent = Instance.new("RemoteEvent")
+		crystalMoveCompleteEvent.Name = "CrystalMoveComplete"
+		crystalMoveCompleteEvent.Parent = boardRemotes
+	end
+
+	-- Handle explicit crystal move completion
+	crystalMoveCompleteEvent.OnServerEvent:Connect(function(player)
+		local playerId = player.UserId
+
+		-- Check if there's an active crystal movement
+		if not activeCrystalMovements[playerId] then
+			return
+		end
+
+		if DEBUG_MOVEMENT then
+			print("[BoardService] Received explicit crystal move completion from player " .. playerId)
+		end
+
+		-- Mark crystal movement as completed
+		activeCrystalMovements[playerId].completed = true
+
+		-- End turn if still same player
+		if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
+			task.wait(0.5) -- Short delay for animations
+			gameManager.turnSystem:EndPlayerTurn(playerId, "crystal_move_complete")
+		end
+
+		-- Clear crystal movement state
+		activeCrystalMovements[playerId] = nil
+
+		-- Clear any pending movement completions
+		if pendingMovementCompletions[playerId] then
+			pendingMovementCompletions[playerId].confirmed = true
+			pendingMovementCompletions[playerId] = nil
+		end
+	end)
+
 	-- Add Handler for CrystalMove Remote
 	local crystalMoveEvent = boardRemotes:FindFirstChild("CrystalMove")
 	if not crystalMoveEvent then
 		crystalMoveEvent = Instance.new("RemoteEvent")
 		crystalMoveEvent.Name = "CrystalMove"
 		crystalMoveEvent.Parent = boardRemotes
+	end
+
+	-- Listen for CrystalMove events from client
+	crystalMoveEvent.OnServerEvent:Connect(function(player, steps)
+		-- Safety check if player is already in a crystal movement
+		local playerId = player.UserId
+		if activeCrystalMovements[playerId] then
+			if DEBUG_MOVEMENT then
+				print("[BoardService] Ignored duplicate crystal move request from player " .. playerId)
+			end
+			return
+		end
+
+		-- Process the crystal movement
+		boardSystem:ProcessCrystalMove(player, steps)
+	end)
+
+	-- Create ItemPermissionUpdate event if needed
+	local ItemPermissionEvent = inventoryRemotes:FindFirstChild("ItemPermissionUpdate")
+	if not ItemPermissionEvent then
+		ItemPermissionEvent = Instance.new("RemoteEvent")
+		ItemPermissionEvent.Name = "ItemPermissionUpdate"
+		ItemPermissionEvent.Parent = inventoryRemotes
+	end
+
+	-- Connect to turn system to broadcast permission updates
+	local gameRemotes = remotes:WaitForChild("GameRemotes", 10)
+	if gameRemotes then
+		local updateTurnEvent = gameRemotes:WaitForChild("UpdateTurn", 10)
+		if updateTurnEvent then
+			updateTurnEvent.OnServerEvent:Connect(function(_, playerId)
+				-- IMPROVED: Create an explicit turn item permission event
+				-- Let all clients know about turn change for permissions update
+				print("[BoardService] Broadcasting turn item permissions update for player " .. playerId)
+
+				-- Tell all clients about the turn change, so they can update permissions
+				ItemPermissionEvent:FireAllClients(playerId)
+			end)
+		end
 	end
 
 	return boardSystem
