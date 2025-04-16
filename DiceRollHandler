@@ -1,6 +1,6 @@
 -- DiceRollHandler.lua
 -- Manages dice roll interface and path selection
--- Version: 2.5.0 (UI Position Fix)
+-- Version: 2.6.0 (Fixed Crystal Movement UI)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -41,6 +41,7 @@ end
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
 local boardRemotes = remotes:WaitForChild("BoardRemotes")
 local gameRemotes = remotes:WaitForChild("GameRemotes")
+local inventoryRemotes = remotes:WaitForChild("InventoryRemotes", 5)
 
 -- Get remote events
 local rollDiceEvent = boardRemotes:WaitForChild("RollDice")
@@ -48,19 +49,42 @@ local showPathSelectionEvent = boardRemotes:WaitForChild("ShowPathSelection")
 local choosePathEvent = boardRemotes:WaitForChild("ChoosePath")
 local updateTurnEvent = gameRemotes:WaitForChild("UpdateTurn")
 
--- สร้าง Remote สำหรับ DiceBonus
-local inventoryRemotes = remotes:WaitForChild("InventoryRemotes", 5)
+-- NEW: Get crystal move complete event
+local crystalMoveCompleteEvent = boardRemotes:FindFirstChild("CrystalMoveComplete")
+if not crystalMoveCompleteEvent then
+	crystalMoveCompleteEvent = Instance.new("RemoteEvent")
+	crystalMoveCompleteEvent.Name = "CrystalMoveComplete"
+	crystalMoveCompleteEvent.Parent = boardRemotes
+end
+
+-- Create Remote for CrystalUIReset if needed
 if not inventoryRemotes then
 	inventoryRemotes = Instance.new("Folder")
 	inventoryRemotes.Name = "InventoryRemotes"
 	inventoryRemotes.Parent = remotes
 end
 
+local crystalUIResetEvent = inventoryRemotes:FindFirstChild("CrystalUIReset")
+if not crystalUIResetEvent then
+	crystalUIResetEvent = Instance.new("RemoteEvent")
+	crystalUIResetEvent.Name = "CrystalUIReset"
+	crystalUIResetEvent.Parent = inventoryRemotes
+end
+
+-- DiceBonus remote
 local diceBonusEvent = inventoryRemotes:FindFirstChild("DiceBonus")
 if not diceBonusEvent then
 	diceBonusEvent = Instance.new("RemoteEvent")
 	diceBonusEvent.Name = "DiceBonus"
 	diceBonusEvent.Parent = inventoryRemotes
+end
+
+-- Get or create item permission update event
+local itemPermissionEvent = inventoryRemotes:FindFirstChild("ItemPermissionUpdate")
+if not itemPermissionEvent then
+	itemPermissionEvent = Instance.new("RemoteEvent")
+	itemPermissionEvent.Name = "ItemPermissionUpdate"
+	itemPermissionEvent.Parent = inventoryRemotes
 end
 
 -- Constants
@@ -81,9 +105,130 @@ local remainingSteps = 0
 local activeDiceBonus = 0
 local bonusDiceResults = {}
 
--- ฟังก์ชันสร้างลูกเต๋าเพิ่มเติม (ปรับปรุงการจัดวางให้เหมือนรูปตัวอย่างที่ 2)
+-- NEW: Track crystal movement state
+local isCrystalMovementActive = false
+local crystalSteps = 0
+
+-- Add debug mode
+local DEBUG_MODE = true
+
+-- Debug logging function
+local function debugLog(message)
+	if DEBUG_MODE then
+		print("[DiceRollHandler] " .. tostring(message))
+	end
+end
+
+-- NEW: Create Crystal UI
+local function createCrystalEffectUI(steps)
+	-- Remove any existing crystal effect
+	for _, child in pairs(PlayerGui:GetChildren()) do
+		if child.Name == "CrystalEffect" then
+			child:Destroy()
+		end
+	end
+
+	-- Create main frame
+	local crystalEffect = Instance.new("ScreenGui")
+	crystalEffect.Name = "CrystalEffect"
+	crystalEffect.ResetOnSpawn = false
+	crystalEffect.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	crystalEffect.Parent = PlayerGui
+
+	-- Create container frame
+	local container = Instance.new("Frame")
+	container.Name = "Container"
+	container.BackgroundTransparency = 1
+	container.Size = UDim2.new(1, 0, 0.15, 0)
+	container.Position = UDim2.new(0, 0, 0.02, 0)
+	container.AnchorPoint = Vector2.new(0, 0)
+	container.Parent = crystalEffect
+
+	-- Create crystal steps text
+	local stepsText = Instance.new("TextLabel")
+	stepsText.Name = "StepsText"
+	stepsText.Size = UDim2.new(0, 250, 0, 40)
+	stepsText.Position = UDim2.new(0.5, 0, 0, 0)
+	stepsText.AnchorPoint = Vector2.new(0.5, 0)
+	stepsText.Font = Enum.Font.GothamBold
+	stepsText.TextSize = 24
+	stepsText.TextColor3 = Color3.fromRGB(100, 200, 255)
+	stepsText.Text = "Crystal Movement: " .. steps .. " steps"
+	stepsText.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	stepsText.BackgroundTransparency = 0.5
+	stepsText.BorderSizePixel = 0
+	stepsText.Parent = container
+
+	-- Add corner
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = stepsText
+
+	-- Add glow
+	local glow = Instance.new("UIStroke")
+	glow.Color = Color3.fromRGB(80, 170, 255)
+	glow.Thickness = 2
+	glow.Transparency = 0.2
+	glow.Parent = stepsText
+
+	-- Animation
+	stepsText.TextTransparency = 1
+	stepsText.BackgroundTransparency = 1
+
+	local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+	local tween = TweenService:Create(stepsText, tweenInfo, {
+		TextTransparency = 0,
+		BackgroundTransparency = 0.5
+	})
+	tween:Play()
+
+	-- Auto-destroy after movement completes
+	task.delay(10, function()
+		if crystalEffect and crystalEffect.Parent then
+			local fadeOut = TweenService:Create(stepsText, TweenInfo.new(0.5), {
+				TextTransparency = 1,
+				BackgroundTransparency = 1
+			})
+			fadeOut:Play()
+			fadeOut.Completed:Connect(function()
+				crystalEffect:Destroy()
+			end)
+		end
+	end)
+
+	return crystalEffect
+end
+
+-- NEW: Function to explicitly signal crystal movement completion
+local function signalCrystalMoveComplete()
+	if isCrystalMovementActive then
+		debugLog("Sending crystal move complete signal to server")
+
+		-- Signal the server that crystal movement is complete
+		crystalMoveCompleteEvent:FireServer()
+
+		-- Also notify InventoryService
+		local crystalMoveCompleteInventoryEvent = inventoryRemotes:FindFirstChild("CrystalMoveComplete")
+		if crystalMoveCompleteInventoryEvent then
+			crystalMoveCompleteInventoryEvent:FireServer()
+		end
+
+		-- Reset crystal state
+		isCrystalMovementActive = false
+		crystalSteps = 0
+
+		-- Remove any crystal effect UI
+		for _, child in pairs(PlayerGui:GetChildren()) do
+			if child.Name == "CrystalEffect" then
+				child:Destroy()
+			end
+		end
+	end
+end
+
+-- Function to create bonus dice (unchanged)
 local function createBonusDice(numBonusDice)
-	-- ลบลูกเต๋าเก่าออกก่อน
+	-- Remove any old dice
 	for _, dice in pairs(DiceWheel:GetChildren()) do
 		if dice.Name:find("BonusDice") or dice.Name == "TotalResult" then
 			dice:Destroy()
@@ -92,47 +237,46 @@ local function createBonusDice(numBonusDice)
 
 	bonusDiceResults = {}
 
-	-- รองรับการสร้างลูกเต๋าโบนัสโดยจัดวางแบบแนวนอนเหมือนรูปตัวอย่างที่ 2
-	-- ตำแหน่งของลูกเต๋าหลัก
+	-- Main dice position
 	local mainDicePosition = DiceResult.Position
 	local mainDiceAnchor = DiceResult.AnchorPoint
 	local mainDiceSize = DiceResult.Size
 
-	-- ระยะห่างระหว่างลูกเต๋า
-	local spacing = 1.5 -- ระยะห่างระหว่างลูกเต๋าแต่ละลูกคิดเป็นเท่าของความกว้างลูกเต๋า
+	-- Spacing between dice
+	local spacing = 1.5 -- Multiple of dice width
 
-	print("Creating " .. numBonusDice .. " bonus dice")
+	debugLog("Creating " .. numBonusDice .. " bonus dice")
 
-	-- ถ้ามีโบนัส 1 ลูก ให้อยู่ด้านซ้ายของลูกหลัก
+	-- If 1 bonus die, place to left of main die
 	if numBonusDice == 1 then
 		local bonusDice = DiceResult:Clone()
 		bonusDice.Name = "BonusDice_1"
 		bonusDice.Position = UDim2.new(mainDicePosition.X.Scale - spacing * mainDiceSize.X.Scale, 0, mainDicePosition.Y.Scale, 0)
 		bonusDice.AnchorPoint = mainDiceAnchor
-		bonusDice.TextColor3 = Color3.fromRGB(100, 255, 100) -- สีเขียวอ่อน
+		bonusDice.TextColor3 = Color3.fromRGB(100, 255, 100) -- Light green
 		bonusDice.Text = ""
 		bonusDice.Parent = DiceWheel
 
 		bonusDiceResults[1] = 0
 	end
 
-	-- ถ้ามีโบนัส 2 ลูก ให้อยู่ซ้าย-ขวาของลูกหลัก
+	-- If 2 bonus dice, place on both sides
 	if numBonusDice == 2 then
-		-- ลูกซ้าย
+		-- Left die
 		local leftDice = DiceResult:Clone()
 		leftDice.Name = "BonusDice_L"
 		leftDice.Position = UDim2.new(mainDicePosition.X.Scale - spacing * mainDiceSize.X.Scale, 0, mainDicePosition.Y.Scale, 0)
 		leftDice.AnchorPoint = mainDiceAnchor
-		leftDice.TextColor3 = Color3.fromRGB(100, 255, 100) -- สีเขียวอ่อน
+		leftDice.TextColor3 = Color3.fromRGB(100, 255, 100) -- Light green
 		leftDice.Text = ""
 		leftDice.Parent = DiceWheel
 
-		-- ลูกขวา
+		-- Right die
 		local rightDice = DiceResult:Clone()
 		rightDice.Name = "BonusDice_R"
 		rightDice.Position = UDim2.new(mainDicePosition.X.Scale + spacing * mainDiceSize.X.Scale, 0, mainDicePosition.Y.Scale, 0)
 		rightDice.AnchorPoint = mainDiceAnchor
-		rightDice.TextColor3 = Color3.fromRGB(100, 255, 100) -- สีเขียวอ่อน
+		rightDice.TextColor3 = Color3.fromRGB(100, 255, 100) -- Light green
 		rightDice.Text = ""
 		rightDice.Parent = DiceWheel
 
@@ -140,14 +284,14 @@ local function createBonusDice(numBonusDice)
 		bonusDiceResults[2] = 0
 	end
 
-	-- รองรับโบนัสมากกว่า 2 ลูก (ถ้าจำเป็น)
+	-- Support for more than 2 bonus dice
 	if numBonusDice > 2 then
 		for i = 1, numBonusDice do
 			local position
-			if i % 2 == 1 then -- ลูกคี่ไปทางซ้าย
+			if i % 2 == 1 then -- Odd dice to left
 				local offset = math.ceil(i/2) * spacing
 				position = UDim2.new(mainDicePosition.X.Scale - offset * mainDiceSize.X.Scale, 0, mainDicePosition.Y.Scale, 0)
-			else -- ลูกคู่ไปทางขวา
+			else -- Even dice to right
 				local offset = (i/2) * spacing
 				position = UDim2.new(mainDicePosition.X.Scale + offset * mainDiceSize.X.Scale, 0, mainDicePosition.Y.Scale, 0)
 			end
@@ -156,7 +300,7 @@ local function createBonusDice(numBonusDice)
 			bonusDice.Name = "BonusDice_" .. i
 			bonusDice.Position = position
 			bonusDice.AnchorPoint = mainDiceAnchor
-			bonusDice.TextColor3 = Color3.fromRGB(100, 255, 100) -- สีเขียวอ่อน
+			bonusDice.TextColor3 = Color3.fromRGB(100, 255, 100) -- Light green
 			bonusDice.Text = ""
 			bonusDice.Parent = DiceWheel
 
@@ -167,62 +311,62 @@ local function createBonusDice(numBonusDice)
 	return bonusDiceResults
 end
 
--- ฟังก์ชันสร้างผลรวมเหนือลูกเต๋าหลัก (แก้ไขตำแหน่งให้อยู่ตรงกลางด้านบน)
+-- Total result UI (unchanged)
 local function createTotalResult(total)
-	-- ลบผลรวมเดิม
+	-- Remove old total
 	local oldTotal = DiceWheel:FindFirstChild("TotalResult")
 	if oldTotal then
 		oldTotal:Destroy()
 	end
 
-	-- ดึงข้อมูลตำแหน่งลูกเต๋าหลัก
+	-- Get main dice position
 	local mainDicePosition = DiceResult.Position
 	local mainDiceAnchorPoint = DiceResult.AnchorPoint
 	local mainDiceSize = DiceResult.Size
 
-	-- สร้างกรอบแสดงผลรวม
+	-- Create total frame
 	local totalFrame = Instance.new("Frame")
 	totalFrame.Name = "TotalResult"
-	totalFrame.Size = UDim2.new(0, 120, 0, 40) -- ปรับขนาดให้ใหญ่ขึ้น
-	-- วางไว้ด้านบนลูกเต๋าหลัก ให้ตรงกลาง
+	totalFrame.Size = UDim2.new(0, 120, 0, 40) -- Larger size
+	-- Position above main dice
 	totalFrame.Position = UDim2.new(mainDicePosition.X.Scale, 0, mainDicePosition.Y.Scale - 0.35, 0)
-	totalFrame.AnchorPoint = Vector2.new(0.5, 0.5) -- อิงจุดกึ่งกลาง
+	totalFrame.AnchorPoint = Vector2.new(0.5, 0.5) -- Center anchor
 	totalFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 50)
 	totalFrame.BackgroundTransparency = 0.2
 	totalFrame.ZIndex = 5
 	totalFrame.Parent = DiceWheel
 
-	-- เพิ่มขอบมน
+	-- Add rounded corners
 	local corner = Instance.new("UICorner")
 	corner.CornerRadius = UDim.new(0, 10)
 	corner.Parent = totalFrame
 
-	-- เพิ่มเงา
+	-- Add shadow
 	local shadow = Instance.new("UIStroke")
 	shadow.Color = Color3.fromRGB(0, 0, 0)
 	shadow.Transparency = 0.5
 	shadow.Thickness = 2
 	shadow.Parent = totalFrame
 
-	-- เพิ่มข้อความแสดงผลรวม
+	-- Add total text
 	local totalText = Instance.new("TextLabel")
 	totalText.Name = "TotalText"
 	totalText.Size = UDim2.new(1, 0, 1, 0)
 	totalText.Position = UDim2.new(0.5, 0, 0.5, 0)
 	totalText.AnchorPoint = Vector2.new(0.5, 0.5)
 	totalText.BackgroundTransparency = 1
-	totalText.TextColor3 = Color3.fromRGB(255, 255, 0) -- สีเหลือง
+	totalText.TextColor3 = Color3.fromRGB(255, 255, 0) -- Yellow
 	totalText.Font = Enum.Font.GothamBold
 	totalText.TextSize = 22
 	totalText.Text = "Total: " .. total
 	totalText.ZIndex = 6
 	totalText.Parent = totalFrame
 
-	-- แอนิเมชั่นแสดงผล
+	-- Animation
 	totalFrame.Size = UDim2.new(0, 0, 0, 40)
 	totalText.TextTransparency = 1
 
-	-- แอนิเมชั่นขยายกรอบ
+	-- Expand frame animation
 	local frameTween = TweenService:Create(
 		totalFrame,
 		TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
@@ -230,7 +374,7 @@ local function createTotalResult(total)
 	)
 	frameTween:Play()
 
-	-- แอนิเมชั่นแสดงข้อความ
+	-- Show text after frame expands
 	frameTween.Completed:Connect(function()
 		local textTween = TweenService:Create(
 			totalText,
@@ -243,30 +387,30 @@ local function createTotalResult(total)
 	return totalFrame
 end
 
--- ฟังก์ชันสร้างการแจ้งเตือนโบนัสด้านขวาบน
+-- Bonus notification (unchanged)
 local function createBonusNotification(bonusAmount)
-	-- ลบการแจ้งเตือนเดิมออกก่อน
+	-- Remove old notification
 	local oldNotification = PlayerGui:FindFirstChild("DiceBonusNotification")
 	if oldNotification then
 		oldNotification:Destroy()
 	end
 
-	-- สร้างการแจ้งเตือนใหม่
+	-- Create new notification
 	local notification = Instance.new("Frame")
 	notification.Name = "DiceBonusNotification"
 	notification.Size = UDim2.new(0, 160, 0, 40)
-	notification.Position = UDim2.new(1, -170, 0, 10) -- มุมขวาบน
+	notification.Position = UDim2.new(1, -170, 0, 10) -- Top right
 	notification.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
 	notification.BackgroundTransparency = 0.2
 	notification.BorderSizePixel = 0
 	notification.Parent = PlayerGui
 
-	-- เพิ่มขอบมน
+	-- Add rounded corners
 	local corner = Instance.new("UICorner")
 	corner.CornerRadius = UDim.new(0, 8)
 	corner.Parent = notification
 
-	-- ข้อความแจ้งเตือน
+	-- Notification text
 	local text = Instance.new("TextLabel")
 	text.Name = "NotificationText"
 	text.Size = UDim2.new(1, -10, 1, 0)
@@ -279,21 +423,21 @@ local function createBonusNotification(bonusAmount)
 	text.Text = "Dice Bonus: +" .. bonusAmount
 	text.Parent = notification
 
-	-- ไอคอน
+	-- Add icon
 	local icon = Instance.new("ImageLabel")
 	icon.Name = "Icon"
 	icon.Size = UDim2.new(0, 24, 0, 24)
 	icon.Position = UDim2.new(0, 8, 0.5, 0)
 	icon.AnchorPoint = Vector2.new(0, 0.5)
 	icon.BackgroundTransparency = 1
-	icon.Image = "rbxassetid://7228017567" -- รูปลูกเต๋า
+	icon.Image = "rbxassetid://7228017567" -- Dice image
 	icon.ImageColor3 = Color3.fromRGB(120, 255, 120)
 	icon.Parent = notification
 
-	-- ปรับขนาดข้อความให้อยู่ด้านขวาของไอคอน
+	-- Adjust text position to right of icon
 	text.Position = UDim2.new(0.6, 0, 0.5, 0)
 
-	-- แอนิเมชั่น
+	-- Animation
 	notification.Size = UDim2.new(0, 0, 0, 40)
 	local sizeTween = TweenService:Create(
 		notification,
@@ -305,8 +449,25 @@ local function createBonusNotification(bonusAmount)
 	return notification
 end
 
--- Show dice roll UI
+-- NEW: Check item usage permission
+local function checkItemUsagePermission()
+	local itemPermEvent = inventoryRemotes:FindFirstChild("ItemPermissionUpdate")
+	if itemPermEvent then
+		-- Request permission status from server
+		itemPermEvent:FireServer()
+		debugLog("Requesting item usage permission from server")
+	end
+end
+
+-- IMPROVED: Show dice roll UI (checks for crystal movement)
 local function showDiceRollUI()
+	-- Don't show if crystal movement is active
+	if isCrystalMovementActive then
+		debugLog("Not showing dice roll UI - crystal movement active")
+		DiceRollUI.Visible = false
+		return
+	end
+
 	DiceRollUI.Visible = true
 	RollButton.Visible = true
 	PathSelectionContainer.Visible = false
@@ -323,35 +484,42 @@ local function showDiceRollUI()
 	currentPathChoices = nil
 	remainingSteps = 0
 
-	-- แสดงแจ้งเตือนโบนัส (ถ้ามี)
+	-- Show bonus notification if active
 	if activeDiceBonus > 0 then
 		createBonusNotification(activeDiceBonus)
 		createBonusDice(activeDiceBonus)
 	else
-		-- ลบลูกเต๋าโบนัสที่อาจมีอยู่
+		-- Remove any bonus dice
 		for _, dice in pairs(DiceWheel:GetChildren()) do
 			if dice.Name:find("BonusDice") or dice.Name == "TotalResult" then
 				dice:Destroy()
 			end
 		end
 	end
+
+	-- Check if we have permission to use items in this turn
+	checkItemUsagePermission()
 end
 
--- Hide dice roll UI
+-- IMPROVED: Hide dice roll UI (ensures hidden during crystal movement)
 local function hideDiceRollUI()
 	DiceRollUI.Visible = false
 	isRolling = false
 	canRoll = false
+
+	if isCrystalMovementActive then
+		debugLog("Dice UI hidden during crystal movement")
+	end
 end
 
--- Animate dice roll (ปรับปรุงการแสดงผลลูกเต๋าโบนัส)
+-- Animate dice roll (unchanged)
 local function animateDiceRoll(finalResult)
 	if isRolling then return end
 
 	isRolling = true
 	RollButton.Visible = false
 
-	-- สร้างลูกเต๋าโบนัสตามจำนวน
+	-- Create bonus dice based on count
 	if activeDiceBonus > 0 then
 		createBonusDice(activeDiceBonus)
 	end
@@ -368,11 +536,11 @@ local function animateDiceRoll(finalResult)
 		if currentTime - lastUpdate >= frameRate then
 			lastUpdate = currentTime
 
-			-- แสดงค่าสุ่มสำหรับลูกเต๋าหลัก
+			-- Show random value for main die
 			local randomValue = DICE_VALUES[math.random(1, #DICE_VALUES)]
 			DiceResult.Text = tostring(randomValue)
 
-			-- สุ่มค่าสำหรับลูกเต๋าโบนัสทุกลูก
+			-- Random values for bonus dice
 			if activeDiceBonus == 1 then
 				local bonusDice = DiceWheel:FindFirstChild("BonusDice_1")
 				if bonusDice then
@@ -391,7 +559,7 @@ local function animateDiceRoll(finalResult)
 					rightDice.Text = tostring(DICE_VALUES[math.random(1, #DICE_VALUES)])
 				end
 			else
-				-- สำหรับกรณีมีลูกเต๋าโบนัสมากกว่า 2 ลูก
+				-- For more than 2 bonus dice
 				for i = 1, activeDiceBonus do
 					local bonusDice = DiceWheel:FindFirstChild("BonusDice_" .. i)
 					if bonusDice then
@@ -410,17 +578,17 @@ local function animateDiceRoll(finalResult)
 		end
 	end
 
-	-- สุ่มค่าจริงสำหรับลูกเต๋าหลักและลูกเต๋าโบนัส
+	-- Generate final results
 	local mainDiceResult = finalResult
 	local totalResult = mainDiceResult
 
-	-- บันทึกผลลูกเต๋าทั้งหมดเพื่อแสดงผล
+	-- Record all dice results for display
 	local allDiceResults = {
 		main = mainDiceResult,
 		bonus = {}
 	}
 
-	-- สุ่มผลลัพธ์สำหรับลูกเต๋าโบนัส
+	-- Generate bonus dice results
 	if activeDiceBonus == 1 then
 		local bonusDice = DiceWheel:FindFirstChild("BonusDice_1")
 		if bonusDice then
@@ -447,7 +615,7 @@ local function animateDiceRoll(finalResult)
 			totalResult = totalResult + rightValue
 		end
 	else
-		-- สำหรับกรณีมีลูกเต๋าโบนัสมากกว่า 2 ลูก
+		-- For more than 2 bonus dice
 		for i = 1, activeDiceBonus do
 			local bonusDice = DiceWheel:FindFirstChild("BonusDice_" .. i)
 			if bonusDice then
@@ -459,15 +627,15 @@ local function animateDiceRoll(finalResult)
 		end
 	end
 
-	-- แสดงผลลัพธ์ดั้งเดิม
+	-- Show original result
 	DiceResult.Text = tostring(mainDiceResult)
 
-	-- แสดงผลรวมด้านบน
+	-- Show total at top
 	if activeDiceBonus > 0 then
 		createTotalResult(totalResult)
 	end
 
-	-- แอนิเมชั่นขยายลูกเต๋าหลัก
+	-- Animate main dice
 	local resultTween = TweenService:Create(
 		DiceResult,
 		TweenInfo.new(0.5, Enum.EasingStyle.Bounce, Enum.EasingDirection.Out),
@@ -475,7 +643,7 @@ local function animateDiceRoll(finalResult)
 	)
 	resultTween:Play()
 
-	-- แอนิเมชั่นสำหรับลูกเต๋าโบนัส
+	-- Animate bonus dice
 	if activeDiceBonus == 1 then
 		local bonusDice = DiceWheel:FindFirstChild("BonusDice_1")
 		if bonusDice then
@@ -508,7 +676,7 @@ local function animateDiceRoll(finalResult)
 			rightTween:Play()
 		end
 	else
-		-- สำหรับกรณีมีลูกเต๋าโบนัสมากกว่า 2 ลูก
+		-- For more than 2 bonus dice
 		for i = 1, activeDiceBonus do
 			local bonusDice = DiceWheel:FindFirstChild("BonusDice_" .. i)
 			if bonusDice then
@@ -524,7 +692,7 @@ local function animateDiceRoll(finalResult)
 
 	wait(0.5)
 
-	-- ย่อกลับ
+	-- Scale down animation
 	local resetTween = TweenService:Create(
 		DiceResult,
 		TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
@@ -532,7 +700,7 @@ local function animateDiceRoll(finalResult)
 	)
 	resetTween:Play()
 
-	-- ย่อลูกเต๋าโบนัสกลับ
+	-- Scale down bonus dice
 	if activeDiceBonus == 1 then
 		local bonusDice = DiceWheel:FindFirstChild("BonusDice_1")
 		if bonusDice then
@@ -565,7 +733,7 @@ local function animateDiceRoll(finalResult)
 			resetRightTween:Play()
 		end
 	else
-		-- สำหรับกรณีมีลูกเต๋าโบนัสมากกว่า 2 ลูก
+		-- For more than 2 bonus dice
 		for i = 1, activeDiceBonus do
 			local bonusDice = DiceWheel:FindFirstChild("BonusDice_" .. i)
 			if bonusDice then
@@ -580,25 +748,25 @@ local function animateDiceRoll(finalResult)
 	end
 
 	isRolling = false
-	currentDiceResult = totalResult  -- เก็บค่าที่รวมทุกลูกแล้ว
-	remainingSteps = totalResult     -- ใช้ค่านี้เป็นจำนวนก้าวที่เดินได้จริง
+	currentDiceResult = totalResult  -- Use total of all dice
+	remainingSteps = totalResult     -- Steps to move equals total
 
-	-- บันทึกค่าลงใน DEBUG
-	print("=== DICE ROLL RESULT ===")
-	print("Main dice: " .. mainDiceResult)
-	print("Bonus dice: " .. table.concat(allDiceResults.bonus, ", "))
-	print("Total result: " .. totalResult)
-	print("======================")
+	-- Debug log
+	debugLog("=== DICE ROLL RESULT ===")
+	debugLog("Main dice: " .. mainDiceResult)
+	debugLog("Bonus dice: " .. table.concat(allDiceResults.bonus, ", "))
+	debugLog("Total result: " .. totalResult)
+	debugLog("======================")
 
 	wait(0.3)
 
-	-- ส่งผลลัพธ์ไปยังเซิร์ฟเวอร์
+	-- Send result to server
 	rollDiceEvent:FireServer(totalResult)
 
-	-- รีเซ็ตโบนัสหลังใช้
+	-- Reset bonus after use
 	activeDiceBonus = 0
 
-	-- ลบการแจ้งเตือนโบนัส
+	-- Remove bonus notification
 	local notification = PlayerGui:FindFirstChild("DiceBonusNotification")
 	if notification then
 		local hideTween = TweenService:Create(
@@ -619,7 +787,7 @@ end
 local function showPathChoices(choices)
 	PathSelectionContainer.Visible = true
 	RemainingStepsText.Text = "Steps: " .. remainingSteps
-	wait(0.5) -- Small delay to ensure UI updates
+	wait(0.5) -- Small delay for UI update
 
 	-- Reset buttons
 	ForwardButton.Visible = false
@@ -663,6 +831,12 @@ end
 
 -- Button event handlers
 RollButton.Activated:Connect(function()
+	-- Block rolling if crystal movement is active
+	if isCrystalMovementActive then
+		debugLog("Cannot roll dice during crystal movement")
+		return
+	end
+
 	if not isRolling and canRoll then
 		local diceResult = math.random(1, 6)
 		animateDiceRoll(diceResult)
@@ -684,39 +858,150 @@ end)
 -- Remote event handlers
 showPathSelectionEvent.OnClientEvent:Connect(showPathChoices)
 
+-- IMPROVED: Turn update handler accounts for crystal movement
 updateTurnEvent.OnClientEvent:Connect(function(currentPlayerId)
 	local isMyTurn = currentPlayerId == player.UserId
 
 	if isMyTurn then
-		showDiceRollUI()
-		canRoll = true
+		-- Only show dice UI if not in crystal movement
+		if not isCrystalMovementActive then
+			showDiceRollUI()
+			canRoll = true
+
+			-- Request item permission check
+			checkItemUsagePermission()
+		else
+			debugLog("Not showing dice UI - crystal movement active")
+			DiceRollUI.Visible = false
+			canRoll = false
+		end
 	else
 		hideDiceRollUI()
 		canRoll = false
+
+		-- Reset crystal state if turn ended
+		if isCrystalMovementActive then
+			isCrystalMovementActive = false
+			crystalSteps = 0
+
+			-- Remove crystal effect UI
+			for _, child in pairs(PlayerGui:GetChildren()) do
+				if child.Name == "CrystalEffect" then
+					child:Destroy()
+				end
+			end
+		end
 	end
 end)
 
--- ฟังก์ชันรับ Dice Bonus
+-- NEW: Handle crystal move events
+local crystalMoveEvent = boardRemotes:FindFirstChild("CrystalMove")
+if crystalMoveEvent then
+	crystalMoveEvent.OnClientEvent:Connect(function(steps)
+		debugLog("Crystal movement started: " .. steps .. " steps")
+
+		-- Set crystal movement state
+		isCrystalMovementActive = true
+		crystalSteps = steps
+
+		-- Hide dice UI immediately
+		hideDiceRollUI()
+		canRoll = false
+
+		-- Create crystal effect UI
+		createCrystalEffectUI(steps)
+	end)
+end
+
+-- NEW: Handle crystal move complete events
+if crystalMoveCompleteEvent then
+	crystalMoveCompleteEvent.OnClientEvent:Connect(function(playerId)
+		-- Check if it's for this player
+		if playerId == player.UserId or playerId == nil then
+			debugLog("Crystal movement complete event received")
+
+			-- Reset crystal state
+			isCrystalMovementActive = false
+			crystalSteps = 0
+
+			-- Remove crystal effect UI
+			for _, child in pairs(PlayerGui:GetChildren()) do
+				if child.Name == "CrystalEffect" then
+					child:Destroy()
+				end
+			end
+		end
+	end)
+end
+
+-- NEW: Handle crystal UI reset
+if crystalUIResetEvent then
+	crystalUIResetEvent.OnClientEvent:Connect(function()
+		debugLog("Crystal UI reset event received")
+
+		-- Reset crystal state
+		isCrystalMovementActive = false
+		crystalSteps = 0
+
+		-- Remove crystal effect UI
+		for _, child in pairs(PlayerGui:GetChildren()) do
+			if child.Name == "CrystalEffect" then
+				child:Destroy()
+			end
+		end
+
+		-- Update dice UI based on turn
+		local gameManager = _G.GameManager
+		local turnSystem = gameManager and gameManager.turnSystem
+
+		if turnSystem and turnSystem:GetCurrentPlayerTurn() == player.UserId then
+			showDiceRollUI()
+			canRoll = true
+		end
+	end)
+end
+
+-- Dice bonus handler
 diceBonusEvent.OnClientEvent:Connect(function(bonusAmount)
 	activeDiceBonus = bonusAmount
-	print("[DiceRollHandler] ได้รับโบนัสลูกเต๋า: +" .. bonusAmount)
+	debugLog("Received dice bonus: +" .. bonusAmount)
 
-	-- แสดงการแจ้งเตือนว่าโบนัสทำงานแล้ว
+	-- Play notification sound
 	local notificationSound = Instance.new("Sound")
-	notificationSound.SoundId = "rbxassetid://6026984224"  -- เสียงการแจ้งเตือน
+	notificationSound.SoundId = "rbxassetid://6026984224"  -- Notification sound
 	notificationSound.Volume = 0.5
 	notificationSound.Parent = DiceRollUI
 	notificationSound:Play()
 	game:GetService("Debris"):AddItem(notificationSound, 2)
 
-	-- สร้างการแจ้งเตือนในมุมขวาบน
+	-- Create top-right notification
 	createBonusNotification(bonusAmount)
 
-	-- อัพเดต UI ทันทีถ้ากำลังแสดง DiceRollUI อยู่
+	-- Update UI if DiceRollUI is visible
 	if DiceRollUI.Visible then
 		showDiceRollUI()
 	end
 end)
+
+-- NEW: Handle item permission updates
+if itemPermissionEvent then
+	itemPermissionEvent.OnClientEvent:Connect(function(currentTurnPlayerId)
+		-- If we received this event with our ID, it's our turn
+		if currentTurnPlayerId == player.UserId then
+			debugLog("Received item permission update - this is our turn")
+
+			-- If we receive this during our turn and not in crystal movement, show dice UI
+			if not isCrystalMovementActive then
+				showDiceRollUI()
+				canRoll = true
+			end
+		else
+			debugLog("Received item permission update - not our turn")
+			hideDiceRollUI()
+			canRoll = false
+		end
+	end)
+end
 
 -- Initial setup
 DiceRollUI.Visible = false
@@ -725,8 +1010,9 @@ DiceRollUI.Visible = false
 local DiceRollHandler = {}
 DiceRollHandler.ShowUI = showDiceRollUI
 DiceRollHandler.HideUI = hideDiceRollUI
+DiceRollHandler.SignalCrystalMoveComplete = signalCrystalMoveComplete
 
--- ทำให้สามารถเข้าถึงได้จาก script อื่น
+-- Make accessible to other scripts
 _G.DiceRollHandler = DiceRollHandler
 
 return DiceRollHandler
