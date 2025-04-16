@@ -1,461 +1,243 @@
 -- PlayerManager.lua
--- Module for managing all player data in the game
--- Version: 5.0.0 (แก้ไขให้ลบค่า magicDefense และ agility ออก)
+-- Version: 5.0.4 (Formatted - No Debug, No Comments)
 
-local PlayerManager = {}
-PlayerManager.__index = PlayerManager
-
--- Services
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
--- Get ClassData module
 local ClassData = nil
-
--- ใช้ pcall เพื่อป้องกันกรณีโหลด ClassData ไม่ได้
 local success, result = pcall(function()
 	return require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("ClassData"))
 end)
-
 if success then
 	ClassData = result
-	print("[PlayerManager] Successfully loaded ClassData module")
 else
-	warn("[PlayerManager] Failed to load ClassData module: " .. tostring(result))
-	-- สร้าง ClassData จำลอง
 	ClassData = {
 		Classes = {
-			Warrior = {
-				BaseStats = {
-					MaxHP = 125,
-					MaxMP = 50,
-					ATK = 95,
-					MAGIC = 10
-				}
-			},
-			Mage = {
-				BaseStats = {
-					MaxHP = 85,
-					MaxMP = 120,
-					ATK = 25,
-					MAGIC = 95
-				}
-			},
-			Thief = {
-				BaseStats = {
-					MaxHP = 100,
-					MaxMP = 60,
-					ATK = 75,
-					MAGIC = 30
-				}
-			}
+			Warrior = { BaseStats = { MaxHP = 125, MaxMP = 50, ATK = 95, MAGIC = 10 } },
+			Mage = { BaseStats = { MaxHP = 85, MaxMP = 120, ATK = 25, MAGIC = 95 } },
+			Thief = { BaseStats = { MaxHP = 100, MaxMP = 60, ATK = 75, MAGIC = 30 } }
 		},
-		GetClassInfo = function(self, className)
-			return self.Classes[className]
-		end,
-		GetDefaultStats = function(self, className)
-			return self.Classes[className] and self.Classes[className].BaseStats
-		end
+		GetClassInfo = function(self, className) return self.Classes[className] end,
+		GetDefaultStats = function(self, className) return self.Classes[className] and self.Classes[className].BaseStats end
 	}
 end
 
--- Health sync configuration
 local HEALTH_SYNC_INTERVAL = 0.5
 local AUTO_HEAL_ENABLED = false
 local AUTO_HEAL_INTERVAL = 10
 local AUTO_HEAL_AMOUNT = 5
 local MAX_AUTO_HEAL_PERCENT = 50
 
+local PlayerManager = {}
+PlayerManager.__index = PlayerManager
+
 function PlayerManager.new(gameManager)
 	local self = setmetatable({}, PlayerManager)
-
-	-- Reference to game manager
 	self.gameManager = gameManager
-
-	-- Player data storage
 	self.players = {}
 	self.playerCount = 0
-
-	-- Player health sync connections
 	self.healthSyncConnections = {}
-
-	-- Initialize remote events
 	self:InitializeRemotes()
-
-	-- Set up health request functions
-	self:SetupHealthRequestFunctions()
-
 	return self
 end
 
 function PlayerManager:InitializeRemotes()
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
 	local uiRemotes = remotes:WaitForChild("UIRemotes")
-
-	-- Create UpdatePlayerStats event if needed
-	self.updatePlayerStatsEvent = uiRemotes:FindFirstChild("UpdatePlayerStats")
-	if not self.updatePlayerStatsEvent then
-		self.updatePlayerStatsEvent = Instance.new("RemoteEvent")
-		self.updatePlayerStatsEvent.Name = "UpdatePlayerStats"
-		self.updatePlayerStatsEvent.Parent = uiRemotes
-	end
-
-	-- Create StatChanged event for real-time updates
-	self.statChangedEvent = uiRemotes:FindFirstChild("StatChanged")
-	if not self.statChangedEvent then
-		self.statChangedEvent = Instance.new("RemoteEvent")
-		self.statChangedEvent.Name = "StatChanged"
-		self.statChangedEvent.Parent = uiRemotes
-	end
-
-	-- Create HealthRemotes folder if needed
 	local healthRemotes = remotes:FindFirstChild("HealthRemotes")
 	if not healthRemotes then
 		healthRemotes = Instance.new("Folder")
 		healthRemotes.Name = "HealthRemotes"
 		healthRemotes.Parent = remotes
 	end
-
-	-- Create PlayerDamaged event
-	self.playerDamagedEvent = uiRemotes:FindFirstChild("PlayerDamaged")
-	if not self.playerDamagedEvent then
-		self.playerDamagedEvent = Instance.new("RemoteEvent")
-		self.playerDamagedEvent.Name = "PlayerDamaged"
-		self.playerDamagedEvent.Parent = uiRemotes
-	end
+	self.updatePlayerStatsEvent = uiRemotes:FindFirstChild("UpdatePlayerStats") or Instance.new("RemoteEvent", uiRemotes)
+	self.updatePlayerStatsEvent.Name = "UpdatePlayerStats"
+	self.statChangedEvent = uiRemotes:FindFirstChild("StatChanged") or Instance.new("RemoteEvent", uiRemotes)
+	self.statChangedEvent.Name = "StatChanged"
+	self.playerDamagedEvent = uiRemotes:FindFirstChild("PlayerDamaged") or Instance.new("RemoteEvent", uiRemotes)
+	self.playerDamagedEvent.Name = "PlayerDamaged"
+	self.requestHealFunction = healthRemotes:FindFirstChild("RequestHeal") or Instance.new("RemoteFunction", healthRemotes)
+	self.requestHealFunction.Name = "RequestHeal"
 end
 
--- Set up health request RemoteFunctions
 function PlayerManager:SetupHealthRequestFunctions()
-	local remotes = ReplicatedStorage:WaitForChild("Remotes")
-	local healthRemotes = remotes:FindFirstChild("HealthRemotes")
-
-	if not healthRemotes then
-		healthRemotes = Instance.new("Folder")
-		healthRemotes.Name = "HealthRemotes"
-		healthRemotes.Parent = remotes
-	end
-
-	-- Create RequestHeal function
-	local requestHealFunction = healthRemotes:FindFirstChild("RequestHeal")
-	if not requestHealFunction then
-		requestHealFunction = Instance.new("RemoteFunction")
-		requestHealFunction.Name = "RequestHeal"
-		requestHealFunction.Parent = healthRemotes
-	end
-
-	-- Handle heal requests
-	requestHealFunction.OnServerInvoke = function(player, healAmount)
-		-- Get player data
+	self.requestHealFunction.OnServerInvoke = function(player, healAmount)
 		local playerData = self:GetPlayerData(player)
-		if not playerData then
-			return false, "Player data not found"
-		end
-
-		-- Check heal amount
+		if not playerData then return false, "Player data not found" end
 		healAmount = healAmount or 10
-
-		-- Check for "full" special value
 		if healAmount == "full" then
 			healAmount = playerData.stats.maxHp - playerData.stats.hp
 		else
-			healAmount = math.min(healAmount, 50) -- Prevent excessive healing
+			healAmount = math.min(tonumber(healAmount) or 0, 50)
 		end
-
-		-- Update HP
+		if healAmount <= 0 then return false, "Invalid heal amount" end
 		local newHP = math.min(playerData.stats.hp + healAmount, playerData.stats.maxHp)
-		self:UpdatePlayerHP(player, newHP)
-
-		return true, "Healed for " .. healAmount
+		local actualHeal = newHP - playerData.stats.hp
+		if actualHeal > 0 then
+			self:UpdatePlayerHP(player, newHP)
+			return true, "Healed for " .. actualHeal
+		else
+			return false, "Already at full health"
+		end
 	end
 end
 
--- Get default stats for a given class directly from ClassData
 function PlayerManager:GetDefaultStatsForClass(className)
-	-- Default stats if no class specified
 	local defaultStats = {
-		level = 1,
-		hp = 100,
-		maxHp = 100,
-		mp = 50,
-		maxMp = 50,
-		attack = 10,
-		defense = 10,
-		magic = 10,
-		money = 100
+		level = 1, hp = 100, maxHp = 100, mp = 50, maxMp = 50,
+		attack = 10, defense = 10, magic = 10, money = 100
 	}
-
-	-- If no class provided, return defaults
-	if not className then
-		return defaultStats
-	end
-
-	-- ดึงค่าสถานะจาก ClassData
-	local classStats = nil
-	if ClassData then
-		local classInfo = ClassData:GetClassInfo(className)
-		if classInfo and classInfo.BaseStats then
-			classStats = classInfo.BaseStats
-		end
-	end
-
-	-- ถ้าไม่มีข้อมูลจาก ClassData ใช้ค่าดีฟอลต์ตามคลาส
+	if not className then return defaultStats end
+	local classStats = ClassData and ClassData.GetDefaultStats and ClassData:GetDefaultStats(className)
 	if not classStats then
 		if className == "Warrior" then
-			defaultStats.maxHp = 125
-			defaultStats.hp = 125
-			defaultStats.attack = 95
-			defaultStats.magic = 10
+			defaultStats = { level = 1, hp = 125, maxHp = 125, mp = 50, maxMp = 50, attack = 95, defense = 10, magic = 10, money = 100 }
 		elseif className == "Mage" then
-			defaultStats.maxHp = 85
-			defaultStats.hp = 85
-			defaultStats.maxMp = 120
-			defaultStats.mp = 120
-			defaultStats.attack = 25
-			defaultStats.magic = 95
+			defaultStats = { level = 1, hp = 85, maxHp = 85, mp = 120, maxMp = 120, attack = 25, defense = 10, magic = 95, money = 100 }
 		elseif className == "Thief" then
-			defaultStats.maxHp = 100
-			defaultStats.hp = 100
-			defaultStats.maxMp = 60
-			defaultStats.mp = 60
-			defaultStats.attack = 75
-			defaultStats.magic = 30
-			defaultStats.money = 150
+			defaultStats = { level = 1, hp = 100, maxHp = 100, mp = 60, maxMp = 60, attack = 75, defense = 10, magic = 30, money = 150 }
 		end
-
-		print("[PlayerManager] Using default stats for class: " .. className)
 		return defaultStats
 	end
-
-	-- Map ClassData stats to our internal stats format
 	local stats = {
 		level = 1,
-		hp = classStats.MaxHP or 100,
-		maxHp = classStats.MaxHP or 100,
-		mp = classStats.MaxMP or 50,
-		maxMp = classStats.MaxMP or 50,
-		attack = classStats.ATK or 10,
-		defense = 10, -- ค่าพื้นฐานสำหรับ defense
-		magic = classStats.MAGIC or 10,
-		money = 100 -- Default money value
+		hp = classStats.MaxHP or defaultStats.maxHp,
+		maxHp = classStats.MaxHP or defaultStats.maxHp,
+		mp = classStats.MaxMP or defaultStats.maxMp,
+		maxMp = classStats.MaxMP or defaultStats.maxMp,
+		attack = classStats.ATK or defaultStats.attack,
+		defense = classStats.DEF or defaultStats.defense,
+		magic = classStats.MAGIC or defaultStats.magic,
+		money = defaultStats.money
 	}
-
-	-- Class-specific money adjustment
-	if className == "Thief" then
-		stats.money = 150 -- Thieves start with more money
-	end
-
-	print("[PlayerManager] Created stats for " .. className .. ": MaxHP=" .. stats.maxHp .. 
-		", MaxMP=" .. stats.maxMp .. ", ATK=" .. stats.attack .. ", MAGIC=" .. stats.magic)
-
-	-- ล็อกค่าสถานะที่ใช้จาก ClassData
-	print("[PlayerManager] Original BaseStats: MaxHP=" .. (classStats.MaxHP or "nil") ..
-		", MaxMP=" .. (classStats.MaxMP or "nil") .. ", ATK=" .. (classStats.ATK or "nil") ..
-		", MAGIC=" .. (classStats.MAGIC or "nil"))
-
+	if className == "Thief" then stats.money = 150 end
 	return stats
 end
 
 function PlayerManager:RegisterPlayer(player, className)
-	-- Create player data structure with stats based on class if provided
+	if not player then return nil end
+	local userId = player.UserId
+	if self.players[userId] then
+		self.players[userId].player = player
+		self.players[userId].isConnected = true
+		self:ConnectPlayerHealth(player)
+		self:SyncPlayerStats(player)
+		return self.players[userId]
+	end
 	local initialStats = self:GetDefaultStatsForClass(className)
-
-	-- Create the player data entry
-	self.players[player.UserId] = {
+	self.players[userId] = {
 		player = player,
 		isConnected = true,
 		joinTime = os.time(),
-		class = className,
+		class = className or "Unknown",
 		stats = initialStats,
-		baseStats = table.clone(initialStats), -- Store base stats for equipment calculations
-		inventory = {
-			items = {},
-			weapons = {},
-			armor = {},
-			shields = {}
-		},
+		baseStats = table.clone(initialStats),
+		inventory = {},
 		position = nil,
 		isAlive = true
 	}
-
-	-- Increment counter
 	self.playerCount = self.playerCount + 1
-
-	-- Set up health connection
 	self:ConnectPlayerHealth(player)
-
-	return self.players[player.UserId]
+	self:SyncPlayerStats(player)
+	return self.players[userId]
 end
 
 function PlayerManager:UnregisterPlayer(player)
-	if self.players[player.UserId] then
-		-- Disconnect health sync
+	if not player then return end
+	local userId = player.UserId
+	if self.players[userId] then
 		self:DisconnectPlayerHealth(player)
-
-		self.players[player.UserId] = nil
+		self.players[userId] = nil
 		self.playerCount = self.playerCount - 1
+		self.playerCount = math.max(0, self.playerCount)
 	end
 end
 
--- Connect HP between stats system and Humanoid
 function PlayerManager:ConnectPlayerHealth(player)
 	if not player then return end
-
-	-- Disconnect existing connection
 	self:DisconnectPlayerHealth(player)
-
-	-- Check if player has a character
-	if not player.Character then
-		-- Wait for character to be created
-		player.CharacterAdded:Connect(function(character)
-			self:SetupCharacterHealth(player, character)
-		end)
-		return
-	end
-
-	-- Set up health connection for current character
-	self:SetupCharacterHealth(player, player.Character)
+	local character = player.Character or player.CharacterAdded:Wait()
+	if not character then return end
+	self:SetupCharacterHealth(player, character)
+	player.CharacterAdded:Connect(function(newCharacter)
+		self:DisconnectPlayerHealth(player)
+		self:SetupCharacterHealth(player, newCharacter)
+	end)
 end
 
--- Set up health connection for character
 function PlayerManager:SetupCharacterHealth(player, character)
 	if not player or not character then return end
-
-	local humanoid = character:FindFirstChild("Humanoid")
-	if not humanoid then
-		warn("Humanoid not found for player: " .. player.Name)
-		return
-	end
-
-	-- Get player data
+	local humanoid = character:WaitForChild("Humanoid", 5)
+	if not humanoid then return end
 	local playerData = self:GetPlayerData(player)
-	if not playerData then
-		warn("Player data not found: " .. player.Name)
-		return
-	end
-
-	-- Store current HP values
+	if not playerData then return end
 	local statsHP = playerData.stats.hp
 	local statsMaxHP = playerData.stats.maxHp
-
-	-- Adjust Humanoid's MaxHealth to match maxHp in stats system
 	humanoid.MaxHealth = statsMaxHP
-
-	-- Adjust Humanoid's Health to match hp in stats system
 	humanoid.Health = math.min(statsHP, statsMaxHP)
-
-	-- Disable automatic regeneration
-	if humanoid:FindFirstChild("HealthRegen") then
-		humanoid.HealthRegen.Disabled = true
+	local healthRegenScript = humanoid:FindFirstChild("Health")
+	if healthRegenScript and healthRegenScript:IsA("Script") then
+		healthRegenScript.Disabled = true
 	end
 
-	-- Connect to Humanoid damage
 	local healthChangedConnection = humanoid.HealthChanged:Connect(function(newHealth)
-		-- Check if it's damage
-		if newHealth < humanoid.Health then
-			local damage = humanoid.Health - newHealth
-
-			-- Update HP in stats system
-			local currentPlayerData = self:GetPlayerData(player)
-			if currentPlayerData then
-				local newStatsHP = math.max(0, currentPlayerData.stats.hp - damage)
-				self:UpdatePlayerHP(player, newStatsHP)
-
-				-- Notify client about damage
-				if self.playerDamagedEvent then
-					self.playerDamagedEvent:FireClient(player, {
-						oldHP = currentPlayerData.stats.hp + damage,
-						newHP = newStatsHP,
-						maxHP = currentPlayerData.stats.maxHp,
-						damage = damage,
-						source = "Humanoid"
-					})
-				end
-			end
+		local currentStatsHP = playerData.stats.hp
+		if newHealth < currentStatsHP and self.healthSyncConnections[player.UserId] and not self.healthSyncConnections[player.UserId].isSyncing then
+			self:UpdatePlayerHP(player, newHealth)
 		end
 	end)
 
-	-- Start HP sync
-	local syncConnection = spawn(function()
-		while player and player.Parent and character and character.Parent do
-			-- Get latest player data
-			local currentPlayerData = self:GetPlayerData(player)
-			if currentPlayerData then
+	local syncConnection = RunService.Heartbeat:Connect(function()
+		if not self.players[player.UserId] or not character or not character.Parent or not humanoid or not humanoid.Parent then
+			self:DisconnectPlayerHealth(player)
+			return
+		end
+		local currentPlayerData = self.players[player.UserId]
+		local currentStatsHP = currentPlayerData.stats.hp
+		local currentStatsMaxHP = currentPlayerData.stats.maxHp
+		self.healthSyncConnections[player.UserId].isSyncing = true
+		if humanoid.MaxHealth ~= currentStatsMaxHP then humanoid.MaxHealth = currentStatsMaxHP end
+		if math.abs(humanoid.Health - currentStatsHP) > 0.1 then humanoid.Health = math.min(currentStatsHP, currentStatsMaxHP) end
+		self.healthSyncConnections[player.UserId].isSyncing = false
+	end)
+
+	local healCoroutine = nil
+	if AUTO_HEAL_ENABLED then
+		healCoroutine = task.spawn(function()
+			while self.healthSyncConnections[player.UserId] do
+				task.wait(AUTO_HEAL_INTERVAL)
+				if not self.players[player.UserId] then break end
+				local currentPlayerData = self.players[player.UserId]
 				local currentStatsHP = currentPlayerData.stats.hp
 				local currentStatsMaxHP = currentPlayerData.stats.maxHp
-
-				-- Check if character still exists
-				if not character or not character:FindFirstChild("Humanoid") then
-					break
+				local maxHealThreshold = currentStatsMaxHP * (MAX_AUTO_HEAL_PERCENT / 100)
+				if currentStatsHP < maxHealThreshold and currentPlayerData.isAlive then
+					local newHP = math.min(currentStatsHP + AUTO_HEAL_AMOUNT, maxHealThreshold)
+					self:UpdatePlayerHP(player, newHP)
 				end
-
-				local currentHumanoid = character:FindFirstChild("Humanoid")
-
-				-- Sync MaxHealth
-				if currentStatsMaxHP ~= currentHumanoid.MaxHealth then
-					currentHumanoid.MaxHealth = currentStatsMaxHP
-				end
-
-				-- Sync Health (from stats to Humanoid)
-				if math.abs(currentStatsHP - currentHumanoid.Health) > 0.5 then
-					currentHumanoid.Health = math.min(currentStatsHP, currentStatsMaxHP)
-				end
-			end
-
-			wait(HEALTH_SYNC_INTERVAL)
-		end
-	end)
-
-	-- Auto-heal function
-	local healConnection = nil
-	if AUTO_HEAL_ENABLED then
-		healConnection = spawn(function()
-			while player and player.Parent and character and character.Parent do
-				-- Get latest player data
-				local currentPlayerData = self:GetPlayerData(player)
-				if currentPlayerData then
-					local currentStatsHP = currentPlayerData.stats.hp
-					local currentStatsMaxHP = currentPlayerData.stats.maxHp
-
-					-- Calculate max heal threshold
-					local maxHealHP = currentStatsMaxHP * (MAX_AUTO_HEAL_PERCENT / 100)
-
-					-- Heal if below threshold
-					if currentStatsHP < maxHealHP then
-						local newHP = math.min(currentStatsHP + AUTO_HEAL_AMOUNT, maxHealHP)
-						self:UpdatePlayerHP(player, newHP)
-					end
-				end
-
-				wait(AUTO_HEAL_INTERVAL)
 			end
 		end)
 	end
 
-	-- Store all connections for cleanup
 	self.healthSyncConnections[player.UserId] = {
+		humanoid = humanoid,
 		healthChanged = healthChangedConnection,
 		sync = syncConnection,
-		heal = healConnection
+		healCoroutine = healCoroutine,
+		isSyncing = false
 	}
 end
 
--- Disconnect player health connections
 function PlayerManager:DisconnectPlayerHealth(player)
 	if not player then return end
-
-	local connections = self.healthSyncConnections[player.UserId]
+	local userId = player.UserId
+	local connections = self.healthSyncConnections[userId]
 	if connections then
-		-- Disconnect all connections
-		if connections.healthChanged then
-			connections.healthChanged:Disconnect()
-		end
-
-		connections.sync = nil
-		connections.heal = nil
-
-		self.healthSyncConnections[player.UserId] = nil
+		if connections.healthChanged then connections.healthChanged:Disconnect() end
+		if connections.sync then connections.sync:Disconnect() end
+		if connections.healCoroutine then task.cancel(connections.healCoroutine) end
+		self.healthSyncConnections[userId] = nil
 	end
 end
 
@@ -465,531 +247,232 @@ end
 
 function PlayerManager:GetAllPlayers()
 	local result = {}
-	for _, playerData in pairs(self.players) do
-		table.insert(result, playerData.player)
+	for _, pd in pairs(self.players) do
+		if pd.isConnected and pd.player and pd.player.Parent then
+			table.insert(result, pd.player)
+		end
 	end
 	return result
 end
 
-function PlayerManager:GetPlayerData(player)
-	if typeof(player) == "Instance" and player:IsA("Player") then
-		return self.players[player.UserId]
-	elseif type(player) == "number" then
-		return self.players[player]
-	end
-	return nil
+function PlayerManager:GetPlayerData(playerOrUserId)
+	local userId = (typeof(playerOrUserId) == "Instance" and playerOrUserId:IsA("Player")) and playerOrUserId.UserId or (type(playerOrUserId) == "number" and playerOrUserId)
+	return userId and self.players[userId]
 end
 
--- Set player class and update stats
 function PlayerManager:SetPlayerClass(player, className)
 	local playerData = self:GetPlayerData(player)
-	if not playerData then
-		warn("Player data not found for: " .. tostring(player))
-		return false
-	end
-
-	local oldClass = playerData.class
+	if not playerData then return false end
+	if playerData.class == className then return true end
 	playerData.class = className
-
-	-- Get class system for stat updates
-	local classSystem = self.gameManager and self.gameManager.classSystem
-	if classSystem then
-		-- ClassSystem will handle stat updates
-		local success = classSystem:UpdatePlayerStatsFromClass(player, self)
-
-		if success then
-			-- If we have an inventory system, reapply equipment stats
-			self:ApplyEquipmentStatsToPlayer(player)
-			return true
-		end
+	local newBaseStats = self:GetDefaultStatsForClass(className)
+	playerData.baseStats = table.clone(newBaseStats)
+	for statName, baseValue in pairs(playerData.baseStats) do
+		playerData.stats[statName] = baseValue
 	end
-
-	-- Fallback stat updating if ClassSystem fails
-	-- ดึงข้อมูลสถานะจาก ClassData
-	local classStats = nil
-	if ClassData then
-		local classInfo = ClassData:GetClassInfo(className)
-		if classInfo and classInfo.BaseStats then
-			classStats = classInfo.BaseStats
-		end
-	end
-
-	-- ถ้ามีข้อมูลจาก ClassData
-	if classStats then
-		-- แก้ไข: เข้าถึงสถานะตามชื่อที่ ClassData ใช้
-		print("[PlayerManager] Loading class stats directly: MaxHP=" .. (classStats.MaxHP or "nil") ..
-			", MaxMP=" .. (classStats.MaxMP or "nil") .. ", ATK=" .. (classStats.ATK or "nil") ..
-			", MAGIC=" .. (classStats.MAGIC or "nil"))
-
-		-- Update stats based on class data
-		playerData.stats.maxHp = classStats.MaxHP or 100
-		playerData.stats.hp = classStats.MaxHP or 100  -- Start with full health
-		playerData.stats.maxMp = classStats.MaxMP or 50
-		playerData.stats.mp = classStats.MaxMP or 50  -- Start with full mana
-		playerData.stats.attack = classStats.ATK or 10
-		playerData.stats.defense = 10  -- ค่าพื้นฐานถ้าไม่มี DEF
-		playerData.stats.magic = classStats.MAGIC or 10
-
-		print("[PlayerManager] Set class stats directly: HP=" .. playerData.stats.maxHp .. 
-			", MP=" .. playerData.stats.maxMp .. ", ATK=" .. playerData.stats.attack ..
-			", MAGIC=" .. playerData.stats.magic)
-	else
-		-- If class info not found, use fallback values
-		if className == "Warrior" then
-			playerData.stats.maxHp = 125
-			playerData.stats.hp = 125
-			playerData.stats.maxMp = 50
-			playerData.stats.mp = 50
-			playerData.stats.attack = 95
-			playerData.stats.defense = 10
-			playerData.stats.magic = 10
-		elseif className == "Mage" then
-			playerData.stats.maxHp = 85
-			playerData.stats.hp = 85
-			playerData.stats.maxMp = 120
-			playerData.stats.mp = 120
-			playerData.stats.attack = 25
-			playerData.stats.defense = 10
-			playerData.stats.magic = 95
-		elseif className == "Thief" then
-			playerData.stats.maxHp = 100
-			playerData.stats.hp = 100
-			playerData.stats.maxMp = 60
-			playerData.stats.mp = 60
-			playerData.stats.attack = 75
-			playerData.stats.defense = 10
-			playerData.stats.magic = 30
-			playerData.stats.money = 150
-		end
-
-		print("[PlayerManager] Set class stats from fallback: HP=" .. playerData.stats.maxHp .. 
-			", MP=" .. playerData.stats.maxMp .. ", ATK=" .. playerData.stats.attack)
-	end
-
-	-- Store base stats for equipment calculations
-	playerData.baseStats = {
-		maxHp = playerData.stats.maxHp,
-		hp = playerData.stats.hp,
-		maxMp = playerData.stats.maxMp,
-		mp = playerData.stats.mp,
-		attack = playerData.stats.attack,
-		defense = playerData.stats.defense,
-		magic = playerData.stats.magic,
-		money = playerData.stats.money or 100
-	}
-
-	-- Apply equipment stats if any
+	playerData.stats.hp = playerData.stats.maxHp
+	playerData.stats.mp = playerData.stats.maxMp
 	self:ApplyEquipmentStatsToPlayer(player)
-
-	-- Sync HP with Humanoid
-	if player.Character and player.Character:FindFirstChild("Humanoid") then
-		local humanoid = player.Character:FindFirstChild("Humanoid")
-		humanoid.MaxHealth = playerData.stats.maxHp
-		humanoid.Health = playerData.stats.hp
-	end
-
-	-- Send update to client
-	self:SyncPlayerStats(player)
 	return true
 end
 
--- Apply equipment stats to player
 function PlayerManager:ApplyEquipmentStatsToPlayer(player)
 	local playerData = self:GetPlayerData(player)
-	if not playerData then return false end
-
-	-- Get inventory system from GameManager
-	local inventorySystem = nil
-	if self.gameManager and self.gameManager.inventoryService then
-		inventorySystem = self.gameManager.inventoryService
-	end
-
-	if not inventorySystem then return false end
-
-	-- Get player's inventory
-	local inventory = inventorySystem.GetPlayerInventory(player)
-	if not inventory then return false end
-
-	-- Calculate equipment stats
-	local equipmentStats = inventory:CalculateEquipmentStats()
-	if not equipmentStats then return false end
-
-	-- Make sure baseStats exists
+	if not playerData then return false, "Player data not found" end
 	if not playerData.baseStats then
-		playerData.baseStats = {
-			maxHp = playerData.stats.maxHp,
-			hp = playerData.stats.hp,
-			maxMp = playerData.stats.maxMp,
-			mp = playerData.stats.mp,
-			attack = playerData.stats.attack,
-			defense = playerData.stats.defense,
-			magic = playerData.stats.magic,
-			money = playerData.stats.money or 100
-		}
+		playerData.baseStats = self:GetDefaultStatsForClass(playerData.class)
+		for k, v in pairs(playerData.baseStats) do playerData.stats[k] = v end
+		playerData.stats.hp = playerData.stats.maxHp
+		playerData.stats.mp = playerData.stats.maxMp
 	end
-
-	-- Apply equipment stats to player stats
-	for statName, baseValue in pairs(playerData.baseStats) do
-		if equipmentStats[statName] then
-			playerData.stats[statName] = baseValue + equipmentStats[statName]
-		else
-			playerData.stats[statName] = baseValue
-		end
+	local inventoryService = self.gameManager and self.gameManager.inventoryService
+	local inventory = inventoryService and inventoryService.GetPlayerInventory(player)
+	local equipmentStats = inventory and inventory:CalculateEquipmentStats() or {}
+	local finalStats = {}
+	for k, v in pairs(playerData.baseStats) do
+		finalStats[k] = v + (equipmentStats[k] or 0)
 	end
-
-	-- Make sure HP and MP don't exceed maximum
-	playerData.stats.hp = math.min(playerData.stats.hp, playerData.stats.maxHp)
-	playerData.stats.mp = math.min(playerData.stats.mp, playerData.stats.maxMp)
-
-	-- Update Humanoid health
+	for k, v in pairs(finalStats) do
+		playerData.stats[k] = v
+	end
+	playerData.stats.hp = playerData.stats.maxHp
+	playerData.stats.mp = playerData.stats.maxMp
 	if player.Character and player.Character:FindFirstChild("Humanoid") then
-		local humanoid = player.Character:FindFirstChild("Humanoid")
-		humanoid.MaxHealth = playerData.stats.maxHp
-
-		-- Don't set health here - let the health sync system handle it
+		local h = player.Character.Humanoid
+		h.MaxHealth = playerData.stats.maxHp
+		h.Health = playerData.stats.hp
 	end
-
-	-- Sync player stats
 	self:SyncPlayerStats(player)
-
 	return true
 end
 
--- Update player stats
 function PlayerManager:UpdatePlayerStats(player, statUpdates)
 	local playerData = self:GetPlayerData(player)
-	if not playerData then return false end
-
-	-- Track changed stats
+	if not playerData then return false, "Player data not found" end
+	if not statUpdates or next(statUpdates) == nil then return false, "No stats provided" end
 	local changedStats = {}
-
-	-- Update stats
-	for stat, value in pairs(statUpdates or {}) do
-		if playerData.stats[stat] ~= nil then
-			local oldValue = playerData.stats[stat]
+	local hpChanged, mpChanged = false, false
+	for stat, value in pairs(statUpdates) do
+		if playerData.stats[stat] ~= nil and playerData.stats[stat] ~= value then
 			playerData.stats[stat] = value
-
-			-- Record changed stats
-			changedStats[stat] = {
-				oldValue = oldValue,
-				newValue = value
-			}
+			changedStats[stat] = { oldValue = playerData.stats[stat], newValue = value }
+			if stat == "hp" or stat == "maxHp" then hpChanged = true end
+			if stat == "mp" or stat == "maxMp" then mpChanged = true end
 		end
 	end
-
-	-- Ensure HP/MP don't exceed maximums
-	playerData.stats.hp = math.min(playerData.stats.hp, playerData.stats.maxHp)
-	playerData.stats.mp = math.min(playerData.stats.mp, playerData.stats.maxMp)
-
-	-- Send updated stats to client
-	self:SyncPlayerStats(player)
-
-	-- Notify about specific stat changes
-	if next(changedStats) ~= nil and self.statChangedEvent then
-		self.statChangedEvent:FireClient(player, changedStats)
+	if hpChanged then
+		playerData.stats.hp = math.clamp(playerData.stats.hp, 0, playerData.stats.maxHp)
+		if changedStats.hp and changedStats.hp.newValue ~= playerData.stats.hp then
+			changedStats.hp.newValue = playerData.stats.hp
+		end
 	end
-
-	return true
+	if mpChanged then
+		playerData.stats.mp = math.clamp(playerData.stats.mp, 0, playerData.stats.maxMp)
+		if changedStats.mp and changedStats.mp.newValue ~= playerData.stats.mp then
+			changedStats.mp.newValue = playerData.stats.mp
+		end
+	end
+	if next(changedStats) ~= nil then
+		if self.statChangedEvent then self.statChangedEvent:FireClient(player, changedStats) end
+		self:SyncPlayerStats(player)
+		if hpChanged then self:UpdateHumanoidHP(player) end
+		if hpChanged and playerData.stats.hp <= 0 and playerData.isAlive then
+			playerData.isAlive = false
+			self:HandlePlayerDeath(player)
+		end
+		return true, changedStats
+	else
+		return false, "No stats were changed"
+	end
 end
 
--- Sync player stats to client
 function PlayerManager:SyncPlayerStats(player)
 	local playerData = self:GetPlayerData(player)
-	if not playerData then return false end
-
-	if not self.updatePlayerStatsEvent then
-		warn("UpdatePlayerStats event not found, cannot sync data")
-		return false
-	end
-
-	-- Get player ID
-	local playerId = typeof(player) == "Instance" and player:IsA("Player") and player.UserId or player
-
-	-- Data to send to client
+	if not playerData or not playerData.isConnected then return false, "Player data not found or disconnected" end
+	if not self.updatePlayerStatsEvent then return false, "RemoteEvent missing" end
+	local playerObject = playerData.player
+	if not playerObject or not playerObject.Parent then return false, "Player object invalid" end
+	local userId = playerObject.UserId
 	local statsToSync = {
-		hp = playerData.stats.hp,
-		maxHp = playerData.stats.maxHp,
-		mp = playerData.stats.mp,
-		maxMp = playerData.stats.maxMp,
-		attack = playerData.stats.attack,
-		defense = playerData.stats.defense,
-		magic = playerData.stats.magic,
-		level = playerData.stats.level or 1,
-		class = playerData.class,
-		money = playerData.stats.money
+		hp = playerData.stats.hp, maxHp = playerData.stats.maxHp,
+		mp = playerData.stats.mp, maxMp = playerData.stats.maxMp,
+		attack = playerData.stats.attack, defense = playerData.stats.defense, magic = playerData.stats.magic,
+		level = playerData.stats.level or 1, class = playerData.class, money = playerData.stats.money
 	}
-
-	-- Add logging to help debug
-	print("[PlayerManager] Syncing stats: HP=" .. statsToSync.hp .. "/" .. statsToSync.maxHp .. 
-		", MP=" .. statsToSync.mp .. "/" .. statsToSync.maxMp .. 
-		", ATK=" .. statsToSync.attack)
-
-	-- Send stats to client
-	self.updatePlayerStatsEvent:FireClient(player, playerId, statsToSync)
-
+	self.updatePlayerStatsEvent:FireClient(playerObject, userId, statsToSync)
 	return true
 end
 
--- Update player HP (ปรับปรุงใหม่)
 function PlayerManager:UpdatePlayerHP(player, newHP)
 	local playerData = self:GetPlayerData(player)
-	if not playerData then return false end
-
+	if not playerData then return false, "Player data not found" end
 	local oldHP = playerData.stats.hp
-	playerData.stats.hp = math.min(newHP, playerData.stats.maxHp)
-	playerData.stats.hp = math.max(0, playerData.stats.hp) -- Prevent negative HP
-
-	-- แสดงข้อมูลการเปลี่ยนแปลง HP
-	print("[PlayerManager] Updating HP: " .. oldHP .. " -> " .. playerData.stats.hp .. "/" .. playerData.stats.maxHp)
-
-	-- Notify client of HP change
+	local maxHP = playerData.stats.maxHp
+	local clampedHP = math.clamp(newHP, 0, maxHP)
+	if clampedHP == oldHP then
+		self:UpdateHumanoidHP(player)
+		return false, "HP unchanged"
+	end
+	playerData.stats.hp = clampedHP
 	if self.statChangedEvent then
-		self.statChangedEvent:FireClient(player, {
-			hp = {
-				oldValue = oldHP,
-				newValue = playerData.stats.hp
-			}
-		})
+		self.statChangedEvent:FireClient(player, { hp = { oldValue = oldHP, newValue = clampedHP } })
 	end
-
-	-- Sync all stats
 	self:SyncPlayerStats(player)
-
-	-- Sync HP with Humanoid
-	if player.Character and player.Character:FindFirstChild("Humanoid") then
-		local humanoid = player.Character:FindFirstChild("Humanoid")
-
-		-- อัปเดต MaxHealth ก่อน
-		if humanoid.MaxHealth ~= playerData.stats.maxHp then
-			humanoid.MaxHealth = playerData.stats.maxHp
-		end
-
-		-- แล้วค่อยอัปเดต Health
-		humanoid.Health = playerData.stats.hp
-		print("[PlayerManager] Updated Humanoid HP: " .. humanoid.Health .. "/" .. humanoid.MaxHealth)
-	else
-		print("[PlayerManager] Cannot update Humanoid HP - Character or Humanoid not found")
-	end
-
-	-- Check if player died
-	if playerData.stats.hp <= 0 and playerData.isAlive then
+	self:UpdateHumanoidHP(player)
+	if clampedHP <= 0 and playerData.isAlive then
 		playerData.isAlive = false
 		self:HandlePlayerDeath(player)
 	end
-
-	return true
+	return true, "HP updated"
 end
 
--- Update player MP
+function PlayerManager:UpdateHumanoidHP(player)
+	local playerData = self:GetPlayerData(player)
+	if not playerData or not player.Character then return end
+	local humanoid = player.Character:FindFirstChild("Humanoid")
+	if not humanoid then return end
+	if humanoid.MaxHealth ~= playerData.stats.maxHp then humanoid.MaxHealth = playerData.stats.maxHp end
+	if math.abs(humanoid.Health - playerData.stats.hp) > 0.1 then humanoid.Health = playerData.stats.hp end
+end
+
 function PlayerManager:UpdatePlayerMP(player, newMP)
 	local playerData = self:GetPlayerData(player)
-	if not playerData then return false end
-
+	if not playerData then return false, "Player data not found" end
 	local oldMP = playerData.stats.mp
-	playerData.stats.mp = math.min(newMP, playerData.stats.maxMp)
-	playerData.stats.mp = math.max(0, playerData.stats.mp) -- Prevent negative MP
-
-	-- Notify client of MP change
+	local maxMP = playerData.stats.maxMp
+	local clampedMP = math.clamp(newMP, 0, maxMP)
+	if clampedMP == oldMP then return false, "MP unchanged" end
+	playerData.stats.mp = clampedMP
 	if self.statChangedEvent then
-		self.statChangedEvent:FireClient(player, {
-			mp = {
-				oldValue = oldMP,
-				newValue = playerData.stats.mp
-			}
-		})
+		self.statChangedEvent:FireClient(player, { mp = { oldValue = oldMP, newValue = clampedMP } })
 	end
-
-	-- Sync all stats
 	self:SyncPlayerStats(player)
-
-	return true
+	return true, "MP updated"
 end
 
--- Handle player death
 function PlayerManager:HandlePlayerDeath(player)
 	local playerData = self:GetPlayerData(player)
-	if not playerData then return false end
-
-	-- Start respawn process
-	spawn(function()
-		wait(3)  -- Wait before respawn
-
-		-- Reset health
-		playerData.stats.hp = playerData.stats.maxHp
-		playerData.stats.mp = playerData.stats.maxMp
-		playerData.isAlive = true
-
-		-- Sync to client
-		self:SyncPlayerStats(player)
-
-		-- Restore Humanoid.Health
-		if player.Character and player.Character:FindFirstChild("Humanoid") then
-			local humanoid = player.Character:FindFirstChild("Humanoid")
-			humanoid.Health = playerData.stats.maxHp
+	if not playerData or not playerData.isAlive then return end
+	playerData.isAlive = false
+	task.delay(3, function()
+		local currentPlayerData = self:GetPlayerData(player)
+		if currentPlayerData and not currentPlayerData.isAlive then
+			currentPlayerData.stats.hp = currentPlayerData.stats.maxHp
+			currentPlayerData.stats.mp = currentPlayerData.stats.maxMp
+			currentPlayerData.isAlive = true
+			player:LoadCharacter()
+			task.wait(0.5)
+			self:UpdateHumanoidHP(player)
+			self:SyncPlayerStats(player)
 		end
 	end)
-
-	return true
 end
 
--- Get players sorted by join time
 function PlayerManager:GetPlayersSortedByJoinTime()
-	local sortedPlayers = {}
-
-	-- Collect players
-	for _, playerData in pairs(self.players) do
-		table.insert(sortedPlayers, playerData)
+	local sortedPlayersData = {}
+	for _, pd in pairs(self.players) do
+		if pd.isConnected then table.insert(sortedPlayersData, pd) end
 	end
-
-	-- Sort by join time
-	table.sort(sortedPlayers, function(a, b)
-		return a.joinTime < b.joinTime
-	end)
-
-	return sortedPlayers
+	table.sort(sortedPlayersData, function(a, b) return a.joinTime < b.joinTime end)
+	return sortedPlayersData
 end
 
--- Deal damage directly to player
 function PlayerManager:DamagePlayer(player, damageAmount, source)
 	local playerData = self:GetPlayerData(player)
-	if not playerData then return false end
-
-	-- Validate damage amount
-	damageAmount = math.max(0, damageAmount)
-	source = source or "GameMechanic"
-
-	-- Record old HP
+	if not playerData or not playerData.isAlive then return false, "Player not found or already dead" end
+	damageAmount = math.max(0, tonumber(damageAmount) or 0)
+	source = source or "Unknown"
+	if damageAmount == 0 then return false, "No damage dealt" end
 	local oldHP = playerData.stats.hp
-
-	-- Calculate new HP
-	local newHP = math.max(0, oldHP - damageAmount)
-
-	-- Update HP
-	self:UpdatePlayerHP(player, newHP)
-
-	-- Notify client
-	if self.playerDamagedEvent then
+	local newHP = oldHP - damageAmount
+	local success, message = self:UpdatePlayerHP(player, newHP)
+	if success and self.playerDamagedEvent then
 		self.playerDamagedEvent:FireClient(player, {
-			oldHP = oldHP,
-			newHP = newHP,
-			maxHP = playerData.stats.maxHp,
-			damage = damageAmount,
-			source = source
+			oldHP = oldHP, newHP = playerData.stats.hp, maxHP = playerData.stats.maxHp,
+			damage = damageAmount, source = source
 		})
 	end
-
-	return true
+	return success, message
 end
 
--- Configure auto-heal settings
 function PlayerManager:SetAutoHealSettings(enabled, interval, amount, maxPercent)
 	AUTO_HEAL_ENABLED = enabled or false
-
-	if interval then
-		AUTO_HEAL_INTERVAL = math.max(1, interval)
-	end
-
-	if amount then
-		AUTO_HEAL_AMOUNT = math.max(1, amount)
-	end
-
-	if maxPercent then
-		MAX_AUTO_HEAL_PERCENT = math.clamp(maxPercent, 0, 100)
-	end
+	AUTO_HEAL_INTERVAL = math.max(1, interval or AUTO_HEAL_INTERVAL)
+	AUTO_HEAL_AMOUNT = math.max(1, amount or AUTO_HEAL_AMOUNT)
+	MAX_AUTO_HEAL_PERCENT = math.clamp(maxPercent or MAX_AUTO_HEAL_PERCENT, 0, 100)
 end
 
--- Reset player with correct class stats (emergency fix)
 function PlayerManager:ResetPlayerStats(player)
 	local playerData = self:GetPlayerData(player)
-	if not playerData then return false end
-
+	if not playerData then return false, "Player data not found" end
 	local className = playerData.class
-	if not className then return false end
-
-	print("[PlayerManager] Emergency reset of player stats for " .. player.Name)
-
-	-- ดึงข้อมูลสถานะจาก ClassData
-	local classStats = nil
-	if ClassData then
-		local classInfo = ClassData:GetClassInfo(className)
-		if classInfo and classInfo.BaseStats then
-			classStats = classInfo.BaseStats
-		end
-	end
-
-	-- ถ้ามีข้อมูลจาก ClassData
-	if classStats then
-		-- Update basic stats - แก้ไข: ใช้ชื่อสถานะที่ถูกต้อง
-		playerData.stats.maxHp = classStats.MaxHP or 100
-		playerData.stats.hp = classStats.MaxHP or 100
-		playerData.stats.maxMp = classStats.MaxMP or 50
-		playerData.stats.mp = classStats.MaxMP or 50
-		playerData.stats.attack = classStats.ATK or 10
-		playerData.stats.defense = 10
-		playerData.stats.magic = classStats.MAGIC or 10
-
-		-- ล็อกค่าสถานะที่ได้จาก ClassData
-		print("[PlayerManager] Reset stats using ClassData: MaxHP=" .. (classStats.MaxHP or "nil") ..
-			", MaxMP=" .. (classStats.MaxMP or "nil") .. ", ATK=" .. (classStats.ATK or "nil") ..
-			", MAGIC=" .. (classStats.MAGIC or "nil"))
-	else
-		-- ถ้าไม่มีข้อมูลจาก ClassData ใช้ค่าดีฟอลต์
-		if className == "Warrior" then
-			playerData.stats.maxHp = 125
-			playerData.stats.hp = 125
-			playerData.stats.maxMp = 50
-			playerData.stats.mp = 50
-			playerData.stats.attack = 95
-			playerData.stats.defense = 10
-			playerData.stats.magic = 10
-		elseif className == "Mage" then
-			playerData.stats.maxHp = 85
-			playerData.stats.hp = 85
-			playerData.stats.maxMp = 120
-			playerData.stats.mp = 120
-			playerData.stats.attack = 25
-			playerData.stats.defense = 10
-			playerData.stats.magic = 95
-		elseif className == "Thief" then
-			playerData.stats.maxHp = 100
-			playerData.stats.hp = 100
-			playerData.stats.maxMp = 60
-			playerData.stats.mp = 60
-			playerData.stats.attack = 75
-			playerData.stats.defense = 10
-			playerData.stats.magic = 30
-		end
-
-		print("[PlayerManager] Reset stats using hardcoded defaults")
-	end
-
-	-- Store base stats
-	playerData.baseStats = {
-		maxHp = playerData.stats.maxHp,
-		hp = playerData.stats.hp,
-		maxMp = playerData.stats.maxMp,
-		mp = playerData.stats.mp,
-		attack = playerData.stats.attack,
-		defense = playerData.stats.defense,
-		magic = playerData.stats.magic,
-		money = playerData.stats.money or 100
-	}
-
-	-- Apply equipment stats
+	if not className then return false, "Player class unknown" end
+	local newBaseStats = self:GetDefaultStatsForClass(className)
+	playerData.baseStats = table.clone(newBaseStats)
+	for k, v in pairs(playerData.baseStats) do playerData.stats[k] = v end
+	playerData.stats.hp = playerData.stats.maxHp
+	playerData.stats.mp = playerData.stats.maxMp
 	self:ApplyEquipmentStatsToPlayer(player)
-
-	-- Update humanoid
-	if player.Character and player.Character:FindFirstChild("Humanoid") then
-		local humanoid = player.Character:FindFirstChild("Humanoid")
-		humanoid.MaxHealth = playerData.stats.maxHp
-		humanoid.Health = playerData.stats.hp
-	end
-
-	-- Sync to client
-	self:SyncPlayerStats(player)
-
-	print("[PlayerManager] Reset complete. HP=" .. playerData.stats.hp .. "/" .. playerData.stats.maxHp)
-
 	return true
 end
 
