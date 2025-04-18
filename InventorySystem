@@ -1,6 +1,7 @@
--- InventorySystem.lua (Updated)
+-- InventorySystem.lua
 -- Core module for inventory management
--- Version: 3.0.0 (แก้ไขให้ลบค่า magicDefense และ agility ออก)
+-- Location: ServerStorage/Modules/InventorySystem.lua
+-- Version: 1.0.0
 
 local InventorySystem = {}
 InventorySystem.__index = InventorySystem
@@ -286,6 +287,12 @@ function InventorySystem:EquipItem(inventoryId)
 		return false, "Invalid equipment type"
 	end
 
+	-- Check class restriction if applicable
+	if item.classRestriction then
+		-- Note: Actual class check will be done in InventoryService
+		-- Since InventorySystem has no knowledge of the player's class
+	end
+
 	-- Unequip existing item in slot
 	if self.equippedItems[item.subType] then
 		local oldItemInventoryId = self.equippedItems[item.subType]
@@ -375,12 +382,13 @@ end
 -- Calculate stats from equipped items
 function InventorySystem:CalculateEquipmentStats()
 	local stats = {
+		maxHp = 0,
+		maxMp = 0,
 		attack = 0,
-		defense = 0,
+		defense = 0, -- Can be increased by equipment
 		magic = 0
 	}
 
-	-- ล็อกข้อมูลเพื่อดีบัก
 	print("[InventorySystem] Calculating equipment stats")
 
 	local itemCount = 0
@@ -390,31 +398,31 @@ function InventorySystem:CalculateEquipmentStats()
 			itemCount = itemCount + 1
 			print("[InventorySystem] Equipment #" .. itemCount .. ": " .. item.name)
 
-			-- แสดงสถานะของอุปกรณ์
+			-- Log item stats
 			for statName, statValue in pairs(item.stats) do
 				print("  > " .. statName .. ": " .. statValue)
 			end
 
-			-- เพิ่มค่าสถานะเข้าไปในผลลัพธ์
+			-- Add stats to result
 			for statName, statValue in pairs(item.stats) do
 				if stats[statName] ~= nil then
 					stats[statName] = stats[statName] + statValue
 				else
-					-- ถ้าเป็นค่าสถานะใหม่ ให้เพิ่มเข้าไป
+					-- If it's a new stat, add it
 					stats[statName] = statValue
 				end
 			end
 
-			-- เก็บค่าสถานะเฉพาะตำแหน่งถ้าจำเป็น
+			-- Store slot-specific stats if needed
 			if slotType == EQUIPMENT_SLOTS.WEAPON and item.stats.attack then
 				stats.weaponAttack = item.stats.attack
-			elseif slotType == EQUIPMENT_SLOTS.ARMOR and item.stats.defense then
-				stats.armorDefense = item.stats.defense
+			elseif slotType == EQUIPMENT_SLOTS.ARMOR and item.stats.maxHp then
+				stats.armorHp = item.stats.maxHp
 			end
 		end
 	end
 
-	-- แสดงสถานะรวมทั้งหมด
+	-- Log total stats
 	print("[InventorySystem] Total equipment stats:")
 	for statName, statValue in pairs(stats) do
 		if statValue > 0 then
