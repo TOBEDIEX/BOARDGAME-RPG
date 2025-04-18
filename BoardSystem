@@ -1,6 +1,6 @@
 -- BoardSystem.lua
 -- Core module for board system and character movement
--- Version: 3.2.0 (Fixed Unlimited Steps Support)
+-- Version: 3.3.0 (Removed onTileEffect trigger during movement)
 
 local BoardSystem = {}
 BoardSystem.__index = BoardSystem
@@ -15,7 +15,7 @@ local DirectionalPathfinder = require(script.Parent:WaitForChild("DirectionalPat
 -- Constants for board directions
 local DIRECTIONS = DirectionalPathfinder.DIRECTIONS
 
--- DEBUG MODE (เพิ่มการตรวจสอบจำนวนก้าวที่ละเอียดขึ้น)
+-- DEBUG MODE
 local DEBUG_MOVEMENT = true
 
 function BoardSystem.new()
@@ -32,7 +32,7 @@ function BoardSystem.new()
 	self.entitySpawnPoints = {}
 	self.onPlayerMoved = nil
 	self.onPlayerPathComplete = nil
-	self.onTileEffect = nil
+	-- REMOVED: self.onTileEffect = nil -- ลบ callback นี้ออก
 
 	return self
 end
@@ -143,7 +143,7 @@ end
 -- ฟังก์ชันแก้ไขสำหรับรองรับจำนวนก้าวที่มากขึ้น
 function BoardSystem:GenerateAutoPath(playerId, startTileId, prevTileId, stepsRemaining)
 	if DEBUG_MOVEMENT then
-		print("[BoardSystem] GenerateAutoPath: Player " .. playerId .. 
+		print("[BoardSystem] GenerateAutoPath: Player " .. playerId ..
 			" from tile " .. startTileId .. " with " .. stepsRemaining .. " steps remaining")
 	end
 
@@ -194,7 +194,7 @@ function BoardSystem:GenerateAutoPath(playerId, startTileId, prevTileId, stepsRe
 			remainingSteps = remainingSteps - 1
 
 			if DEBUG_MOVEMENT then
-				print("[BoardSystem] -> Auto-move to tile " .. nextTileId .. 
+				print("[BoardSystem] -> Auto-move to tile " .. nextTileId ..
 					", remaining steps: " .. remainingSteps)
 			end
 		else
@@ -207,7 +207,7 @@ function BoardSystem:GenerateAutoPath(playerId, startTileId, prevTileId, stepsRe
 	end
 
 	if iteration >= maxIteration then
-		print("[BoardSystem] WARNING: Max iteration reached for player " .. playerId .. 
+		print("[BoardSystem] WARNING: Max iteration reached for player " .. playerId ..
 			". Possible infinite loop detected.")
 	end
 
@@ -215,8 +215,8 @@ function BoardSystem:GenerateAutoPath(playerId, startTileId, prevTileId, stepsRe
 	local autoComplete = (remainingSteps == 0)
 
 	if DEBUG_MOVEMENT then
-		print("[BoardSystem] Path generation complete: " .. #path .. 
-			" steps, auto-complete: " .. tostring(autoComplete) .. 
+		print("[BoardSystem] Path generation complete: " .. #path ..
+			" steps, auto-complete: " .. tostring(autoComplete) ..
 			", remaining steps: " .. remainingSteps)
 	end
 
@@ -260,7 +260,7 @@ function BoardSystem:ProcessPlayerMove(playerId, diceResult)
 
 	-- แสดงผลลัพธ์ลูกเต๋า
 	if DEBUG_MOVEMENT then
-		print("[BoardSystem] Player ID " .. playerId .. " rolled: " .. diceResult .. 
+		print("[BoardSystem] Player ID " .. playerId .. " rolled: " .. diceResult ..
 			" from tile " .. currentTileId)
 	end
 
@@ -287,10 +287,10 @@ function BoardSystem:ProcessPlayerMove(playerId, diceResult)
 		-- Reset remaining steps
 		self.playerRemainingSteps[playerId] = 0
 
-		-- Trigger tile effect
-		if self.onTileEffect then
-			self.onTileEffect(playerId, pathInfo.endTileId, self.tiles[pathInfo.endTileId])
-		end
+		-- REMOVED: Trigger tile effect (จะถูกย้ายไปทำหลัง MovementVisualizationComplete)
+		-- if self.onTileEffect then
+		--	 self.onTileEffect(playerId, pathInfo.endTileId, self.tiles[pathInfo.endTileId])
+		-- end
 
 		-- Call path complete callback
 		if self.onPlayerPathComplete then
@@ -322,7 +322,7 @@ function BoardSystem:ProcessPlayerMove(playerId, diceResult)
 			print("[BoardSystem] Player ID " .. playerId .. " needs to choose direction")
 			print("[BoardSystem] Available directions: " .. #pathInfo.availableDirections)
 			for i, dirInfo in ipairs(pathInfo.availableDirections) do
-				print("  " .. i .. ". Direction: " .. dirInfo.direction .. 
+				print("  " .. i .. ". Direction: " .. dirInfo.direction ..
 					", Tile: " .. dirInfo.tileId)
 			end
 			print("[BoardSystem] Steps remaining: " .. pathInfo.stepsRemaining)
@@ -332,6 +332,11 @@ function BoardSystem:ProcessPlayerMove(playerId, diceResult)
 		for i, dirInfo in ipairs(pathInfo.availableDirections) do
 			dirInfo.stepsRemaining = pathInfo.stepsRemaining
 		end
+
+		-- REMOVED: Trigger tile effect (จะถูกย้ายไปทำหลัง MovementVisualizationComplete)
+		-- if self.onTileEffect then
+		--	 self.onTileEffect(playerId, pathInfo.endTileId, self.tiles[pathInfo.endTileId])
+		-- end
 
 		return {
 			autoPath = pathInfo.path,
@@ -350,21 +355,21 @@ function BoardSystem:ProcessDirectionChoice(playerId, direction)
 	local stepsRemaining = self.playerRemainingSteps[playerId] or 0
 
 	if DEBUG_MOVEMENT then
-		print("[BoardSystem] ProcessDirectionChoice: Player " .. playerId .. 
-			" chose " .. direction .. ", from tile " .. currentTileId .. 
+		print("[BoardSystem] ProcessDirectionChoice: Player " .. playerId ..
+			" chose " .. direction .. ", from tile " .. currentTileId ..
 			", with " .. stepsRemaining .. " steps remaining")
 	end
 
-	if stepsRemaining <= 0 then 
+	if stepsRemaining <= 0 then
 		print("[BoardSystem] ERROR: No steps remaining but ProcessDirectionChoice was called")
-		return false 
+		return false
 	end
 
 	-- Get next tile based on direction
 	local nextTileId = self:GetNextTileFromDirection(currentTileId, direction, prevTileId)
-	if not nextTileId then 
+	if not nextTileId then
 		print("[BoardSystem] ERROR: No next tile found for direction " .. direction)
-		return false 
+		return false
 	end
 
 	-- Move one step in chosen direction
@@ -375,7 +380,7 @@ function BoardSystem:ProcessDirectionChoice(playerId, direction)
 	self.playerRemainingSteps[playerId] = stepsRemaining
 
 	if DEBUG_MOVEMENT then
-		print("[BoardSystem] -> Moved to tile " .. nextTileId .. 
+		print("[BoardSystem] -> Moved to tile " .. nextTileId ..
 			", remaining steps: " .. stepsRemaining)
 	end
 
@@ -399,10 +404,10 @@ function BoardSystem:ProcessDirectionChoice(playerId, direction)
 			-- Reset remaining steps
 			self.playerRemainingSteps[playerId] = 0
 
-			-- Trigger tile effect
-			if self.onTileEffect then
-				self.onTileEffect(playerId, pathInfo.endTileId, self.tiles[pathInfo.endTileId])
-			end
+			-- REMOVED: Trigger tile effect
+			-- if self.onTileEffect then
+			--	 self.onTileEffect(playerId, pathInfo.endTileId, self.tiles[pathInfo.endTileId])
+			-- end
 
 			-- Call path complete callback
 			if self.onPlayerPathComplete then
@@ -435,6 +440,11 @@ function BoardSystem:ProcessDirectionChoice(playerId, direction)
 				dirInfo.stepsRemaining = pathInfo.stepsRemaining
 			end
 
+			-- REMOVED: Trigger tile effect
+			-- if self.onTileEffect then
+			--	 self.onTileEffect(playerId, pathInfo.endTileId, self.tiles[pathInfo.endTileId])
+			-- end
+
 			return {
 				autoPath = pathInfo.path,
 				endTileId = pathInfo.endTileId,
@@ -450,10 +460,10 @@ function BoardSystem:ProcessDirectionChoice(playerId, direction)
 		self.playerRemainingSteps[playerId] = 0
 		self.playerMovementState[playerId] = "waiting"
 
-		-- Trigger tile effect
-		if self.onTileEffect then
-			self.onTileEffect(playerId, nextTileId, self.tiles[nextTileId])
-		end
+		-- REMOVED: Trigger tile effect
+		-- if self.onTileEffect then
+		--	 self.onTileEffect(playerId, nextTileId, self.tiles[nextTileId])
+		-- end
 
 		-- Call path complete callback
 		if self.onPlayerPathComplete then
@@ -476,10 +486,11 @@ function BoardSystem:ProcessDirectionChoice(playerId, direction)
 	end
 end
 
-function BoardSystem:SetupCallbacks(onPlayerMoved, onPlayerPathComplete, onTileEffect)
+-- REMOVED: onTileEffect parameter
+function BoardSystem:SetupCallbacks(onPlayerMoved, onPlayerPathComplete)
 	self.onPlayerMoved = onPlayerMoved
 	self.onPlayerPathComplete = onPlayerPathComplete
-	self.onTileEffect = onTileEffect
+	-- REMOVED: self.onTileEffect = onTileEffect
 end
 
 return BoardSystem
