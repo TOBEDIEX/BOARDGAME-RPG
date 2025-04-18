@@ -1,6 +1,6 @@
 -- BoardService.server.lua
 -- Server-side service for board system management
--- Version: 3.4.0 (Fixed dice validation bug)
+-- Version: 3.5.0 (Trigger Tile Effects on Movement Completion)
 
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -83,9 +83,9 @@ local function initializeBoardService()
 	local boardSystem = BoardSystem.new()
 
 	-- Load Map
-	if not MapData then 
+	if not MapData then
 		boardSystem:LoadMap({tiles={[1]={type="start", position=Vector3.new(0,0,0)}}, connections={}})
-	else 
+	else
 		boardSystem:LoadMap(MapData)
 	end
 
@@ -93,13 +93,13 @@ local function initializeBoardService()
 	if not gameManager then return end
 	gameManager.boardSystem = boardSystem
 
-	-- Set up callbacks
+	-- Set up callbacks (REMOVED onTileEffect)
 	boardSystem:SetupCallbacks(
 		-- onPlayerMoved
 		function(playerId, fromTileId, toTileId)
 			-- Logic for when player moves from one tile to another
 			if DEBUG_MOVEMENT then
-				print("[BoardService] Player " .. playerId .. " moved from tile " .. 
+				print("[BoardService] Player " .. playerId .. " moved from tile " ..
 					(fromTileId or "nil") .. " to tile " .. toTileId)
 			end
 		end,
@@ -134,6 +134,17 @@ local function initializeBoardService()
 							print("[BoardService] Movement confirmation timed out for player " .. playerId)
 						end
 
+						-- Trigger Tile Effect here on timeout as well
+						local tileInfo = boardSystem:GetTileInfo(finalTileId)
+						if tileInfo then
+							local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
+							boardRemotes:WaitForChild("TileTriggerEvent"):FireAllClients(playerId, finalTileId, tileInfo.type)
+							if DEBUG_MOVEMENT then
+								print("[BoardService] Tile effect triggered (timeout) for player " .. playerId ..
+									" at tile " .. finalTileId .. " (type: " .. tileInfo.type .. ")")
+							end
+						end
+
 						-- End turn if still same player
 						if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
 							gameManager.turnSystem:EndPlayerTurn(playerId, "move_timeout")
@@ -147,19 +158,8 @@ local function initializeBoardService()
 					gameManager.turnSystem:EndPlayerTurn(playerId, "player_left")
 				end
 			end
-		end,
-
-		-- onTileEffect
-		function(playerId, tileId, tileInfo)
-			-- Logic for when tile effect should start
-			local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
-			boardRemotes:WaitForChild("TileTriggerEvent"):FireAllClients(playerId, tileId, tileInfo.type)
-
-			if DEBUG_MOVEMENT then
-				print("[BoardService] Tile effect triggered for player " .. playerId .. 
-					" at tile " .. tileId .. " (type: " .. tileInfo.type .. ")")
-			end
 		end
+		-- REMOVED: onTileEffect callback
 	)
 
 	-- ฟังก์ชันเพื่อบันทึกโบนัสลูกเต๋า
@@ -181,12 +181,12 @@ local function initializeBoardService()
 		local playerId = player.UserId
 
 		-- Check if it's player's turn
-		if gameManager.turnSystem and gameManager.turnSystem:GetCurrentPlayerTurn() ~= playerId then 
+		if gameManager.turnSystem and gameManager.turnSystem:GetCurrentPlayerTurn() ~= playerId then
 			if DEBUG_MOVEMENT then
-				print("[BoardService] Rejected dice roll from player " .. playerId .. 
+				print("[BoardService] Rejected dice roll from player " .. playerId ..
 					" - not their turn")
 			end
-			return 
+			return
 		end
 
 		-- ดึงค่าโบนัสลูกเต๋า
@@ -206,7 +206,7 @@ local function initializeBoardService()
 		end
 
 		-- ตรวจสอบการส่งค่าลูกเต๋า
-		print("[BoardService] Player " .. player.Name .. " rolled " .. diceResult .. 
+		print("[BoardService] Player " .. player.Name .. " rolled " .. diceResult ..
 			" (Bonus dice: " .. diceBonus .. ")")
 
 		-- ใช้ค่าจาก Client โดยตรงถ้าได้รับการกำหนดให้เชื่อถือ Client
@@ -222,9 +222,9 @@ local function initializeBoardService()
 				print("[BoardService] WARNING: Player sent unreasonably high dice result, using " .. diceResult .. " instead")
 			end
 		else
-			-- ถ้าไม่เชื่อถือ client ใช้การตรวจสอบแบบเดิม 
+			-- ถ้าไม่เชื่อถือ client ใช้การตรวจสอบแบบเดิม
 			-- แต่แก้ไขให้ใช้เงื่อนไขที่ถูกต้อง
-			local minPossibleResult = 1 
+			local minPossibleResult = 1
 			local maxPossibleResult = 6
 
 			-- คำนวณช่วงที่เป็นไปได้ตามโบนัส
@@ -235,7 +235,7 @@ local function initializeBoardService()
 
 			-- ตรวจสอบว่าค่าอยู่ในช่วงที่เป็นไปได้หรือไม่
 			if diceResult < minPossibleResult or diceResult > maxPossibleResult then
-				warn("[BoardService] Invalid dice result from player " .. player.Name .. ": " .. diceResult .. 
+				warn("[BoardService] Invalid dice result from player " .. player.Name .. ": " .. diceResult ..
 					" (Expected range: " .. minPossibleResult .. "-" .. maxPossibleResult .. ")")
 
 				-- สุ่มใหม่โดยสุ่มค่าลูกเต๋าหลัก + โบนัส
@@ -304,12 +304,12 @@ local function initializeBoardService()
 		local playerId = player.UserId
 
 		-- Check if it's player's turn
-		if gameManager.turnSystem and gameManager.turnSystem:GetCurrentPlayerTurn() ~= playerId then 
+		if gameManager.turnSystem and gameManager.turnSystem:GetCurrentPlayerTurn() ~= playerId then
 			if DEBUG_MOVEMENT then
-				print("[BoardService] Rejected path choice from player " .. playerId .. 
+				print("[BoardService] Rejected path choice from player " .. playerId ..
 					" - not their turn")
 			end
-			return 
+			return
 		end
 
 		if DEBUG_MOVEMENT then
@@ -351,7 +351,7 @@ local function initializeBoardService()
 			-- End turn if choice invalid
 			if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
 				if DEBUG_MOVEMENT then
-					print("[BoardService] Invalid direction choice from player " .. playerId .. 
+					print("[BoardService] Invalid direction choice from player " .. playerId ..
 						", ending turn")
 				end
 				gameManager.turnSystem:EndPlayerTurn(playerId, "invalid_choice")
@@ -364,12 +364,12 @@ local function initializeBoardService()
 		local playerId = player.UserId
 
 		-- Check if this movement is pending confirmation
-		if not pendingMovementCompletions[playerId] then 
+		if not pendingMovementCompletions[playerId] then
 			if DEBUG_MOVEMENT then
-				print("[BoardService] Received movement completion from player " .. playerId .. 
+				print("[BoardService] Received movement completion from player " .. playerId ..
 					" but no pending confirmation found")
 			end
-			return 
+			return
 		end
 
 		if DEBUG_MOVEMENT then
@@ -379,13 +379,25 @@ local function initializeBoardService()
 		-- Set as confirmed
 		pendingMovementCompletions[playerId].confirmed = true
 
+		-- *** ADDED: Trigger Tile Effect Here ***
+		local tileInfo = boardSystem:GetTileInfo(finalTileId)
+		if tileInfo then
+			local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
+			boardRemotes:WaitForChild("TileTriggerEvent"):FireAllClients(playerId, finalTileId, tileInfo.type)
+			if DEBUG_MOVEMENT then
+				print("[BoardService] Tile effect triggered for player " .. playerId ..
+					" at tile " .. finalTileId .. " (type: " .. tileInfo.type .. ")")
+			end
+		end
+		-- *** END ADDED ***
+
 		-- End turn if still same player
 		if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
 			-- Check if movement is complete (no more choices)
 			local hasChoices = boardSystem.playerMovementState[playerId] == "need_choice"
 
 			if DEBUG_MOVEMENT then
-				print("[BoardService] Player " .. playerId .. " movement state: " .. 
+				print("[BoardService] Player " .. playerId .. " movement state: " ..
 					(boardSystem.playerMovementState[playerId] or "nil"))
 				print("  Has more choices: " .. tostring(hasChoices))
 				print("  Steps remaining: " .. (boardSystem.playerRemainingSteps[playerId] or 0))
@@ -393,10 +405,439 @@ local function initializeBoardService()
 
 			if not hasChoices then
 				-- Short delay to allow animations to complete
-				task.wait(0.5) 
+				task.wait(0.5)
 
 				if DEBUG_MOVEMENT then
-					print("[BoardService] Ending turn for player " .. playerId .. 
+					print("[BoardService] Ending turn for player " .. playerId ..
+						" after complete movement")
+				end
+
+				gameManager.turnSystem:EndPlayerTurn(playerId, "move_complete")
+			end
+		end
+
+		-- Clear pending confirmation
+		pendingMovementCompletions[playerId] = nil
+	end)
+
+	return boardSystem
+end
+
+-- Initialize service
+local boardSystemInstance = initializeBoardService()
+_G.BoardSystem = boardSystemInstance
+return boardSystemInstance
+-- BoardService.server.lua
+-- Server-side service for board system management
+-- Version: 3.5.0 (Trigger Tile Effects on Movement Completion)
+
+local ServerStorage = game:GetService("ServerStorage")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+
+-- Load required modules
+local Modules = ServerStorage:WaitForChild("Modules")
+local BoardSystem = require(Modules:WaitForChild("BoardSystem"))
+local MapData = require(ServerStorage.GameData.MapData)
+
+-- Enable debug mode
+local DEBUG_MOVEMENT = true
+local TRUST_CLIENT_DICE = true -- ให้เชื่อถือค่าลูกเต๋าจาก Client
+
+-- Create required RemoteEvents
+local function ensureRemoteEvents()
+	local remotes = ReplicatedStorage:WaitForChild("Remotes")
+	local boardRemotes = remotes:WaitForChild("BoardRemotes")
+
+	local requiredEvents = {
+		"RollDice",
+		"PlayerArrivedAtTile",
+		"ChoosePath",
+		"TileTriggerEvent",
+		"ActivityComplete",
+		"StartPlayerMovementPath",
+		"MovementVisualizationComplete"
+	}
+
+	for _, eventName in ipairs(requiredEvents) do
+		if not boardRemotes:FindFirstChild(eventName) then
+			Instance.new("RemoteEvent", boardRemotes).Name = eventName
+		end
+	end
+
+	-- Create ShowPathSelection for backwards compatibility
+	if not boardRemotes:FindFirstChild("ShowPathSelection") then
+		Instance.new("RemoteEvent", boardRemotes).Name = "ShowPathSelection"
+	end
+
+	return remotes
+end
+
+-- Constants
+local DIRECTIONS = { FRONT = "FRONT", LEFT = "LEFT", RIGHT = "RIGHT" }
+
+-- Get GameManager from global variable
+local function getGameManager()
+	local startTime = tick()
+	while not _G.GameManager and tick() - startTime < 10 do
+		task.wait(0.1)
+	end
+	return _G.GameManager
+end
+
+-- ฟังก์ชันดึง DiceBonusService
+local function getDiceBonusService()
+	if _G.DiceBonusService then
+		return _G.DiceBonusService
+	end
+
+	local gameManager = getGameManager()
+	if gameManager and gameManager.diceBonusService then
+		return gameManager.diceBonusService
+	end
+
+	return nil
+end
+
+-- Store movement completion state
+local pendingMovementCompletions = {}
+
+-- Storage for player dice bonuses (redundant เพื่อป้องกันการใช้งานผิดพลาด)
+local playerDiceBonus = {}
+
+-- Main service initialization function
+local function initializeBoardService()
+	local remotes = ensureRemoteEvents()
+	local boardSystem = BoardSystem.new()
+
+	-- Load Map
+	if not MapData then
+		boardSystem:LoadMap({tiles={[1]={type="start", position=Vector3.new(0,0,0)}}, connections={}})
+	else
+		boardSystem:LoadMap(MapData)
+	end
+
+	local gameManager = getGameManager()
+	if not gameManager then return end
+	gameManager.boardSystem = boardSystem
+
+	-- Set up callbacks (REMOVED onTileEffect)
+	boardSystem:SetupCallbacks(
+		-- onPlayerMoved
+		function(playerId, fromTileId, toTileId)
+			-- Logic for when player moves from one tile to another
+			if DEBUG_MOVEMENT then
+				print("[BoardService] Player " .. playerId .. " moved from tile " ..
+					(fromTileId or "nil") .. " to tile " .. toTileId)
+			end
+		end,
+
+		-- onPlayerPathComplete
+		function(playerId, finalTileId)
+			-- Logic for when player completes their path (all steps used)
+			local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
+			boardRemotes:WaitForChild("PlayerArrivedAtTile"):FireAllClients(playerId, finalTileId)
+
+			if DEBUG_MOVEMENT then
+				print("[BoardService] Player " .. playerId .. " completed path at tile " .. finalTileId)
+			end
+
+			-- Store pending movement completion state
+			local player = Players:GetPlayerByUserId(playerId)
+			if player then
+				pendingMovementCompletions[playerId] = {
+					finalTileId = finalTileId,
+					timestamp = os.time(),
+					confirmed = false
+				}
+
+				-- Set up backup timer in case client doesn't respond (30 seconds)
+				task.spawn(function()
+					task.wait(30)
+					if pendingMovementCompletions[playerId] and not pendingMovementCompletions[playerId].confirmed then
+						-- If not confirmed after timeout, consider completed
+						pendingMovementCompletions[playerId].confirmed = true
+
+						if DEBUG_MOVEMENT then
+							print("[BoardService] Movement confirmation timed out for player " .. playerId)
+						end
+
+						-- Trigger Tile Effect here on timeout as well
+						local tileInfo = boardSystem:GetTileInfo(finalTileId)
+						if tileInfo then
+							local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
+							boardRemotes:WaitForChild("TileTriggerEvent"):FireAllClients(playerId, finalTileId, tileInfo.type)
+							if DEBUG_MOVEMENT then
+								print("[BoardService] Tile effect triggered (timeout) for player " .. playerId ..
+									" at tile " .. finalTileId .. " (type: " .. tileInfo.type .. ")")
+							end
+						end
+
+						-- End turn if still same player
+						if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
+							gameManager.turnSystem:EndPlayerTurn(playerId, "move_timeout")
+						end
+					end
+				end)
+			else
+				-- If player not found (left game), end turn immediately
+				if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
+					task.wait(0.5) -- Short delay before ending turn
+					gameManager.turnSystem:EndPlayerTurn(playerId, "player_left")
+				end
+			end
+		end
+		-- REMOVED: onTileEffect callback
+	)
+
+	-- ฟังก์ชันเพื่อบันทึกโบนัสลูกเต๋า
+	local remotes = ReplicatedStorage:WaitForChild("Remotes")
+	local inventoryRemotes = remotes:WaitForChild("InventoryRemotes")
+
+	if inventoryRemotes:FindFirstChild("DiceBonus") then
+		inventoryRemotes.DiceBonus.OnServerEvent:Connect(function(player, bonusAmount)
+			if player then
+				playerDiceBonus[player.UserId] = bonusAmount
+				print("[BoardService] Saved dice bonus " .. bonusAmount .. " for player " .. player.Name)
+			end
+		end)
+	end
+
+	-- Handle dice rolling
+	local boardRemotes = remotes:WaitForChild("BoardRemotes")
+	boardRemotes.RollDice.OnServerEvent:Connect(function(player, diceResult)
+		local playerId = player.UserId
+
+		-- Check if it's player's turn
+		if gameManager.turnSystem and gameManager.turnSystem:GetCurrentPlayerTurn() ~= playerId then
+			if DEBUG_MOVEMENT then
+				print("[BoardService] Rejected dice roll from player " .. playerId ..
+					" - not their turn")
+			end
+			return
+		end
+
+		-- ดึงค่าโบนัสลูกเต๋า
+		local diceBonusService = getDiceBonusService()
+
+		-- ใช้ค่าจาก storage ภายในก่อน (เพิ่มเติม)
+		local diceBonus = playerDiceBonus[playerId] or 0
+
+		-- ถ้าไม่มีในระบบภายใน ให้ลองดึงจาก service
+		if diceBonus == 0 and diceBonusService then
+			diceBonus = diceBonusService.GetPlayerDiceBonus(playerId) or 0
+
+			-- เก็บค่าไว้ใช้ในภายหลัง
+			if diceBonus > 0 then
+				playerDiceBonus[playerId] = diceBonus
+			end
+		end
+
+		-- ตรวจสอบการส่งค่าลูกเต๋า
+		print("[BoardService] Player " .. player.Name .. " rolled " .. diceResult ..
+			" (Bonus dice: " .. diceBonus .. ")")
+
+		-- ใช้ค่าจาก Client โดยตรงถ้าได้รับการกำหนดให้เชื่อถือ Client
+		if TRUST_CLIENT_DICE then
+			-- เพิ่มการตรวจสอบขั้นต่ำเพื่อความปลอดภัย (ค่าต้องไม่ติดลบและไม่เกินจำนวนที่เป็นไปได้สูงสุด)
+			local maxReasonableDiceResult = 100 -- คือไม่น่าจะทอยได้เกินนี้ในกรณีปกติ
+
+			if diceResult < 1 then
+				diceResult = 1
+				print("[BoardService] WARNING: Player sent negative dice result, using 1 instead")
+			elseif diceResult > maxReasonableDiceResult then
+				diceResult = 6 + (diceBonus * 6) -- ค่าสูงสุดที่เป็นไปได้จริง
+				print("[BoardService] WARNING: Player sent unreasonably high dice result, using " .. diceResult .. " instead")
+			end
+		else
+			-- ถ้าไม่เชื่อถือ client ใช้การตรวจสอบแบบเดิม
+			-- แต่แก้ไขให้ใช้เงื่อนไขที่ถูกต้อง
+			local minPossibleResult = 1
+			local maxPossibleResult = 6
+
+			-- คำนวณช่วงที่เป็นไปได้ตามโบนัส
+			if diceBonus > 0 then
+				minPossibleResult = 1 + diceBonus -- ต่ำสุดคือลูกหลัก 1 + โบนัสลูกละ 1
+				maxPossibleResult = 6 + (diceBonus * 6) -- สูงสุดคือลูกหลัก 6 + โบนัสลูกละ 6
+			end
+
+			-- ตรวจสอบว่าค่าอยู่ในช่วงที่เป็นไปได้หรือไม่
+			if diceResult < minPossibleResult or diceResult > maxPossibleResult then
+				warn("[BoardService] Invalid dice result from player " .. player.Name .. ": " .. diceResult ..
+					" (Expected range: " .. minPossibleResult .. "-" .. maxPossibleResult .. ")")
+
+				-- สุ่มใหม่โดยสุ่มค่าลูกเต๋าหลัก + โบนัส
+				local baseDiceRoll = math.random(1, 6)
+				local totalResult = baseDiceRoll
+
+				for i = 1, diceBonus do
+					local bonusRoll = math.random(1, 6)
+					totalResult = totalResult + bonusRoll
+				end
+
+				diceResult = totalResult
+				print("[BoardService] Using server-generated dice result instead: " .. diceResult)
+			end
+		end
+
+		-- Process movement
+		local moveInfo = boardSystem:ProcessPlayerMove(playerId, diceResult)
+
+		if moveInfo and moveInfo.autoPath and #moveInfo.autoPath > 0 then
+			-- Send movement data to client
+			local movementData = {
+				path = moveInfo.autoPath,
+				directions = moveInfo.requiresChoice and moveInfo.availableDirections or nil,
+				requiresConfirmation = true
+			}
+
+			if DEBUG_MOVEMENT then
+				print("[BoardService] Sending movement path to player " .. playerId)
+				print("  Path length: " .. #moveInfo.autoPath)
+				print("  Requires choice: " .. tostring(moveInfo.requiresChoice))
+				print("  Auto-complete: " .. tostring(moveInfo.autoComplete))
+				if moveInfo.requiresChoice then
+					print("  Available directions: " .. #moveInfo.availableDirections)
+				end
+			end
+
+			boardRemotes.StartPlayerMovementPath:FireClient(player, playerId, movementData)
+		else
+			-- End turn if no movement
+			if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
+				if DEBUG_MOVEMENT then
+					print("[BoardService] No movement for player " .. playerId .. ", ending turn")
+				end
+				gameManager.turnSystem:EndPlayerTurn(playerId, "no_move")
+			end
+		end
+
+		-- Reset dice bonus
+		playerDiceBonus[playerId] = nil
+
+		-- ล้าง Dice Bonus หลังจากใช้ไปแล้ว
+		if diceBonus > 0 and diceBonusService then
+			diceBonusService.ClearPlayerDiceBonus(playerId)
+			print("[BoardService] Cleared dice bonus for player " .. player.Name .. " after use")
+		end
+
+		-- ล้าง Dice Bonus ใน InventoryService (ถ้ามี)
+		if gameManager.inventoryService and gameManager.inventoryService.ResetDiceBonusUse then
+			gameManager.inventoryService.ResetDiceBonusUse(playerId)
+		end
+	end)
+
+	-- Handle path selection
+	boardRemotes.ChoosePath.OnServerEvent:Connect(function(player, direction)
+		local playerId = player.UserId
+
+		-- Check if it's player's turn
+		if gameManager.turnSystem and gameManager.turnSystem:GetCurrentPlayerTurn() ~= playerId then
+			if DEBUG_MOVEMENT then
+				print("[BoardService] Rejected path choice from player " .. playerId ..
+					" - not their turn")
+			end
+			return
+		end
+
+		if DEBUG_MOVEMENT then
+			print("[BoardService] Player " .. playerId .. " chose direction: " .. direction)
+		end
+
+		-- Check if previous movement was confirmed
+		if pendingMovementCompletions[playerId] and not pendingMovementCompletions[playerId].confirmed then
+			pendingMovementCompletions[playerId].confirmed = true
+
+			if DEBUG_MOVEMENT then
+				print("[BoardService] Confirmed previous movement for player " .. playerId)
+			end
+		end
+
+		-- Process direction choice
+		local moveResult = boardSystem:ProcessDirectionChoice(playerId, direction)
+
+		if moveResult and moveResult.autoPath and #moveResult.autoPath > 0 then
+			-- Send movement data to client
+			local movementData = {
+				path = moveResult.autoPath,
+				directions = moveResult.requiresChoice and moveResult.availableDirections or nil,
+				requiresConfirmation = true
+			}
+
+			if DEBUG_MOVEMENT then
+				print("[BoardService] Sending movement path after direction choice")
+				print("  Path length: " .. #moveResult.autoPath)
+				print("  Requires choice: " .. tostring(moveResult.requiresChoice))
+				print("  Move complete: " .. tostring(moveResult.moveComplete or false))
+				if moveResult.requiresChoice then
+					print("  Available directions: " .. #moveResult.availableDirections)
+				end
+			end
+
+			boardRemotes.StartPlayerMovementPath:FireClient(player, playerId, movementData)
+		else
+			-- End turn if choice invalid
+			if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
+				if DEBUG_MOVEMENT then
+					print("[BoardService] Invalid direction choice from player " .. playerId ..
+						", ending turn")
+				end
+				gameManager.turnSystem:EndPlayerTurn(playerId, "invalid_choice")
+			end
+		end
+	end)
+
+	-- Handle movement completion confirmation from client
+	boardRemotes.MovementVisualizationComplete.OnServerEvent:Connect(function(player, finalTileId)
+		local playerId = player.UserId
+
+		-- Check if this movement is pending confirmation
+		if not pendingMovementCompletions[playerId] then
+			if DEBUG_MOVEMENT then
+				print("[BoardService] Received movement completion from player " .. playerId ..
+					" but no pending confirmation found")
+			end
+			return
+		end
+
+		if DEBUG_MOVEMENT then
+			print("[BoardService] Player " .. playerId .. " confirmed movement to tile " .. finalTileId)
+		end
+
+		-- Set as confirmed
+		pendingMovementCompletions[playerId].confirmed = true
+
+		-- *** ADDED: Trigger Tile Effect Here ***
+		local tileInfo = boardSystem:GetTileInfo(finalTileId)
+		if tileInfo then
+			local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
+			boardRemotes:WaitForChild("TileTriggerEvent"):FireAllClients(playerId, finalTileId, tileInfo.type)
+			if DEBUG_MOVEMENT then
+				print("[BoardService] Tile effect triggered for player " .. playerId ..
+					" at tile " .. finalTileId .. " (type: " .. tileInfo.type .. ")")
+			end
+		end
+		-- *** END ADDED ***
+
+		-- End turn if still same player
+		if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
+			-- Check if movement is complete (no more choices)
+			local hasChoices = boardSystem.playerMovementState[playerId] == "need_choice"
+
+			if DEBUG_MOVEMENT then
+				print("[BoardService] Player " .. playerId .. " movement state: " ..
+					(boardSystem.playerMovementState[playerId] or "nil"))
+				print("  Has more choices: " .. tostring(hasChoices))
+				print("  Steps remaining: " .. (boardSystem.playerRemainingSteps[playerId] or 0))
+			end
+
+			if not hasChoices then
+				-- Short delay to allow animations to complete
+				task.wait(0.5)
+
+				if DEBUG_MOVEMENT then
+					print("[BoardService] Ending turn for player " .. playerId ..
 						" after complete movement")
 				end
 
