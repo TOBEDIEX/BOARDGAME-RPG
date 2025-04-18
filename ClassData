@@ -1,178 +1,252 @@
 -- ClassData.lua
--- ข้อมูลและคุณสมบัติของคลาสต่างๆ ในเกม
--- Version: 3.2.0 (แก้ไขปัญหาชื่อ BaseStats)
--- วางที่: ReplicatedStorage/SharedModules/ClassData.lua
+-- Class and stats data for the game
+-- Location: ReplicatedStorage/SharedModules/ClassData.lua
+-- Version: 1.0.0
 
 local ClassData = {}
 
--- ข้อมูลคลาสทั้งหมด
+--[[
+    Data Structure:
+    - DisplayName: Name displayed in game
+    - Description: Class description
+    - IconAssetId: Asset ID for the class icon
+    - BaseStats: Base stats for the class (at level 1)
+      - MaxHP: Maximum health points
+      - MaxMP: Maximum magic points
+      - ATK: Attack power
+      - DEF: Defense power (set to 0 as requested)
+      - MAGIC: Magic power
+    - Growth: Stat growth rates when leveling up (percentage)
+    - NextClass: Next upgrade class
+    - UpgradeCondition: Condition to upgrade class
+]]
+
+-- Game Classes
 ClassData.Classes = {
-	-- ===== สายนักรบ (คลาสเริ่มต้น) =====
+	-- ===== Starter Classes =====
 	Warrior = {
 		DisplayName = "Warrior",
-		Description = "A sword man",
-		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1
-			MaxHP = 125, -- ใช้ MaxHP แทน HP (ตามที่ระบบคาดหวัง)
-			MaxMP = 50,  -- ใช้ MaxMP แทน MP (ตามที่ระบบคาดหวัง)
-			ATK = 95,    -- พลังโจมตี
-			MAGIC = 10,  -- ใช้ MAGIC แทน MAG (ตามที่ระบบคาดหวัง)
+		Description = "Strong fighter with high HP and attack power. Excels at front-line combat.",
+		IconAssetId = "rbxassetid://0", -- Replace with actual Asset ID
+		BaseStats = {
+			MaxHP = 125,
+			MaxMP = 50,
+			ATK = 95,
+			DEF = 0,
+			MAGIC = 10
+		},
+		Growth = {
+			MaxHP = 10, -- 10% increase per level
+			MaxMP = 5,  -- 5% increase per level
+			ATK = 8,    -- 8% increase per level
+			DEF = 0,    -- 0% increase per level
+			MAGIC = 2   -- 2% increase per level
 		},
 		NextClass = "Knight",
-		UpgradeCondition = { Type = "Level", Value = 10 },
+		UpgradeCondition = { Type = "Level", Value = 10 }
 	},
 
-	-- ===== สายขโมย (คลาสเริ่มต้น) =====
-	Thief = {
-		DisplayName = "Thief",
-		Description = "A thief man",
-		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1
-			MaxHP = 100,
-			MaxMP = 60,
-			ATK = 75,
-			MAGIC = 30,
-		},
-		NextClass = "Assassin",
-		UpgradeCondition = { Type = "Level", Value = 10 },
-	},
-
-	-- ===== สายเวทย์ (คลาสเริ่มต้น) =====
 	Mage = {
 		DisplayName = "Mage",
-		Description = "A magic man",
-		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1
+		Description = "Spell caster with high magic power and MP. Physically fragile but devastating spells.",
+		IconAssetId = "rbxassetid://0", -- Replace with actual Asset ID
+		BaseStats = {
 			MaxHP = 85,
 			MaxMP = 120,
 			ATK = 25,
-			MAGIC = 95,
+			DEF = 0,
+			MAGIC = 95
+		},
+		Growth = {
+			MaxHP = 5,   -- 5% increase per level
+			MaxMP = 10,  -- 10% increase per level
+			ATK = 3,     -- 3% increase per level
+			DEF = 0,     -- 0% increase per level
+			MAGIC = 9    -- 9% increase per level
 		},
 		NextClass = "Wizard",
-		UpgradeCondition = { Type = "Level", Value = 10 },
+		UpgradeCondition = { Type = "Level", Value = 10 }
 	},
 
-	-- ===== คลาสอัพเกรดของ Warrior =====
+	Thief = {
+		DisplayName = "Thief",
+		Description = "Agile rogue with balanced attack and magic. Higher chance to obtain treasures.",
+		IconAssetId = "rbxassetid://0", -- Replace with actual Asset ID
+		BaseStats = {
+			MaxHP = 100,
+			MaxMP = 60,
+			ATK = 75,
+			DEF = 0,
+			MAGIC = 30
+		},
+		Growth = {
+			MaxHP = 7,   -- 7% increase per level
+			MaxMP = 6,   -- 6% increase per level
+			ATK = 7,     -- 7% increase per level
+			DEF = 0,     -- 0% increase per level
+			MAGIC = 4    -- 4% increase per level
+		},
+		NextClass = "Assassin",
+		UpgradeCondition = { Type = "Level", Value = 10 }
+	},
+
+	-- ===== Warrior Upgrade Classes =====
 	Knight = {
 		DisplayName = "Knight",
-		Description = "นักรบผู้ช่ำชอง เกราะหนาและพลังโจมตีที่หนักหน่วงขึ้น สามารถปกป้องเพื่อนร่วมทีมได้",
-		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1 (เมื่อเปลี่ยนคลาส)
+		Description = "Honorable warrior with improved defense and team protection abilities.",
+		IconAssetId = "rbxassetid://0", -- Replace with actual Asset ID
+		BaseStats = {
 			MaxHP = 180,
 			MaxMP = 65,
 			ATK = 120,
-			MAGIC = 15,
+			DEF = 0,
+			MAGIC = 15
+		},
+		Growth = {
+			MaxHP = 12,  -- 12% increase per level
+			MaxMP = 6,   -- 6% increase per level
+			ATK = 9,     -- 9% increase per level
+			DEF = 0,     -- 0% increase per level
+			MAGIC = 3    -- 3% increase per level
 		},
 		NextClass = "Paladin",
-		UpgradeCondition = { Type = "Quest", Value = "ProveYourValor" },
+		UpgradeCondition = { Type = "Quest", Value = "ProveYourValor" }
 	},
 
 	Paladin = {
 		DisplayName = "Paladin",
-		Description = "อัศวินศักดิ์สิทธิ์ ผู้ผสานพลังแห่งการต่อสู้เข้ากับการปกป้องและเวทมนตร์สนับสนุน",
-		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1 (เมื่อเปลี่ยนคลาส)
+		Description = "Holy knight combining combat prowess with support magic and protection.",
+		IconAssetId = "rbxassetid://0", -- Replace with actual Asset ID
+		BaseStats = {
 			MaxHP = 250,
 			MaxMP = 100,
 			ATK = 150,
-			MAGIC = 50,
+			DEF = 0,
+			MAGIC = 50
 		},
-		NextClass = nil, -- คลาสสูงสุดในสายนี้
-		UpgradeCondition = nil,
+		Growth = {
+			MaxHP = 15,  -- 15% increase per level
+			MaxMP = 8,   -- 8% increase per level
+			ATK = 12,    -- 12% increase per level
+			DEF = 0,     -- 0% increase per level
+			MAGIC = 5    -- 5% increase per level
+		},
+		NextClass = nil, -- Highest class in this path
+		UpgradeCondition = nil
 	},
 
-	-- ===== คลาสอัพเกรดของ Mage =====
+	-- ===== Mage Upgrade Classes =====
 	Wizard = {
 		DisplayName = "Wizard",
-		Description = "เชี่ยวชาญเวทมนตร์ธาตุต่างๆ มีพลังทำลายล้างสูงขึ้นและคาถาที่ซับซ้อนกว่าเดิม",
-		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1 (เมื่อเปลี่ยนคลาส)
+		Description = "Elemental magic expert with higher destructive power and more complex spells.",
+		IconAssetId = "rbxassetid://0", -- Replace with actual Asset ID
+		BaseStats = {
 			MaxHP = 110,
 			MaxMP = 180,
 			ATK = 35,
-			MAGIC = 130,
+			DEF = 0,
+			MAGIC = 130
+		},
+		Growth = {
+			MaxHP = 6,   -- 6% increase per level
+			MaxMP = 12,  -- 12% increase per level
+			ATK = 4,     -- 4% increase per level
+			DEF = 0,     -- 0% increase per level
+			MAGIC = 11   -- 11% increase per level
 		},
 		NextClass = "Archmage",
-		UpgradeCondition = { Type = "Item", Value = "AncientGrimoire" },
+		UpgradeCondition = { Type = "Item", Value = "AncientGrimoire" }
 	},
 
 	Archmage = {
 		DisplayName = "Archmage",
-		Description = "ผู้บรรลุศาสตร์แห่งเวทมนตร์ขั้นสูงสุด ควบคุมพลังอันมหาศาลและคาถาที่เปลี่ยนแปลงสนามรบได้",
-		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1 (เมื่อเปลี่ยนคลาส)
+		Description = "Master of the highest magical arts, wielding immense power to reshape the battlefield.",
+		IconAssetId = "rbxassetid://0", -- Replace with actual Asset ID
+		BaseStats = {
 			MaxHP = 140,
 			MaxMP = 250,
 			ATK = 45,
-			MAGIC = 180,
+			DEF = 0,
+			MAGIC = 180
 		},
-		NextClass = nil,
-		UpgradeCondition = nil,
+		Growth = {
+			MaxHP = 7,   -- 7% increase per level
+			MaxMP = 15,  -- 15% increase per level
+			ATK = 5,     -- 5% increase per level
+			DEF = 0,     -- 0% increase per level
+			MAGIC = 14   -- 14% increase per level
+		},
+		NextClass = nil, -- Highest class in this path
+		UpgradeCondition = nil
 	},
 
-	-- ===== คลาสอัพเกรดของ Thief =====
+	-- ===== Thief Upgrade Classes =====
 	Assassin = {
 		DisplayName = "Assassin",
-		Description = "เชี่ยวชาญการลอบสังหาร สร้างความเสียหายคริติคอลอย่างรุนแรงและเคลื่อนไหวในเงามืด",
-		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1 (เมื่อเปลี่ยนคลาส)
+		Description = "Stealth expert focusing on critical strikes and shadow movement.",
+		IconAssetId = "rbxassetid://0", -- Replace with actual Asset ID
+		BaseStats = {
 			MaxHP = 130,
 			MaxMP = 80,
 			ATK = 110,
-			MAGIC = 40,
+			DEF = 0,
+			MAGIC = 40
 		},
-		NextClass = "Shadow",
-		UpgradeCondition = { Type = "Skill", Value = "MasterStealth" },
+		Growth = {
+			MaxHP = 8,   -- 8% increase per level
+			MaxMP = 7,   -- 7% increase per level
+			ATK = 10,    -- 10% increase per level
+			DEF = 0,     -- 0% increase per level
+			MAGIC = 5    -- 5% increase per level
+		},
+		NextClass = "ShadowMaster",
+		UpgradeCondition = { Type = "Skill", Value = "MasterStealth" }
 	},
 
-	Shadow = {
-		DisplayName = "Shadow",
-		Description = "ปรมาจารย์แห่งเงา ผู้ใช้ทักษะลอบเร้นและการโจมตีที่ศัตรูไม่อาจคาดเดาได้",
-		IconAssetId = "rbxassetid://0", -- แทนที่ด้วย Asset ID จริง
-		BaseStats = { -- ค่าสถานะเริ่มต้น ณ เลเวล 1 (เมื่อเปลี่ยนคลาส)
+	ShadowMaster = {
+		DisplayName = "Shadow Master",
+		Description = "Ultimate shadow manipulator using stealth and unpredictable attacks.",
+		IconAssetId = "rbxassetid://0", -- Replace with actual Asset ID
+		BaseStats = {
 			MaxHP = 160,
 			MaxMP = 100,
 			ATK = 140,
-			MAGIC = 55,
+			DEF = 0,
+			MAGIC = 55
 		},
-		NextClass = nil,
-		UpgradeCondition = nil,
-	},
-}
-
--- กำหนดค่าดีฟอลต์สำหรับกรณีเรียกไม่ได้
-local DEFAULT_CLASS_STATS = {
-	Warrior = {
-		MaxHP = 125,
-		MaxMP = 50,
-		ATK = 95,
-		MAGIC = 10
-	},
-	Mage = {
-		MaxHP = 85,
-		MaxMP = 120,
-		ATK = 25,
-		MAGIC = 95
-	},
-	Thief = {
-		MaxHP = 100,
-		MaxMP = 60,
-		ATK = 75,
-		MAGIC = 30
+		Growth = {
+			MaxHP = 9,   -- 9% increase per level
+			MaxMP = 8,   -- 8% increase per level
+			ATK = 12,    -- 12% increase per level
+			DEF = 0,     -- 0% increase per level
+			MAGIC = 6    -- 6% increase per level
+		},
+		NextClass = nil, -- Highest class in this path
+		UpgradeCondition = nil
 	}
 }
 
--- ฟังก์ชันช่วยเหลือ
+-- Default stats fallback for error handling
+ClassData.DefaultStats = {
+	MaxHP = 100,
+	MaxMP = 50,
+	ATK = 10,
+	DEF = 0,
+	MAGIC = 10
+}
+
+---------------------------
+-- Helper Functions
+---------------------------
+
+-- Get class information
 function ClassData:GetClassInfo(className)
-	-- ป้องกันกรณีไม่มีชื่อคลาส
 	if not className or className == "" then
 		warn("[ClassData] Warning: Attempted to get info for nil or empty className")
 		return nil
 	end
 
 	local classInfo = self.Classes[className]
-
-	-- ถ้าไม่พบข้อมูลคลาส แสดงคำเตือน
 	if not classInfo then
 		warn("[ClassData] Warning: Class not found: " .. tostring(className))
 	end
@@ -180,55 +254,58 @@ function ClassData:GetClassInfo(className)
 	return classInfo
 end
 
--- ดึงค่าสถานะเริ่มต้น ณ เลเวล 1
+-- Get base stats for a class at level 1
 function ClassData:GetBaseStats(className)
 	local info = self:GetClassInfo(className)
-
-	-- ถ้าไม่พบข้อมูลคลาส ใช้ค่าดีฟอลต์ (ถ้ามี)
 	if not info or not info.BaseStats then
-		if className and DEFAULT_CLASS_STATS[className] then
-			print("[ClassData] Using default stats for class: " .. className)
-			return DEFAULT_CLASS_STATS[className]
-		end
-
 		warn("[ClassData] No BaseStats found for class: " .. tostring(className))
-		return nil
+		return self.DefaultStats
 	end
-
 	return info.BaseStats
 end
 
-function ClassData:GetDefaultStats(className)
-	-- กรณีแก้ปัญหาเร่งด่วน ถ้าไม่พบคลาส ใช้ดีฟอลต์
-	if className and DEFAULT_CLASS_STATS[className] then
-		return DEFAULT_CLASS_STATS[className]
+-- Calculate stats for a class at a specific level
+function ClassData:CalculateStatsAtLevel(className, level)
+	level = level or 1
+	if level < 1 then level = 1 end
+
+	local info = self:GetClassInfo(className)
+	if not info then return self.DefaultStats end
+
+	local baseStats = info.BaseStats
+	local growth = info.Growth
+
+	if not baseStats or not growth then
+		return self.DefaultStats
 	end
 
-	-- ถ้าไม่มีคลาสเลย กำหนดค่าพื้นฐาน
-	return {
-		MaxHP = 100,
-		MaxMP = 50,
-		ATK = 10,
-		MAGIC = 10
-	}
+	local stats = {}
+	for stat, baseValue in pairs(baseStats) do
+		local growthRate = growth[stat] or 0
+		stats[stat] = math.floor(baseValue * (1 + (growthRate/100) * (level-1)))
+	end
+
+	return stats
 end
 
+-- Get next class in upgrade path
 function ClassData:GetNextClass(className)
 	local info = self:GetClassInfo(className)
 	return info and info.NextClass
 end
 
+-- Get upgrade condition for a class
 function ClassData:GetUpgradeCondition(className)
 	local info = self:GetClassInfo(className)
 	return info and info.UpgradeCondition
 end
 
--- ฟังก์ชันสำหรับดึงคลาสเริ่มต้นทั้งหมด
+-- Get all starter classes
 function ClassData:GetStarterClasses()
 	return {"Warrior", "Thief", "Mage"}
 end
 
--- ฟังก์ชันตรวจสอบว่าเป็นคลาสเริ่มต้นหรือไม่
+-- Check if a class is a starter class
 function ClassData:IsStarterClass(className)
 	local starterClasses = self:GetStarterClasses()
 	for _, class in ipairs(starterClasses) do
@@ -239,4 +316,13 @@ function ClassData:IsStarterClass(className)
 	return false
 end
 
-return ClassData	
+-- Get all available classes
+function ClassData:GetAllClasses()
+	local classes = {}
+	for className, _ in pairs(self.Classes) do
+		table.insert(classes, className)
+	end
+	return classes
+end
+
+return ClassData
