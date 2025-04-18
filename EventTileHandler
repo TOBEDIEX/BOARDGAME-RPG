@@ -1,6 +1,6 @@
 -- EventTileHandler.client.lua
 -- Manages special tile events on the client side
--- Version: 8.2.0 (แก้ไขให้แสดงการ์ดไอเทมหลังถึงช่องปลายทาง)
+-- Version: 8.3.0 (Simplified state management after server-side changes)
 
 -- Services
 local Players = game:GetService("Players")
@@ -22,24 +22,17 @@ local NOTIFY_DURATION = 3
 local player = Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
 
--- State variables
+-- State variables (Simplified)
 local state = {
-	pendingMoneyTile = false,
-	pendingItemTile = false, -- เพิ่มตัวแปรสถานะสำหรับช่องไอเทม
-	moneyAmount = 0,
 	lastTileId = nil,
 	lastTileType = nil,
-	isMakingPathChoice = false,
-	isMoving = false,
-	hasReachedEndTile = false,
-	isProcessingEvent = false
+	isProcessingEvent = false -- Still useful to prevent overlap
 }
 
 -- Remote events (initialized in initRemotes function)
 local remotes, eventTileRemotes, moneyEventRemote, itemEventRemote
 local uiRemotes, statChangedEvent
-local boardRemotes, tileTriggerEvent, playerArrivedAtTile, movementVisualizationComplete
-local showPathSelection, startPlayerMovementPath, activityComplete
+local boardRemotes, tileTriggerEvent -- Only need TileTriggerEvent now
 
 -- Helper functions
 local function tweenUI(obj, duration, properties, style, direction, onComplete)
@@ -47,8 +40,8 @@ local function tweenUI(obj, duration, properties, style, direction, onComplete)
 	direction = direction or Enum.EasingDirection.Out
 
 	local tween = TweenService:Create(
-		obj, 
-		TweenInfo.new(duration, style, direction), 
+		obj,
+		TweenInfo.new(duration, style, direction),
 		properties
 	)
 
@@ -97,12 +90,7 @@ local function initRemotes()
 
 	-- Board Remotes
 	boardRemotes = remotes:WaitForChild("BoardRemotes")
-	tileTriggerEvent = boardRemotes:WaitForChild("TileTriggerEvent")
-	playerArrivedAtTile = boardRemotes:WaitForChild("PlayerArrivedAtTile")
-	movementVisualizationComplete = boardRemotes:FindFirstChild("MovementVisualizationComplete")
-	showPathSelection = boardRemotes:FindFirstChild("ShowPathSelection")
-	startPlayerMovementPath = boardRemotes:FindFirstChild("StartPlayerMovementPath")
-	activityComplete = boardRemotes:FindFirstChild("ActivityComplete")
+	tileTriggerEvent = boardRemotes:WaitForChild("TileTriggerEvent") -- Main event we listen to now
 end
 
 -- Create notification
@@ -149,9 +137,9 @@ local function createNotification(message, duration, color)
 	tweenUI(notification, 0.5, {Position = UDim2.new(0.5, 0, 0.05, 0)}, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 
 	task.delay(duration, function()
-		tweenUI(notification, 0.5, {Position = UDim2.new(0.5, 0, -0.2, 0)}, Enum.EasingStyle.Quad, Enum.EasingDirection.In, 
-		function() 
-			notification:Destroy() 
+		tweenUI(notification, 0.5, {Position = UDim2.new(0.5, 0, -0.2, 0)}, Enum.EasingStyle.Quad, Enum.EasingDirection.In,
+		function()
+			notification:Destroy()
 		end)
 	end)
 
@@ -181,11 +169,11 @@ local function findMoneyRandomizerUI()
 	return nil
 end
 
--- Play card reveal animation
+-- Play card reveal animation (No changes needed)
 local function playCardRevealAnimation(frame, onComplete)
-	if not frame then 
+	if not frame then
 		if onComplete then onComplete() end
-		return 
+		return
 	end
 
 	-- Store original values
@@ -330,12 +318,13 @@ local function playCardRevealAnimation(frame, onComplete)
 	end)
 end
 
+
 -- Get random money amount
 local function getRandomMoneyAmount()
 	return math.random(MONEY_RANGE[1], MONEY_RANGE[2])
 end
 
--- Show money animation with existing UI
+-- Show money animation with existing UI (No changes needed)
 local function showMoneyAnimation(amount)
 	-- Find UI
 	local moneyUI = findMoneyRandomizerUI()
@@ -376,8 +365,8 @@ local function showMoneyAnimation(amount)
 	else
 		for _, child in pairs(mainFrame:GetDescendants()) do
 			if child:IsA("TextLabel") and (
-				child.Name == "CoinAmount" or 
-					child.Name:find("Amount") or 
+				child.Name == "CoinAmount" or
+					child.Name:find("Amount") or
 					child.Name:find("Money") or
 					child.Name:find("Coin")
 				) then
@@ -397,8 +386,8 @@ local function showMoneyAnimation(amount)
 	local closeButton
 	for _, child in pairs(mainFrame:GetDescendants()) do
 		if child:IsA("TextButton") and (
-			child.Name:find("Close") or 
-				child.Name:find("Accept") or 
+			child.Name:find("Close") or
+				child.Name:find("Accept") or
 				child.Name:find("OK") or
 				child.Name:find("Button") or
 				child.Name:find("Confirm")
@@ -410,6 +399,7 @@ local function showMoneyAnimation(amount)
 
 	-- Show UI and start animation
 	moneyUI.Enabled = true
+	mainFrame.Visible = true -- Make sure frame is visible
 
 	local originalTextSize = coinAmount.TextSize
 	coinAmount.Text = "0"
@@ -455,7 +445,7 @@ local function showMoneyAnimation(amount)
 				-- Auto close if no close button
 				if not closeButton then
 					task.delay(5, function()
-						mainFrame.Visible = false
+						if mainFrame and mainFrame.Parent then mainFrame.Visible = false end
 					end)
 				end
 			end
@@ -465,63 +455,56 @@ local function showMoneyAnimation(amount)
 	-- Close UI when button clicked
 	if closeButton and not closeButton:GetAttribute("Connected") then
 		closeButton.MouseButton1Click:Connect(function()
-			mainFrame.Visible = false
+			if mainFrame and mainFrame.Parent then mainFrame.Visible = false end
 		end)
 		closeButton:SetAttribute("Connected", true)
 	end
 end
 
--- Check if reached end tile
-local function checkEndTile()
-	-- Prevent processing overlap
-	if state.isProcessingEvent then 
-		return 
-	end
+-- Function to handle the TileTriggerEvent
+local function handleTileTrigger(playerId, tileId, tileType)
+	if playerId ~= player.UserId then return end -- Only handle events for the local player
+	if state.isProcessingEvent then return end -- Prevent overlap
 
-	-- Check conditions
-	if state.isMoving then
-		return
-	end
+	state.lastTileId = tileId
+	state.lastTileType = tileType
+	state.isProcessingEvent = true
 
-	if not state.hasReachedEndTile then
-		return
-	end
+	print("[EventTileHandler] Received TileTriggerEvent: TileID=" .. tileId .. ", Type=" .. tileType)
 
-	-- Process pending money tile
-	if state.pendingMoneyTile then
-		state.isProcessingEvent = true
-		state.pendingMoneyTile = false
-
-		-- Get random money
-		state.moneyAmount = getRandomMoneyAmount()
-
-		-- Show notification and UI
-		createNotification("Reached end tile! Received " .. state.moneyAmount .. " coins", NOTIFY_DURATION)
-
-		task.delay(DELAY_BEFORE_UI, function()
-			showMoneyAnimation(state.moneyAmount)
-			state.isProcessingEvent = false
-		end)
-	elseif state.pendingItemTile then  -- ตรวจสอบสถานะช่องไอเทม
-		state.isProcessingEvent = true
-		state.pendingItemTile = false
-
-		-- Show notification
-		createNotification("Reached end tile! Getting random item...", NOTIFY_DURATION, ITEM_COLOR)
-
-		task.delay(DELAY_BEFORE_UI, function()
-			-- ขอไอเทมจากเซิร์ฟเวอร์
+	-- Process event after a short delay
+	task.delay(DELAY_BEFORE_UI, function()
+		if tileType == "money" then
+			local moneyAmount = getRandomMoneyAmount()
+			createNotification("You landed on a money tile! Received " .. moneyAmount .. " coins", NOTIFY_DURATION, MONEY_COLOR)
+			showMoneyAnimation(moneyAmount)
+		elseif tileType == "item" then
+			createNotification("You landed on an item tile! Getting random item...", NOTIFY_DURATION, ITEM_COLOR)
+			-- Request item from server
 			itemEventRemote:FireServer("giveRandomItem")
-			state.isProcessingEvent = false
-		end)
-	end
+		elseif tileType == "shop" then
+			createNotification("You landed on a shop tile", NOTIFY_DURATION, SHOP_COLOR)
+			-- TODO: Open shop UI
+		elseif tileType == "battle" then
+			createNotification("You landed on a battle tile! Prepare to fight", NOTIFY_DURATION, BATTLE_COLOR)
+			-- TODO: Initiate battle sequence
+		elseif tileType == "casino" then
+			createNotification("You landed on a casino tile! Try your luck?", NOTIFY_DURATION, CASINO_COLOR)
+			-- TODO: Open casino UI
+		else
+			-- Handle other tile types or normal tiles if needed
+			print("[EventTileHandler] Landed on tile type: " .. tileType)
+		end
 
-	state.hasReachedEndTile = false
+		-- Reset processing flag after handling
+		state.isProcessingEvent = false
+	end)
 end
+
 
 -- Set up event connections
 local function setupConnections()
-	-- Money event
+	-- Money event (still needed if server sends money directly)
 	moneyEventRemote.OnClientEvent:Connect(function(amount)
 		if amount and amount > 0 then
 			createNotification("Received " .. amount .. " coins", NOTIFY_DURATION, MONEY_COLOR)
@@ -529,143 +512,10 @@ local function setupConnections()
 		end
 	end)
 
-	-- Start movement
-	startPlayerMovementPath.OnClientEvent:Connect(function(playerId, movementData)
-		if playerId ~= player.UserId then return end
+	-- *** Listen for TileTriggerEvent ***
+	tileTriggerEvent.OnClientEvent:Connect(handleTileTrigger)
 
-		state.isMoving = true
-		state.hasReachedEndTile = false
-	end)
-
-	-- Arrived at tile
-	playerArrivedAtTile.OnClientEvent:Connect(function(playerId, finalTileId)
-		if playerId ~= player.UserId then return end
-
-		state.lastTileId = finalTileId
-		state.isMakingPathChoice = false
-	end)
-
-	-- Path selection
-	if showPathSelection then
-		showPathSelection.OnClientEvent:Connect(function()
-			state.isMakingPathChoice = true
-		end)
-	end
-
-	-- Movement complete
-	if movementVisualizationComplete then
-		movementVisualizationComplete.OnClientEvent:Connect(function(finalTileId)
-			state.lastTileId = finalTileId
-			state.isMoving = false
-			state.hasReachedEndTile = true
-			state.isMakingPathChoice = false
-
-			task.delay(DELAY_BEFORE_UI, checkEndTile)
-		end)
-	end
-
-	-- Activity complete
-	if activityComplete then
-		activityComplete.OnClientEvent:Connect(function(activityType)
-			if activityType == "movement" or activityType == "turn" then
-				state.isMoving = false
-				state.hasReachedEndTile = true
-				checkEndTile()
-			end
-		end)
-	end
-
-	-- Tile trigger
-	tileTriggerEvent.OnClientEvent:Connect(function(playerId, tileId, tileType)
-		if playerId ~= player.UserId then return end
-
-		state.lastTileId = tileId
-		state.lastTileType = tileType
-
-		if state.isMakingPathChoice then
-			return
-		end
-
-		-- Show notifications based on tile type
-		if tileType == "money" then
-			createNotification("You landed on a money tile! Coins will be awarded when you reach the end tile", 2, MONEY_COLOR)
-			state.pendingMoneyTile = true
-		elseif tileType == "shop" then
-			createNotification("You landed on a shop tile", 2, SHOP_COLOR)
-		elseif tileType == "battle" then
-			createNotification("You landed on a battle tile! Prepare to fight", 2, BATTLE_COLOR)
-		elseif tileType == "casino" then
-			createNotification("You landed on a casino tile! Try your luck?", 2, CASINO_COLOR)
-		elseif tileType == "item" then
-			createNotification("You landed on an item tile! Item will be given when you reach the end tile", 2, ITEM_COLOR)
-			state.pendingItemTile = true  -- ตั้งค่าสถานะรอรับไอเทม
-		end
-	end)
-
-	-- Detect path selection
-	task.spawn(function()
-		local PlayerGui = player:WaitForChild("PlayerGui")
-		local PopupUI = PlayerGui:WaitForChild("PopupUI", 10)
-		if PopupUI then
-			local DiceRollUI = PopupUI:WaitForChild("DiceRollUI", 10)
-			if DiceRollUI then
-				local PathSelectionContainer = DiceRollUI:WaitForChild("PathSelectionContainer", 10)
-				if PathSelectionContainer then
-					PathSelectionContainer:GetPropertyChangedSignal("Visible"):Connect(function()
-						state.isMakingPathChoice = PathSelectionContainer.Visible
-					end)
-				end
-			end
-		end
-	end)
-
-	-- Detect actual character movement
-	task.spawn(function()
-		while true do
-			task.wait(0.5) -- Check every 0.5 seconds
-
-			local character = player.Character
-			if character and character:FindFirstChild("HumanoidRootPart") and character:FindFirstChild("Humanoid") then
-				local humanoid = character:FindFirstChild("Humanoid")
-
-				-- Check movement state
-				if humanoid.MoveDirection.Magnitude > 0 then
-					if not state.isMoving then
-						state.isMoving = true
-						state.hasReachedEndTile = false
-					end
-				else
-					if state.isMoving then
-						state.isMoving = false
-
-						task.delay(DELAY_BEFORE_UI, function()
-							if (state.pendingMoneyTile or state.pendingItemTile) and not state.isMoving then
-								state.hasReachedEndTile = true
-								checkEndTile()
-							end
-						end)
-					end
-				end
-			end
-		end
-	end)
 end
-
--- เพิ่มฟังก์ชันสำหรับเรียกใช้งานจากภายนอก (เปลี่ยนจากการใช้ HandleItemTile โดยตรง)
-local function notifyItemTile()
-	-- เพิ่มเข้าคิวรอ
-	state.pendingItemTile = true
-	createNotification("You landed on an item tile! Item will be given when you reach the end tile", 2, ITEM_COLOR)
-
-	-- ถ้าไม่กำลังเคลื่อนที่และถึงช่องปลายทางแล้ว ให้แสดงทันที (กรณีมีการเรียกโดยตรงจากคำสั่งในเซิร์ฟเวอร์)
-	if not state.isMoving then
-		state.hasReachedEndTile = true
-		checkEndTile()
-	end
-end
-
--- สร้างฟังก์ชันเดิมเพื่อความเข้ากันได้กับโค้ดเดิม
-_G.HandleItemTile = notifyItemTile
 
 -- Initialize system
 local function initialize()
@@ -675,3 +525,10 @@ end
 
 -- Start system
 initialize()
+
+-- Expose function for compatibility (though it might not be needed anymore)
+_G.HandleItemTile = function()
+	print("[EventTileHandler] _G.HandleItemTile called (likely deprecated)")
+end
+
+print("[EventTileHandler] Client Event Tile Handler Initialized (v8.3.0)")
