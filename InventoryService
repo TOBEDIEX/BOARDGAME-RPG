@@ -1,52 +1,101 @@
 -- InventoryService.server.lua
--- Version: 4.1.3 (Formatted - No Debug, No Comments)
+-- บริการจัดการระบบ Inventory ฝั่งเซิร์ฟเวอร์ (อัพเดตสำหรับ DiceBonus)
+-- Version: 3.4.0
 
+-- Services
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 
+-- Load dependencies
 local Modules = ServerStorage:WaitForChild("Modules")
 local InventorySystem = require(Modules:WaitForChild("InventorySystem"))
 local ItemData
 
+-- ใช้ pcall ในการโหลด ItemData เพื่อป้องกันความผิดพลาด
 local success, result = pcall(function()
 	return require(ReplicatedStorage:FindFirstChild("SharedModules"):WaitForChild("ItemData"))
 end)
 
 if success then
 	ItemData = result
+	print("[InventoryService] Successfully loaded ItemData module")
 else
+	warn("[InventoryService] Failed to load ItemData module: " .. tostring(result))
+	-- สร้าง ItemData จำลอง
 	ItemData = {
 		Items = {
-			test_item = { id = "test_item", name = "Test Item", description = "A test item", type = 1, rarity = 1, stackable = true, maxStack = 99, iconId = "", stats = { hp = 50 } },
-			dice_bonus_1 = { id = "dice_bonus_1", name = "Lucky Dice +1", description = "Add +1 to your next dice roll", type = 1, rarity = 2, stackable = true, maxStack = 5, usable = true, consumable = true, stats = { diceRollBonus = 1 } },
-			crystal_1 = { id = "crystal_1", name = "Crystal 1", description = "Move exactly 1 space automatically", type = 1, rarity = 1, stackable = true, maxStack = 5, usable = true, consumable = true, stats = { move = 1 } },
-			crystal_2 = { id = "crystal_2", name = "Crystal 2", description = "Move exactly 2 spaces automatically", type = 1, rarity = 2, stackable = true, maxStack = 5, usable = true, consumable = true, stats = { move = 2 } },
-			crystal_3 = { id = "crystal_3", name = "Crystal 3", description = "Move exactly 3 spaces automatically", type = 1, rarity = 3, stackable = true, maxStack = 5, usable = true, consumable = true, stats = { move = 3 } }
+			test_item = {
+				id = "test_item",
+				name = "Test Item",
+				description = "A test item",
+				type = 1, -- GENERAL
+				rarity = 1,
+				stackable = true,
+				maxStack = 99,
+				iconId = "",
+				stats = { hp = 50 }
+			},
+			-- เพิ่มไอเทม DiceBonus
+			dice_bonus_1 = {
+				id = "dice_bonus_1",
+				name = "Lucky Dice +1",
+				description = "เพิ่มแต้มลูกเต๋า +1 ในเทิร์นถัดไป 1 ครั้ง",
+				type = 1, -- GENERAL
+				rarity = 2,
+				stackable = true,
+				maxStack = 5,
+				usable = true,
+				consumable = true,
+				stats = { diceRollBonus = 1 }
+			}
 		},
 		Equipment = {
-			test_equipment = { id = "test_equipment", name = "Test Equipment", description = "A test equipment", type = 2, subType = 1, rarity = 2, stackable = false, iconId = "", stats = { attack = 10, defense = 5 } }
+			test_equipment = {
+				id = "test_equipment",
+				name = "Test Equipment",
+				description = "A test equipment",
+				type = 2, -- EQUIPMENT
+				subType = 1, -- WEAPON
+				rarity = 2,
+				stackable = false,
+				iconId = "",
+				stats = { attack = 10, defense = 5 }
+			}
 		},
 		GetItemById = function(itemId)
 			return ItemData.Items[itemId] or ItemData.Equipment[itemId]
-		end
+	end
 	}
-end
+	end
 
+	-- Create remotes if they don't exist
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
 local inventoryRemotes = remotes:FindFirstChild("InventoryRemotes")
+
 if not inventoryRemotes then
 	inventoryRemotes = Instance.new("Folder")
 	inventoryRemotes.Name = "InventoryRemotes"
 	inventoryRemotes.Parent = remotes
 end
 
+-- Define remotes
 local remoteEvents = {
-	"UpdateInventory", "AddItem", "RemoveItem", "UseItem", "EquipItem", "UnequipItem",
-	"SortInventory", "DropItem", "TransferItem", "InspectItem", "EquipmentSlotClicked",
-	"DiceBonus", "CrystalMove", "CrystalUIReset", "CrystalMoveComplete",
-	"ItemPermissionUpdate", "ItemPermissionResponse"
+	"UpdateInventory",
+	"AddItem",
+	"RemoveItem",
+	"UseItem",
+	"EquipItem",
+	"UnequipItem",
+	"SortInventory",
+	"DropItem",
+	"TransferItem",
+	"InspectItem",
+	"EquipmentSlotClicked",
+	"DiceBonus" -- เพิ่ม Remote สำหรับ DiceBonus
 }
+
+-- Create required RemoteEvents
 for _, eventName in ipairs(remoteEvents) do
 	if not inventoryRemotes:FindFirstChild(eventName) then
 		local event = Instance.new("RemoteEvent")
@@ -55,446 +104,604 @@ for _, eventName in ipairs(remoteEvents) do
 	end
 end
 
+-- Player inventory cache
 local playerInventories = {}
+
+-- เพิ่มตัวแปรเก็บข้อมูลอุปกรณ์ที่เคยให้ HP แล้ว ตาม player และ itemId
 local playerHealedItems = {}
+
+-- เพิ่มตัวแปรเก็บข้อมูลการใช้ไอเทม DiceBonus ตาม player
 local playerDiceBonusUses = {}
-local playerCrystalMovements = {}
 
+-- ฟังก์ชันดึง DiceBonusService
 local function getDiceBonusService()
-	return _G.DiceBonusService or (_G.GameManager and _G.GameManager.diceBonusService)
-end
-
-local function getGameManager()
-	if _G.GameManager then return _G.GameManager end
-	local startTime = tick()
-	while not _G.GameManager and tick() - startTime < 5 do
-		task.wait(0.1)
+	if _G.DiceBonusService then
+		return _G.DiceBonusService
 	end
-	return _G.GameManager
+
+	if _G.GameManager and _G.GameManager.diceBonusService then
+		return _G.GameManager.diceBonusService
+	end
+
+	return nil
 end
 
-local function getBoardSystem()
-	local gm = getGameManager()
-	return _G.BoardSystem or (gm and gm.boardSystem)
-end
-
-local function getPlayerData(player)
-	if not player then return nil end
-	local gm = getGameManager()
-	if not gm or not gm.playerManager then return nil end
-	return gm.playerManager:GetPlayerData(player)
-end
-
+-- Main service
 local InventoryService = {}
 
+-- Initialize player inventory
 function InventoryService.InitializePlayer(player)
 	if playerInventories[player.UserId] then
 		return playerInventories[player.UserId]
 	end
+
 	local inventory = InventorySystem.new()
+
+	-- ให้ไอเทมเริ่มต้นสำหรับผู้เล่นใหม่
 	InventoryService.GiveStartingItems(player, inventory)
+
+	-- Cache the inventory
 	playerInventories[player.UserId] = inventory
+
+	-- Send initial inventory data to client
 	InventoryService.SendInventoryToClient(player)
+
 	return inventory
 end
 
+-- Give starting items to a new player
 function InventoryService.GiveStartingItems(player, inventory)
-	local playerData = getPlayerData(player)
+	-- แยกตามคลาสของผู้เล่น (ถ้ามี)
+	local playerData = _G.GameManager and _G.GameManager.playerManager:GetPlayerData(player)
 	local playerClass = playerData and playerData.class or "Unknown"
+
+	-- ไอเทมพื้นฐานที่ทุกคนได้รับ
 	inventory:AddItem(ItemData.Items.test_item, 3)
-	if ItemData.Items.dice_bonus_1 then inventory:AddItem(ItemData.Items.dice_bonus_1, 2) end
-	if ItemData.Items.dice_bonus_2 then inventory:AddItem(ItemData.Items.dice_bonus_2, 1) end
-	if ItemData.Items.crystal_1 then inventory:AddItem(ItemData.Items.crystal_1, 2) end
-	if ItemData.Items.crystal_2 then inventory:AddItem(ItemData.Items.crystal_2, 1) end
-	if ItemData.Items.crystal_3 then inventory:AddItem(ItemData.Items.crystal_3, 1) end
-	inventory:AddItem(ItemData.Equipment.test_equipment)
+
+	-- เพิ่มไอเทม DiceBonus สำหรับทดสอบ
+	if ItemData.Items.dice_bonus_1 then
+		inventory:AddItem(ItemData.Items.dice_bonus_1, 2)
+	end
+
+	if ItemData.Items.dice_bonus_2 then
+		inventory:AddItem(ItemData.Items.dice_bonus_2, 1)
+	end
+
+	-- ไอเทมตามคลาส
+	if playerClass == "Warrior" or playerClass == "Knight" or playerClass == "Paladin" then
+		-- ไอเทมสำหรับสายนักรบ
+		inventory:AddItem(ItemData.Equipment.test_equipment)
+	elseif playerClass == "Mage" or playerClass == "Wizard" or playerClass == "Archmage" then
+		-- ไอเทมสำหรับสายเวทย์
+		inventory:AddItem(ItemData.Equipment.test_equipment)
+	elseif playerClass == "Thief" or playerClass == "Assassin" or playerClass == "Shadow" then
+		-- ไอเทมสำหรับสายโจร
+		inventory:AddItem(ItemData.Equipment.test_equipment)
+	else
+		-- ไอเทมทั่วไป
+		inventory:AddItem(ItemData.Equipment.test_equipment)
+	end
+
+	print("[InventoryService] Gave starting items to " .. player.Name)
 	return true
 end
 
+-- Get player inventory
 function InventoryService.GetPlayerInventory(player)
-	return playerInventories[player.UserId] or InventoryService.InitializePlayer(player)
+	if not playerInventories[player.UserId] then
+		return InventoryService.InitializePlayer(player)
+	end
+
+	return playerInventories[player.UserId]
 end
 
+-- Send inventory data to client
 function InventoryService.SendInventoryToClient(player)
 	local inventory = InventoryService.GetPlayerInventory(player)
-	if not inventory then return false end
+	if not inventory then
+		return false
+	end
+
+	-- คัดกรองข้อมูลที่จำเป็นสำหรับไคลเอนต์
 	local clientData = {
 		items = inventory:GetAllItems(),
 		equippedItems = inventory:GetEquippedItems(),
 		maxSize = inventory.maxSize
 	}
-	inventoryRemotes:WaitForChild("UpdateInventory"):FireClient(player, clientData)
+
+	-- ส่งข้อมูลผ่าน Remote
+	local updateEvent = inventoryRemotes:WaitForChild("UpdateInventory")
+	updateEvent:FireClient(player, clientData)
+
 	return true
 end
 
+-- Add item to player inventory
 function InventoryService.AddItemToPlayer(player, itemId, quantity)
 	local inventory = InventoryService.GetPlayerInventory(player)
-	if not inventory then return false, "Failed to get player inventory" end
+	if not inventory then
+		return false, "Failed to get player inventory"
+	end
+
+	-- หาข้อมูลไอเทม
 	local itemData = ItemData.GetItemById(itemId)
-	if not itemData then return false, "Item not found" end
+	if not itemData then
+		return false, "Item not found"
+	end
+
+	-- เพิ่มไอเทมลงในคลัง
 	local success, message = inventory:AddItem(itemData, quantity)
-	if success then InventoryService.SendInventoryToClient(player) end
+
+	-- ส่งข้อมูลอัปเดตไปยังไคลเอนต์
+	if success then
+		InventoryService.SendInventoryToClient(player)
+		print("[InventoryService] Added item " .. itemId .. " x" .. tostring(quantity) .. " to player " .. player.Name)
+	end
+
 	return success, message
 end
 
+-- Remove item from player inventory
 function InventoryService.RemoveItemFromPlayer(player, inventoryId, quantity)
 	local inventory = InventoryService.GetPlayerInventory(player)
-	if not inventory then return false, "Failed to get player inventory" end
+	if not inventory then
+		return false, "Failed to get player inventory"
+	end
+
+	-- ค้นหาไอเทมเพื่อล็อกข้อมูล
+	local item = inventory:FindItemByInventoryId(inventoryId)
+	local itemName = item and item.name or "Unknown Item"
+
+	-- ลบไอเทมออกจากคลัง
 	local success, message = inventory:RemoveItem(inventoryId, quantity)
-	if success then InventoryService.SendInventoryToClient(player) end
+
+	-- ส่งข้อมูลอัปเดตไปยังไคลเอนต์
+	if success then
+		InventoryService.SendInventoryToClient(player)
+		print("[InventoryService] Removed item " .. itemName .. " from player " .. player.Name)
+	end
+
 	return success, message
 end
 
-function InventoryService.HealToMax(player)
-	if not player then return false end
-	local playerData = getPlayerData(player)
-	if not playerData or not playerData.stats then return false end
-	local oldHp = playerData.stats.hp
-	playerData.stats.hp = playerData.stats.maxHp
-	if player.Character and player.Character:FindFirstChild("Humanoid") then
-		player.Character.Humanoid.Health = playerData.stats.maxHp
-	end
-	local gm = getGameManager()
-	if gm and gm.playerManager then
-		if gm.playerManager.UpdatePlayerHP then
-			gm.playerManager:UpdatePlayerHP(player, playerData.stats.maxHp)
-		elseif gm.playerManager.updatePlayerStatsEvent then
-			gm.playerManager.updatePlayerStatsEvent:FireClient(player, player.UserId, { hp = playerData.stats.maxHp, maxHp = playerData.stats.maxHp })
-		end
-	end
-	return true
-end
-
+-- Update player stats based on equipment
 function InventoryService.UpdatePlayerStats(player, equipmentStats)
-	local gm = getGameManager()
-	if not gm or not gm.playerManager then return false end
-	local playerData = gm.playerManager:GetPlayerData(player)
-	if not playerData or not playerData.stats then return false end
-
-	if not playerData.baseStats or type(playerData.baseStats) ~= "table" then
-		local className = playerData.class
-		local freshStats = gm.playerManager.GetDefaultStatsForClass and gm.playerManager:GetDefaultStatsForClass(className)
-		if freshStats then
-			playerData.baseStats = table.clone(freshStats)
-		else
-			playerData.baseStats = {
-				maxHp = playerData.stats.maxHp, hp = playerData.stats.hp, maxMp = playerData.stats.maxMp, mp = playerData.stats.mp,
-				attack = playerData.stats.attack, defense = playerData.stats.defense, magic = playerData.stats.magic, money = playerData.stats.money or 100
-			}
-		end
-	end
-
-	local oldMaxHp = playerData.stats.maxHp
-	local oldHp = playerData.stats.hp
-	local hpRatio = oldMaxHp > 0 and (oldHp / oldMaxHp) or 1
-	local newStats = {}
-	for k, v in pairs(playerData.baseStats) do newStats[k] = v end
-	for k, v in pairs(equipmentStats) do newStats[k] = (newStats[k] or 0) + v end
-	if equipmentStats.defense then
-		newStats.maxHp = playerData.baseStats.maxHp + (equipmentStats.defense * 5)
-	end
-
-	local newMaxHp = newStats.maxHp
-	local maxHpDiff = newMaxHp - oldMaxHp
-	local newHp = 0
-	if maxHpDiff >= 0 then
-		newHp = math.floor(newMaxHp * hpRatio)
-		newHp = math.max(newHp, oldHp)
-	else
-		newHp = math.floor(newMaxHp * hpRatio)
-	end
-	newHp = math.max(1, math.min(newHp, newMaxHp))
-	newStats.hp = newHp
-
-	for k, v in pairs(newStats) do playerData.stats[k] = v end
-
-	if gm.playerManager.UpdatePlayerStats then
-		gm.playerManager:UpdatePlayerStats(player, playerData.stats)
-	elseif gm.playerManager.SyncPlayerStats then
-		gm.playerManager:SyncPlayerStats(player)
-	elseif gm.playerManager.UpdatePlayerHP then
-		gm.playerManager:UpdatePlayerHP(player, newHp)
-	end
-	if player.Character and player.Character:FindFirstChild("Humanoid") then
-		player.Character.Humanoid.Health = playerData.stats.hp
-	end
-	return true
-end
-
-function InventoryService.EquipItemForPlayer(player, inventoryId)
-	local inventory = InventoryService.GetPlayerInventory(player)
-	if not inventory then return false, "Failed to get player inventory" end
-	local playerData = getPlayerData(player)
-	local oldMaxHp = 0
-	if playerData and playerData.stats then oldMaxHp = playerData.stats.maxHp end
-	local success, message = inventory:EquipItem(inventoryId)
-	if success then
-		local equipmentStats = inventory:CalculateEquipmentStats()
-		InventoryService.UpdatePlayerStats(player, equipmentStats)
+	-- ถ้ามีระบบจัดการผู้เล่น ให้อัปเดตสถิติ
+	if _G.GameManager and _G.GameManager.playerManager then
+		local playerData = _G.GameManager.playerManager:GetPlayerData(player)
 		if playerData and playerData.stats then
-			local newMaxHp = playerData.stats.maxHp
-			local hpIncrease = newMaxHp - oldMaxHp
-			if hpIncrease >= (oldMaxHp * 0.25) then
-				InventoryService.HealToMax(player)
+			-- เก็บสถิติพื้นฐาน
+			local baseStats = playerData.baseStats
+
+			-- ตรวจสอบว่ามี baseStats หรือไม่
+			if not baseStats then
+				print("[InventoryService] Warning: baseStats not found, creating new baseStats...")
+
+				-- สร้าง baseStats จากค่าปัจจุบัน
+				baseStats = {
+					maxHp = playerData.stats.maxHp,
+					hp = playerData.stats.hp,
+					maxMp = playerData.stats.maxMp,
+					mp = playerData.stats.mp,
+					attack = playerData.stats.attack,
+					defense = playerData.stats.defense,
+					magic = playerData.stats.magic,
+					money = playerData.stats.money or 100
+				}
+				playerData.baseStats = baseStats
 			end
+
+			-- ล็อกค่า baseStats และ equipmentStats เพื่อดีบัก
+			print("[InventoryService] BaseStats: maxHp=" .. baseStats.maxHp .. 
+				", attack=" .. baseStats.attack .. ", defense=" .. baseStats.defense)
+
+			print("[InventoryService] EquipmentStats:")
+			for stat, value in pairs(equipmentStats) do
+				print("  " .. stat .. " = " .. value)
+			end
+
+			-- คำนวณสถิติรวมจากค่าพื้นฐานบวกอุปกรณ์
+			for statName, baseValue in pairs(baseStats) do
+				if equipmentStats[statName] then
+					playerData.stats[statName] = baseValue + equipmentStats[statName]
+				else
+					playerData.stats[statName] = baseValue
+				end
+			end
+
+			-- แก้ไข: นำค่า defense จากอุปกรณ์มาเพิ่ม maxHp โดยตรง
+			-- ค่า defense 1 จะเพิ่ม maxHp 5 หน่วย
+			local defBonus = equipmentStats.defense or 0
+			local hpFromDef = defBonus * 5  -- อัตราส่วน: defense 1 = maxHp 5
+
+			print("[InventoryService] Defense Bonus: " .. defBonus .. " (adds " .. hpFromDef .. " to maxHp)")
+
+			-- เพิ่ม MaxHP จาก defense
+			playerData.stats.maxHp = baseStats.maxHp + hpFromDef
+
+			-- รับประกันว่า HP ปัจจุบันไม่เกิน maxHp
+			playerData.stats.hp = math.min(playerData.stats.hp, playerData.stats.maxHp)
+
+			-- อัปเดตสถิติให้ผู้เล่น
+			_G.GameManager.playerManager:UpdatePlayerStats(player)
+
+			print("[InventoryService] Final Stats: maxHp=" .. playerData.stats.maxHp .. 
+				", hp=" .. playerData.stats.hp .. ", attack=" .. playerData.stats.attack)
 		end
-		InventoryService.SendInventoryToClient(player)
 	end
-	return success, message
-end
 
-function InventoryService.UnequipItemForPlayer(player, slotType)
-	local inventory = InventoryService.GetPlayerInventory(player)
-	if not inventory then return false, "Failed to get player inventory" end
-	local success, message = inventory:UnequipItem(slotType)
-	if success then
-		local equipmentStats = inventory:CalculateEquipmentStats()
-		InventoryService.UpdatePlayerStats(player, equipmentStats)
-		InventoryService.SendInventoryToClient(player)
-	end
-	return success, message
-end
-
-function InventoryService.HandleEquipmentSlotClick(player, slotType)
-	local inventory = InventoryService.GetPlayerInventory(player)
-	if not inventory then return false, "Failed to get player inventory" end
-	local item = inventory:GetEquippedItemInSlot(slotType)
-	if not item then return false, "No item in slot" end
-	inventoryRemotes:WaitForChild("InspectItem"):FireClient(player, item)
 	return true
 end
 
-function InventoryService.IsPlayerUsingCrystal(player)
-	if not player then return false end
-	local playerId = typeof(player) == "number" and player or player.UserId
-	if playerCrystalMovements[playerId] then return true end
-	local boardSystem = getBoardSystem()
-	if not boardSystem then return false end
-	if boardSystem.activeCrystalMovements and boardSystem.activeCrystalMovements[playerId] then return true end
-	if boardSystem.lastMovementData and boardSystem.lastMovementData[playerId] and boardSystem.lastMovementData[playerId].isCrystalMove then return true end
-	if boardSystem.playerMovementState and boardSystem.playerMovementState[playerId] and (boardSystem.playerMovementState[playerId] == "auto_complete" or boardSystem.playerMovementState[playerId] == "need_choice") then
-		if boardSystem.playerRemainingSteps and boardSystem.playerRemainingSteps[playerId] and boardSystem.playerRemainingSteps[playerId] > 0 then return true end
-	end
-	return false
-end
-
+-- Handle using items (แก้ไขให้รองรับ DiceBonus)
 function InventoryService.UseItemForPlayer(player, inventoryId)
 	local inventory = InventoryService.GetPlayerInventory(player)
-	if not inventory then return false, "Failed to get player inventory" end
+	if not inventory then
+		return false, "Failed to get player inventory"
+	end
+
+	-- หาข้อมูลไอเทม
 	local item = inventory:FindItemByInventoryId(inventoryId)
-	if not item then return false, "Item not found" end
-	if not item.usable then return false, "Item cannot be used" end
-	if InventoryService.IsPlayerUsingCrystal(player) then return false, "You can't use items while crystal movement is active" end
+	if not item then
+		return false, "Item not found"
+	end
 
-	local isCrystal = item.stats and item.stats.move and item.stats.move > 0
-	if isCrystal then
-		local gm = getGameManager()
-		local turnSystem = gm and gm.turnSystem
-		if not turnSystem then return false, "Turn system not available" end
-		if turnSystem:GetCurrentPlayerTurn() ~= player.UserId then return false, "You can only use crystals during your turn" end
-		local boardSystem = getBoardSystem()
-		if not boardSystem then return false, "Board system not available" end
-		if boardSystem.playerMovementState and boardSystem.playerMovementState[player.UserId] and (boardSystem.playerMovementState[player.UserId] == "auto_complete" or boardSystem.playerMovementState[player.UserId] == "need_choice") then return false, "You cannot use crystals while moving" end
-		if boardSystem.playerRemainingSteps and boardSystem.playerRemainingSteps[player.UserId] and boardSystem.playerRemainingSteps[player.UserId] > 0 then return false, "You cannot use crystals while moving" end
+	local itemName = item.name or "Unknown Item"
+	local itemId = item.id
 
-		local steps = item.stats.move
-		playerCrystalMovements[player.UserId] = { steps = steps, timestamp = os.time(), itemId = item.id }
-		if boardSystem.ProcessCrystalMove then
-			local success = boardSystem:ProcessCrystalMove(player, steps)
-			if not success then
-				playerCrystalMovements[player.UserId] = nil
-				return false, "Cannot use crystal at this time"
-			end
-			local crystalMoveEvent = inventoryRemotes:FindFirstChild("CrystalMove")
-			if crystalMoveEvent then crystalMoveEvent:FireClient(player, steps) end
-			task.delay(15, function()
-				if playerCrystalMovements[player.UserId] then playerCrystalMovements[player.UserId] = nil end
-			end)
-			local success, message = inventory:RemoveItem(inventoryId, 1)
-			if success then InventoryService.SendInventoryToClient(player) end
-			return true, "Moving with crystal " .. steps .. " step(s)"
-		else
-			playerCrystalMovements[player.UserId] = nil
-			return false, "Board system does not support crystal movement"
+	-- ตรวจสอบว่าใช้ได้หรือไม่
+	if not item.usable then
+		return false, "Item cannot be used"
+	end
+
+	-- เช็คว่าเป็นไอเทม DiceBonus หรือไม่
+	local isDiceBonus = item.stats and item.stats.diceRollBonus and item.stats.diceRollBonus > 0
+
+	if isDiceBonus then
+		-- ตรวจสอบว่าเป็นเทิร์นของผู้เล่นหรือไม่
+		local turnSystem = _G.GameManager and _G.GameManager.turnSystem
+		if not turnSystem then
+			return false, "Turn system not available"
+		end
+
+		if turnSystem:GetCurrentPlayerTurn() ~= player.UserId then
+			return false, "You can only use this item during your turn"
+		end
+
+		-- ตรวจสอบว่าใช้ไอเทม DiceBonus ไปแล้วในเทิร์นนี้หรือไม่
+		if playerDiceBonusUses[player.UserId] then
+			return false, "You already used a dice bonus item this turn"
 		end
 	end
 
-	local isDiceBonus = item.stats and item.stats.diceRollBonus and item.stats.diceRollBonus > 0
-	if isDiceBonus then
-		local gm = getGameManager()
-		local turnSystem = gm and gm.turnSystem
-		if not turnSystem then return false, "Turn system not available" end
-		if turnSystem:GetCurrentPlayerTurn() ~= player.UserId then return false, "You can only use this item during your turn" end
-		if playerDiceBonusUses[player.UserId] then return false, "You already used a dice bonus item this turn" end
-	end
-
+	-- กำหนดฟังก์ชั่นการใช้งาน (จากอีเวนต์สคริปต์หรือระบบอื่น)
 	local useFunction
+
+	-- เช็คว่ามีฟังก์ชั่นการใช้งานพิเศษหรือไม่
 	if ItemData.UseHandlers and ItemData.UseHandlers[item.id] then
-		useFunction = function(itemData) return ItemData.UseHandlers[item.id](player, itemData) end
-	else
 		useFunction = function(itemData)
+			return ItemData.UseHandlers[item.id](player, itemData)
+		end
+	else
+		-- ฟังก์ชั่นการใช้งานทั่วไป
+		useFunction = function(itemData)
+			-- เช็คประเภทไอเทม
 			if itemData.type == InventorySystem.GetItemTypes().GENERAL then
+				-- ถ้าเป็นไอเทมทั่วไป เช่น โพชั่น
 				if itemData.stats then
-					local playerData = getPlayerData(player)
+					-- ผลต่อสถิติผู้เล่น
+					local playerData = _G.GameManager and _G.GameManager.playerManager:GetPlayerData(player)
 					if playerData and playerData.stats then
 						local changed = false
+
+						-- เพิ่มค่าสถิติตามไอเทม
 						for statName, statValue in pairs(itemData.stats) do
 							if statName == "diceRollBonus" then
+								-- จัดการโบนัสลูกเต๋า
 								local diceBonusService = getDiceBonusService()
 								if diceBonusService then
 									diceBonusService.SetPlayerDiceBonus(player, statValue)
 									changed = true
-									playerDiceBonusUses[player.UserId] = { itemId = item.id, bonusAmount = statValue, timestamp = os.time() }
+
+									-- บันทึกว่าได้ใช้ไอเทม DiceBonus ในเทิร์นนี้แล้ว
+									playerDiceBonusUses[player.UserId] = {
+										itemId = itemId,
+										bonusAmount = statValue,
+										timestamp = os.time()
+									}
+
+									print("[InventoryService] Player " .. player.Name .. " used dice bonus +" .. statValue)
+								else
+									warn("[InventoryService] Cannot find DiceBonusService to apply bonus")
 								end
-							elseif statName == "move" then
-								return true, "Moving with crystal " .. statValue .. " step(s)"
 							elseif playerData.stats[statName] ~= nil then
 								playerData.stats[statName] = playerData.stats[statName] + statValue
 								changed = true
 							end
 						end
+
+						-- ถ้าไอเทมมีผลต่อ HP ให้ล้างประวัติการฟื้น HP ของอุปกรณ์ (หากมี)
 						if itemData.stats.hp and playerHealedItems[player.UserId] then
+							-- รีเซ็ตประวัติการฟื้น HP สำหรับทุกอุปกรณ์
 							playerHealedItems[player.UserId] = {}
+							print("[InventoryService] Reset healing history after using healing item")
+
+							-- ใช้เทคนิค delay เพื่อให้แน่ใจว่า HP จะไม่ถูกรีเซ็ตหลังจากใช้ไอเทม
+							task.delay(0.1, function()
+								-- ฟื้น HP ตามปกติด้วยฟังก์ชันของเรา (ไม่ใช้ UpdatePlayerStats)
+								if _G.GameManager and playerData then
+									local newHP = math.min(playerData.stats.hp, playerData.stats.maxHp)
+									print("[InventoryService] Ensuring HP is correct after item use: " .. newHP)
+
+									-- อัปเดต HP โดยตรง (ไม่ผ่านฟังก์ชันอัปเดตสถานะอื่น)
+									if player.Character and player.Character:FindFirstChild("Humanoid") then
+										player.Character.Humanoid.Health = newHP
+									end
+
+									-- อัปเดตให้ client โดยตรง
+									if _G.GameManager.playerManager.updatePlayerStatsEvent then
+										local statsToSync = {
+											hp = newHP,
+											maxHp = playerData.stats.maxHp,
+											mp = playerData.stats.mp,
+											maxMp = playerData.stats.maxMp,
+											attack = playerData.stats.attack,
+											defense = playerData.stats.defense,
+											magic = playerData.stats.magic,
+											level = playerData.stats.level or 1,
+											class = playerData.class,
+											money = playerData.stats.money
+										}
+
+										_G.GameManager.playerManager.updatePlayerStatsEvent:FireClient(
+											player, 
+											player.UserId, 
+											statsToSync
+										)
+									end
+								end
+							end)
 						end
-						if changed and not isDiceBonus and not isCrystal then
+
+						-- อัปเดตสถิติถ้ามีการเปลี่ยนแปลง (ไม่ต้องอัปเดต DiceBonus)
+						if changed and not isDiceBonus then
+							-- ใช้ ForceHealToFull ถ้าเป็นไอเทมฟื้น HP
 							if itemData.stats.hp and itemData.stats.hp > 0 then
-								task.delay(0.05, function() InventoryService.HealToMax(player) end)
+								task.delay(0.05, function()
+									InventoryService.ForceHealToFull(player)
+								end)
 							else
-								local gm = getGameManager()
-								if gm and gm.playerManager then gm.playerManager:UpdatePlayerStats(player) end
+								if _G.GameManager then
+									_G.GameManager.playerManager:UpdatePlayerStats(player)
+								end
 							end
 						end
+
+						-- ส่งข้อความยืนยัน
 						return true, "Used " .. itemData.name
 					end
 				end
 			elseif itemData.type == InventorySystem.GetItemTypes().SKILL then
+				-- ถ้าเป็นคัมภีร์สกิล
 				local skillId = itemData.skillId
 				if skillId then
-					local gm = getGameManager()
-					if gm and gm.skillSystem then
-						local success = gm.skillSystem:LearnSkill(player, skillId)
-						if success then return true, "Learned new skill: " .. (itemData.skillName or "Unknown Skill")
-						else return false, "Could not learn this skill" end
+					-- เรียกใช้ระบบสกิล (ต้องมีระบบสกิลก่อน)
+					if _G.GameManager and _G.GameManager.skillSystem then
+						local success = _G.GameManager.skillSystem:LearnSkill(player, skillId)
+						if success then
+							return true, "Learned new skill: " .. (itemData.skillName or "Unknown Skill")
+						else
+							return false, "Could not learn this skill"
+						end
 					end
 				end
-			elseif itemData.stats and itemData.stats.move and itemData.stats.move > 0 then
-				return true, "Moving with crystal " .. itemData.stats.move .. " step(s)"
 			end
+
 			return true, "Used " .. itemData.name
 		end
 	end
 
+	-- กำหนดฟังก์ชั่นการใช้งาน
 	item.useFunction = useFunction
+
+	-- ใช้ไอเทม
 	local success, message = inventory:UseItem(inventoryId)
-	if success then InventoryService.SendInventoryToClient(player) end
+
+	-- ส่งข้อมูลอัปเดตไปยังไคลเอนต์
+	if success then
+		InventoryService.SendInventoryToClient(player)
+		print("[InventoryService] Player " .. player.Name .. " used " .. itemName)
+	end
+
 	return success, message
 end
 
+-- ฟังก์ชันเพิ่ม: รีเซ็ตการใช้ไอเทม DiceBonus
 function InventoryService.ResetDiceBonusUse(player)
 	if not player then return false end
+
 	local playerId = typeof(player) == "number" and player or player.UserId
+
 	if playerDiceBonusUses[playerId] then
 		playerDiceBonusUses[playerId] = nil
+		print("[InventoryService] Reset dice bonus use for player: " .. playerId)
 		return true
 	end
+
 	return false
 end
 
-function InventoryService.ResetCrystalMovement(player)
-	if not player then return false end
-	local playerId = typeof(player) == "number" and player or player.UserId
-	if playerCrystalMovements[playerId] then
-		playerCrystalMovements[playerId] = nil
-		local crystalUIResetEvent = inventoryRemotes:FindFirstChild("CrystalUIReset")
-		if crystalUIResetEvent then
-			local playerObj = typeof(player) == "Instance" and player or Players:GetPlayerByUserId(playerId)
-			if playerObj then crystalUIResetEvent:FireClient(playerObj) end
-		end
-		return true
-	end
-	return false
-end
-
+-- Connect remote events
 local function setupRemoteEvents()
-	inventoryRemotes:WaitForChild("AddItem").OnServerEvent:Connect(InventoryService.AddItemToPlayer)
-	inventoryRemotes:WaitForChild("RemoveItem").OnServerEvent:Connect(InventoryService.RemoveItemFromPlayer)
-	inventoryRemotes:WaitForChild("EquipItem").OnServerEvent:Connect(InventoryService.EquipItemForPlayer)
-	inventoryRemotes:WaitForChild("UnequipItem").OnServerEvent:Connect(InventoryService.UnequipItemForPlayer)
-	inventoryRemotes:WaitForChild("UseItem").OnServerEvent:Connect(InventoryService.UseItemForPlayer)
-	inventoryRemotes:WaitForChild("EquipmentSlotClicked").OnServerEvent:Connect(InventoryService.HandleEquipmentSlotClick)
-	inventoryRemotes:WaitForChild("DropItem").OnServerEvent:Connect(function(player, inventoryId, quantity) end)
-	inventoryRemotes:WaitForChild("InspectItem").OnServerEvent:Connect(function(player, inventoryId)
+	-- Add Item
+	local addItemEvent = inventoryRemotes:WaitForChild("AddItem")
+	addItemEvent.OnServerEvent:Connect(function(player, itemId, quantity)
+		-- สำหรับการทดสอบ เปิดให้ผู้เล่นเพิ่มไอเทมเอง
+		InventoryService.AddItemToPlayer(player, itemId, quantity)
+	end)
+
+	-- Remove Item
+	local removeItemEvent = inventoryRemotes:WaitForChild("RemoveItem")
+	removeItemEvent.OnServerEvent:Connect(function(player, inventoryId, quantity)
+		InventoryService.RemoveItemFromPlayer(player, inventoryId, quantity)
+	end)
+
+	-- Equip Item
+	local equipItemEvent = inventoryRemotes:WaitForChild("EquipItem")
+	equipItemEvent.OnServerEvent:Connect(function(player, inventoryId)
+		InventoryService.EquipItemForPlayer(player, inventoryId)
+	end)
+
+	-- Unequip Item
+	local unequipItemEvent = inventoryRemotes:WaitForChild("UnequipItem")
+	unequipItemEvent.OnServerEvent:Connect(function(player, slotType)
+		InventoryService.UnequipItemForPlayer(player, slotType)
+	end)
+
+	-- Use Item
+	local useItemEvent = inventoryRemotes:WaitForChild("UseItem")
+	useItemEvent.OnServerEvent:Connect(function(player, inventoryId)
+		InventoryService.UseItemForPlayer(player, inventoryId)
+	end)
+
+	-- Equipment Slot Clicked
+	local slotClickEvent = inventoryRemotes:WaitForChild("EquipmentSlotClicked")
+	slotClickEvent.OnServerEvent:Connect(function(player, slotType)
+		InventoryService.HandleEquipmentSlotClick(player, slotType)
+	end)
+
+	-- Drop Item (อาจจะเพิ่มระบบวางไอเทมบนกระดาน)
+	local dropItemEvent = inventoryRemotes:WaitForChild("DropItem")
+	dropItemEvent.OnServerEvent:Connect(function(player, inventoryId, quantity)
+		-- ไว้เพิ่มเติมในอนาคต
+	end)
+
+	-- Inspect Item (ดูรายละเอียดไอเทม)
+	local inspectItemEvent = inventoryRemotes:WaitForChild("InspectItem")
+	inspectItemEvent.OnServerEvent:Connect(function(player, inventoryId)
 		local inventory = InventoryService.GetPlayerInventory(player)
 		if not inventory then return end
+
 		local item = inventory:FindItemByInventoryId(inventoryId)
-		if item then inventoryRemotes:WaitForChild("InspectItem"):FireClient(player, item) end
+		if item then
+			-- ส่งข้อมูลไอเทมไปแสดงในหน้าต่างรายละเอียด
+			inspectItemEvent:FireClient(player, item)
+		end
 	end)
-
-	local crystalMoveCompleteEvent = inventoryRemotes:FindFirstChild("CrystalMoveComplete")
-	if crystalMoveCompleteEvent then
-		crystalMoveCompleteEvent.OnServerEvent:Connect(function(player)
-			local playerId = player.UserId
-			if playerCrystalMovements[playerId] then
-				playerCrystalMovements[playerId] = nil
-				local serverCrystalCompleteEvent = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes"):FindFirstChild("CrystalMoveComplete")
-				if serverCrystalCompleteEvent then serverCrystalCompleteEvent:FireServer() end
-			end
-		end)
-	end
-
-	local crystalMoveEvent = inventoryRemotes:FindFirstChild("CrystalMove")
-	if crystalMoveEvent then
-		crystalMoveEvent.OnServerEvent:Connect(function(player, steps)
-			local boardSystem = getBoardSystem()
-			if boardSystem and boardSystem.ProcessCrystalMove then boardSystem:ProcessCrystalMove(player, steps) end
-		end)
-	end
-
-	local ItemPermissionUpdateEvent = inventoryRemotes:FindFirstChild("ItemPermissionUpdate")
-	local ItemPermissionResponseEvent = inventoryRemotes:FindFirstChild("ItemPermissionResponse")
-	if ItemPermissionUpdateEvent and ItemPermissionResponseEvent then
-		ItemPermissionUpdateEvent.OnServerEvent:Connect(function(player)
-			local gm = getGameManager()
-			local turnSystem = gm and gm.turnSystem
-			if turnSystem then
-				local isPlayerTurn = turnSystem:GetCurrentPlayerTurn() == player.UserId
-				ItemPermissionResponseEvent:FireClient(player, isPlayerTurn)
-			end
-		end)
-	end
 end
 
+-- Set up player events
 local function setupPlayerEvents()
+	-- Player joining
 	Players.PlayerAdded:Connect(function(player)
+		-- Initialize inventory when player joins
 		InventoryService.InitializePlayer(player)
-		task.delay(3, function()
-			local playerData = getPlayerData(player)
-			if not playerData or not playerData.stats then return end
-			local maxHp = playerData.stats.maxHp
-			local currentHp = playerData.stats.hp
-			if currentHp < maxHp and currentHp >= (maxHp * 0.8) then
-				InventoryService.HealToMax(player)
-			end
-		end)
 	end)
+
+	-- Player leaving
 	Players.PlayerRemoving:Connect(function(player)
-		local userId = player.UserId
-		playerInventories[userId] = nil
-		playerHealedItems[userId] = nil
-		playerDiceBonusUses[userId] = nil
-		playerCrystalMovements[userId] = nil
+		-- Clear from cache
+		playerInventories[player.UserId] = nil
+
+		-- รีเซ็ตประวัติการฟื้น HP เมื่อผู้เล่นออก
+		if playerHealedItems[player.UserId] then
+			playerHealedItems[player.UserId] = nil
+		end
+
+		-- รีเซ็ตข้อมูลการใช้ไอเทม DiceBonus
+		if playerDiceBonusUses[player.UserId] then
+			playerDiceBonusUses[player.UserId] = nil
+		end
 	end)
+
+	-- Initialize for existing players
 	for _, player in pairs(Players:GetPlayers()) do
-		task.spawn(InventoryService.InitializePlayer, player)
+		task.spawn(function()
+			InventoryService.InitializePlayer(player)
+		end)
+	end
+
+	-- เชื่อมต่อกับระบบเทิร์น
+	local remotes = ReplicatedStorage:WaitForChild("Remotes")
+	local gameRemotes = remotes:WaitForChild("GameRemotes", 10)
+
+	if gameRemotes then
+		local updateTurnEvent = gameRemotes:WaitForChild("UpdateTurn", 10)
+		if updateTurnEvent then
+			updateTurnEvent.OnServerEvent:Connect(function(_, playerId)
+				-- รีเซ็ตการใช้ไอเทม DiceBonus สำหรับเทิร์นใหม่
+				for pid, _ in pairs(playerDiceBonusUses) do
+					if pid ~= playerId then
+						playerDiceBonusUses[pid] = nil
+						print("[InventoryService] Reset dice bonus use for player " .. pid .. " on turn change")
+					end
+				end
+			end)
+		end
 	end
 end
 
+-- Initialize the service
 local function init()
-	local gm = getGameManager()
-	if gm then gm.inventoryService = InventoryService end
+	print("Initializing InventoryService...")
+
+	-- ลงทะเบียนกับ GameManager ถ้ามี
+	if _G.GameManager then
+		_G.GameManager.inventoryService = InventoryService
+		print("InventoryService registered with GameManager")
+	end
+
+	-- เชื่อมต่อกับ Remote Events
 	setupRemoteEvents()
+
+	-- เชื่อมต่อกับ Player Events
 	setupPlayerEvents()
+
+	print("InventoryService initialized successfully")
+
+	-- เพิ่มฟังก์ชันทดสอบโบนัสลูกเต๋าให้กับ _G
+	_G.TestDiceBonus = function(player, bonusAmount)
+		-- ถ้าไม่ระบุผู้เล่น ใช้ผู้เล่นแรกในเซิร์ฟเวอร์
+		if not player then
+			local players = Players:GetPlayers()
+			if #players == 0 then 
+				warn("[InventoryService] ไม่มีผู้เล่นในเกม")
+				return false 
+			end
+			player = players[1]
+		end
+
+		bonusAmount = bonusAmount or 1
+
+		-- ตรวจสอบว่าเป็นเทิร์นของผู้เล่นหรือไม่
+		local turnSystem = _G.GameManager and _G.GameManager.turnSystem
+		if turnSystem and turnSystem:GetCurrentPlayerTurn() ~= player.UserId then
+			warn("[InventoryService] ไม่ใช่เทิร์นของผู้เล่น " .. player.Name)
+			return false
+		end
+
+		-- ตั้งค่าโบนัสลูกเต๋า
+		local diceBonusService = getDiceBonusService()
+		if diceBonusService then
+			diceBonusService.SetPlayerDiceBonus(player, bonusAmount)
+
+			-- บันทึกว่าได้ใช้ไอเทม DiceBonus ในเทิร์นนี้แล้ว
+			playerDiceBonusUses[player.UserId] = {
+				itemId = "test_dice_bonus",
+				bonusAmount = bonusAmount,
+				timestamp = os.time()
+			}
+
+			print("[InventoryService] ทดสอบตั้งค่าโบนัสลูกเต๋า +" .. bonusAmount .. " สำหรับ " .. player.Name)
+			return true
+		else
+			warn("[InventoryService] ไม่พบ DiceBonusService")
+			return false
+		end
+	end
 end
 
+-- Start the initialization
 init()
+
 return InventoryService
