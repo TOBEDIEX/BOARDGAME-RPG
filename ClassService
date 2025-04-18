@@ -1,11 +1,11 @@
--- Fixed ClassService.server.lua
--- จัดการระบบคลาสและการเลือกคลาส server-side
--- Version: 3.1.0 (Timer Removed)
+-- ClassService.server.lua
+-- Handles class selection and management on the server side
+-- Location: ServerScriptService/Services/ClassService.server.lua
+-- Version: 1.0.0
 
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
 
 -- Debug mode for detailed logging
 local DEBUG_MODE = false
@@ -17,7 +17,7 @@ local function debugLog(message)
 	end
 end
 
--- Get modules and remote events
+-- Load modules
 local Modules = ServerStorage:WaitForChild("Modules")
 local ClassSystem = require(Modules:WaitForChild("ClassSystem"))
 local SharedModules = ReplicatedStorage:WaitForChild("SharedModules")
@@ -72,13 +72,13 @@ local function initializeRemoteEvents()
 	local classAssignedEvent = ensureRemoteEvent(uiRemotes, "ClassAssigned")
 	local playerSelectedClassEvent = ensureRemoteEvent(uiRemotes, "PlayerSelectedClass")
 	local updateClassSelectionEvent = ensureRemoteEvent(uiRemotes, "UpdateClassSelection")
-	-- local updateClassSelectionTimerEvent = ensureRemoteEvent(uiRemotes, "UpdateClassSelectionTimer") -- ลบออก: RemoteEvent สำหรับอัปเดตเวลา
-	-- local notifyRandomClassEvent = ensureRemoteEvent(uiRemotes, "NotifyRandomClass") -- ลบออก: RemoteEvent สำหรับแจ้งเตือนการสุ่มคลาส
 	local showMainGameUIEvent = ensureRemoteEvent(uiRemotes, "ShowMainGameUI")
 	local levelUpEvent = ensureRemoteEvent(uiRemotes, "LevelUp")
 	local classLevelUpEvent = ensureRemoteEvent(uiRemotes, "ClassLevelUp")
 	local updatePlayerStatsEvent = ensureRemoteEvent(uiRemotes, "UpdatePlayerStats")
 	local showClassSelectionEvent = ensureRemoteEvent(uiRemotes, "ShowClassSelection")
+	local classUpgradeAvailableEvent = ensureRemoteEvent(uiRemotes, "ClassUpgradeAvailable")
+	local updateExperienceEvent = ensureRemoteEvent(uiRemotes, "UpdateExperience")
 
 	debugLog("All remote events initialized.")
 
@@ -90,7 +90,9 @@ local function initializeRemoteEvents()
 		levelUp = levelUpEvent,
 		classLevelUp = classLevelUpEvent,
 		updatePlayerStats = updatePlayerStatsEvent,
-		showClassSelection = showClassSelectionEvent
+		showClassSelection = showClassSelectionEvent,
+		classUpgradeAvailable = classUpgradeAvailableEvent,
+		updateExperience = updateExperienceEvent
 	}
 end
 
@@ -104,7 +106,7 @@ local function finishClassSelection(remotes)
 		return
 	end
 
-	-- Assign classes to all players
+	-- Step 1: Assign classes to all players first
 	for userId, className in pairs(playerSelections) do
 		local player = nil
 
@@ -129,30 +131,47 @@ local function finishClassSelection(remotes)
 			-- Assign class via PlayerManager
 			if gameManager.playerManager then
 				gameManager.playerManager:SetPlayerClass(player, className)
-
-				-- Get player data for UI update
-				local playerData = gameManager.playerManager:GetPlayerData(player)
-				if playerData then
-					-- Update player's UI with stats
-					local updatePlayerStatsEvent = remotes.updatePlayerStats
-
-					updatePlayerStatsEvent:FireClient(player, player.UserId, {
-						hp = playerData.stats.hp,
-						maxHp = playerData.stats.maxHp,
-						mp = playerData.stats.mp,
-						maxMp = playerData.stats.maxMp,
-						level = playerData.stats.level or 1,
-						class = className,
-						money = playerData.stats.money
-					})
-				end
 			end
 		end
 	end
 
-	-- Show main game UI to all players after a brief delay
-	debugLog("Waiting 1 second before transitioning to main game...")
-	wait(1)
+	-- Step 2: Wait a moment for all systems to process the class assignments
+	wait(1) 
+
+	-- Step 3: Update UI for all players with definitive stats
+	for _, player in pairs(Players:GetPlayers()) do
+		if playerSelections[player.UserId] then
+			-- Get player data for UI update
+			local playerData = gameManager.playerManager:GetPlayerData(player)
+			if playerData then
+				-- Force update Humanoid.Health to match current HP
+				if player.Character and player.Character:FindFirstChild("Humanoid") then
+					debugLog("Setting " .. player.Name .. "'s Humanoid.Health to " .. playerData.stats.hp)
+					player.Character.Humanoid.Health = playerData.stats.hp
+				end
+
+				-- Update player's UI with stats
+				remotes.updatePlayerStats:FireClient(player, player.UserId, {
+					hp = playerData.stats.hp,
+					maxHp = playerData.stats.maxHp,
+					mp = playerData.stats.mp,
+					maxMp = playerData.stats.maxMp,
+					level = playerData.stats.level or 1,
+					class = playerData.class,
+					money = playerData.stats.money,
+					attack = playerData.stats.attack,
+					defense = playerData.stats.defense,
+					magic = playerData.stats.magic
+				})
+
+				debugLog("Updated UI stats for " .. player.Name .. ": HP=" .. playerData.stats.hp .. 
+					"/" .. playerData.stats.maxHp .. ", Class=" .. playerData.class)
+			end
+		end
+	end
+
+	-- Show main game UI to all players
+	debugLog("Transitioning to main game...")
 	remotes.showMainGameUI:FireAllClients()
 	debugLog("All players transitioned to main game UI")
 
@@ -168,6 +187,26 @@ local function finishClassSelection(remotes)
 		gameManager.turnSystem:StartTurnSystem()
 	end
 end
+
+-- Show main game UI to all players after a brief delay
+debugLog("Waiting 1 second before transitioning to main game...")
+wait(1)
+remotes.showMainGameUI:FireAllClients()
+debugLog("All players transitioned to main game UI")
+
+-- Clean up
+for _, player in pairs(Players:GetPlayers()) do
+	playerReadyStatus[player.UserId] = nil
+end
+playerSelections = {}
+
+-- Start game
+if gameManager.turnSystem then
+	debugLog("Starting turn system...")
+	gameManager.turnSystem:StartTurnSystem()
+end
+end
+
 -- Check if all players are loaded (ready for class selection)
 local function areAllPlayersReady()
 	local allPlayers = Players:GetPlayers()
@@ -179,10 +218,9 @@ local function areAllPlayersReady()
 		end
 	end
 
-	-- ต้องมีผู้เล่นอย่างน้อย 1 คน และทุกคนต้องพร้อม
+	-- Require at least 1 player and all players must be ready
 	return #allPlayers > 0 and readyCount == #allPlayers
 end
-
 
 -- Monitor player ready state from GameManager
 local function monitorPlayerReadyState(gameManager)
@@ -202,15 +240,23 @@ local function monitorPlayerReadyState(gameManager)
 
 		-- Check if all players are ready to proceed to class selection
 		if areAllPlayersReady() then
-			-- Wait a moment to ensure everyone's loading screen is complete
+			-- Wait 1 second before transitioning to main game...
+			debugLog("Waiting 1 second before transitioning to main game...")
 			wait(1)
-			debugLog("All players ready, transitioning to class selection...")
+			remotes.showMainGameUI:FireAllClients()
+			debugLog("All players transitioned to main game UI")
 
-			-- Show class selection UI to all players
-			local uiRemotes = remotes:WaitForChild("UIRemotes")
-			local showClassSelectionEvent = uiRemotes:WaitForChild("ShowClassSelection")
-			showClassSelectionEvent:FireAllClients()
+			-- Clean up
+			for _, player in pairs(Players:GetPlayers()) do
+				playerReadyStatus[player.UserId] = nil
+			end
+			playerSelections = {}
 
+			-- Start game
+			if gameManager.turnSystem then
+				debugLog("Starting turn system...")
+				gameManager.turnSystem:StartTurnSystem()
+			end
 		end
 	end)
 
@@ -237,19 +283,18 @@ local function monitorPlayerReadyState(gameManager)
 				end
 			end
 		else
-			allSelected = false -- ไม่มีผู้เล่นเหลือ
+			allSelected = false -- No players left
 		end
 
-		-- ถ้าผู้เล่นที่ออกไปทำให้ทุกคนเลือกครบแล้ว ให้เริ่มเกม
+		-- If all remaining players have selected their classes, start the game
 		if allSelected then
 			debugLog("Last required player left, but all remaining have selected. Finishing selection.")
-			finishClassSelection(initializeRemoteEvents()) -- ต้องแน่ใจว่า remotes ถูก initialize แล้ว
+			finishClassSelection(initializeRemoteEvents())
 		end
 	end)
 
 	debugLog("Player ready state monitoring initialized.")
 end
-
 
 -- Handle player selection
 local function handlePlayerSelection(player, className, remotes)
@@ -283,9 +328,8 @@ local function handlePlayerSelection(player, className, remotes)
 
 	-- If all selected, continue game setup
 	if allSelected and #Players:GetPlayers() > 0 then
-
 		debugLog("All players selected classes, transitioning to game...")
-		wait(1) -- ลดเวลา delay ลงเล็กน้อย
+		wait(1)
 		finishClassSelection(remotes)
 	end
 end
@@ -308,7 +352,7 @@ local function initializeClassService()
 		debugLog("GameManager not found, initializing own ClassSystem")
 		gameManager = {
 			classSystem = ClassSystem.new()
-			-- PlayerManager ควรถูกสร้างใน GameManager หลัก
+			-- PlayerManager should be created in the main GameManager
 		}
 		_G.GameManager = gameManager
 	end
@@ -325,7 +369,6 @@ local function initializeClassService()
 
 	-- Set up class assignment handler
 	local function handleClassAssignment(player, className, classData)
-		-- Could update character appearance based on class
 		debugLog("Handling class assignment for " .. player.Name .. ": " .. className)
 
 		-- Update UI
@@ -345,18 +388,17 @@ local function initializeClassService()
 	-- Set up player ready monitoring
 	monitorPlayerReadyState(gameManager)
 
-	-- Handle player joining mid-game (ไม่เกี่ยวกับ timer แล้ว)
+	-- Handle player joining mid-game
 	Players.PlayerAdded:Connect(function(player)
 		debugLog("Player joined: " .. player.Name)
 		playerReadyStatus[player.UserId] = false
-
 	end)
 
 	-- Add public methods to GameManager
 	gameManager.resetPlayerSelections = resetPlayerSelections
 	gameManager.triggerClassSelectionUI = function()
 		resetPlayerSelections()
-		-- ตรวจสอบว่ามีผู้เล่นพร้อมหรือไม่ก่อนแสดง UI
+		-- Check if all players are ready before showing UI
 		if areAllPlayersReady() then
 			debugLog("Triggering class selection UI for all players.")
 			remotes.showClassSelection:FireAllClients()
@@ -365,6 +407,22 @@ local function initializeClassService()
 		end
 	end
 
+	-- Handle experience and level up
+	-- Create function to add experience to a player
+	gameManager.addExperienceToPlayer = function(player, amount)
+		if gameManager.classSystem then
+			return gameManager.classSystem:AddExperience(player, amount)
+		end
+		return false
+	end
+
+	-- Create function to upgrade a player's class
+	gameManager.upgradePlayerClass = function(player)
+		if gameManager.classSystem then
+			return gameManager.classSystem:UpgradePlayerClass(player)
+		end
+		return false, "ClassSystem not available"
+	end
 
 	debugLog("ClassService initialization complete")
 	return gameManager
