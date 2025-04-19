@@ -562,3 +562,45 @@ ScreenGui (ชื่อ "ItemCardGui")
         │   ├── TextLabel ("CoinAmount")
         │   │   └── UIScale ("BounceAnimation")
         │   ├── ImageLabel ("CoinIcon")
+
+
+13. ScreenGui (CombatUI)
+└── MainContainer (Frame)
+    ├── BlockBar (Frame) - หลอดบล็อคสีเหลืองด้านบน
+    │   ├── UICorner - มุมโค้ง
+    │   ├── UIStroke - เส้นขอบ
+    │   └── BlockBarFill (Frame) - ส่วนที่เติมสีของหลอด
+    │       ├── UICorner - มุมโค้ง
+    │       └── UIGradient - เอฟเฟกต์ไล่สี
+    │
+    ├── HealthBar (Frame) - หลอดเลือดสีแดง
+    │   ├── UICorner
+    │   ├── UIStroke
+    │   └── HealthBarFill (Frame)
+    │       ├── UICorner
+    │       └── UIGradient
+    │
+    ├── SkillContainer (Frame) - กล่องสำหรับช่องสกิล
+    │   ├── UICorner
+    │   ├── SkillSlot1 (Frame) - ช่องสกิล 1
+    │   │   ├── UICorner
+    │   │   └── UIStroke
+    │   ├── SkillSlot2 (Frame) - ช่องสกิล 2
+    │   │   ├── UICorner
+    │   │   └── UIStroke
+    │   ├── SkillSlot3 (Frame) - ช่องสกิล 3
+    │   │   ├── UICorner
+    │   │   └── UIStroke
+    │   ├── SkillSlot4 (Frame) - ช่องสกิล 4
+    │   │   ├── UICorner
+    │   │   └── UIStroke
+    │   └── SkillSlot5 (Frame) - ช่องสกิล 5
+    │       ├── UICorner
+    │       └── UIStroke
+    │
+    └── ManaBar (Frame) - หลอดมานาสีฟ้าด้านล่าง
+        ├── UICorner
+        ├── UIStroke
+        └── ManaBarFill (Frame)
+            ├── UICorner
+            └── UIGradient
