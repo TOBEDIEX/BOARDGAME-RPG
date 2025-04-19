@@ -1,6 +1,6 @@
 -- ItemData.lua
 -- ข้อมูลไอเทมทั้งหมดในเกม (เวอร์ชันอัพเดต)
--- Version: 1.3.0 - เพิ่มการใช้งาน DiceBonus Items
+-- Version: 2.0.0 - เปลี่ยนจาก MaxHP เป็น DEF และเพิ่ม Defense Items
 
 -- Constants
 local ITEM_TYPES = {
@@ -24,7 +24,7 @@ local ItemData = {}
 -- ฟังก์ชันใช้ไอเทม (จะถูกกำหนดโดย InventoryService)
 ItemData.UseHandlers = ItemData.UseHandlers or {}
 
--- เพิ่มไอเทม DiceRollBonus
+-- เพิ่มไอเทม Defense Boost
 ItemData.Items = {
 	-- ไอเทมเดิม
 	test_item = {
@@ -100,10 +100,86 @@ ItemData.Items = {
 		stats = {
 			hp = 50
 		}
+	},
+
+	-- ไอเทมใหม่: น้ำยาฟื้นฟูพลังงาน
+	mana_potion = {
+		id = "mana_potion",
+		name = "Mana Potion",
+		description = "ฟื้นฟูพลังเวท 30 หน่วย",
+		type = ITEM_TYPES.GENERAL,
+		rarity = 1,
+		stackable = true,
+		maxStack = 10,
+		sellPrice = 60,
+		buyPrice = 180,
+		usable = true,
+		consumable = true,
+		iconId = "rbxassetid://7060145299", -- รูปขวดยา
+		stats = {
+			mp = 30
+		}
+	},
+
+	-- ไอเทมใหม่: ตำราเพิ่มพลังป้องกัน +3
+	defense_scroll = {
+		id = "defense_scroll",
+		name = "Defense Scroll",
+		description = "เพิ่มค่าพลังป้องกัน (DEF) ถาวร +3",
+		type = ITEM_TYPES.GENERAL,
+		rarity = 2,
+		stackable = true,
+		maxStack = 5,
+		sellPrice = 200,
+		buyPrice = 500,
+		usable = true,
+		consumable = true,
+		iconId = "rbxassetid://7060146509", -- รูปตำรา
+		stats = {
+			defensePermanent = 3
+		}
+	},
+
+	-- ไอเทมใหม่: ตำราเพิ่มพลังโจมตี +3
+	attack_scroll = {
+		id = "attack_scroll",
+		name = "Attack Scroll",
+		description = "เพิ่มค่าพลังโจมตี (ATK) ถาวร +3",
+		type = ITEM_TYPES.GENERAL,
+		rarity = 2,
+		stackable = true,
+		maxStack = 5,
+		sellPrice = 200,
+		buyPrice = 500,
+		usable = true,
+		consumable = true,
+		iconId = "rbxassetid://7060146202", -- รูปตำรา
+		stats = {
+			attackPermanent = 3
+		}
+	},
+
+	-- ไอเทมใหม่: ตำราเพิ่มพลังเวท +3
+	magic_scroll = {
+		id = "magic_scroll",
+		name = "Magic Scroll",
+		description = "เพิ่มค่าพลังเวท (MAGIC) ถาวร +3",
+		type = ITEM_TYPES.GENERAL,
+		rarity = 2,
+		stackable = true,
+		maxStack = 5,
+		sellPrice = 200,
+		buyPrice = 500,
+		usable = true,
+		consumable = true,
+		iconId = "rbxassetid://7060146799", -- รูปตำรา
+		stats = {
+			magicPermanent = 3
+		}
 	}
 }
 
--- อุปกรณ์ทดสอบ
+-- อุปกรณ์ใหม่รองรับระบบ DEF
 ItemData.Equipment = {
 	-- อุปกรณ์ทดสอบ
 	test_equipment = {
@@ -123,15 +199,141 @@ ItemData.Equipment = {
 			attack = 10,
 			defense = 5
 		}
+	},
+
+	-- อาวุธเริ่มต้นสำหรับนักรบ
+	bronze_sword = {
+		id = "bronze_sword",
+		name = "Bronze Sword",
+		description = "อาวุธเบื้องต้นสำหรับนักรบ",
+		type = ITEM_TYPES.EQUIPMENT,
+		subType = EQUIPMENT_SLOTS.WEAPON,
+		rarity = 1,
+		stackable = false,
+		maxStack = 1,
+		sellPrice = 50,
+		buyPrice = 150,
+		usable = false,
+		iconId = "rbxassetid://6675226240",
+		classRestriction = "Warrior",
+		stats = {
+			attack = 15,
+			defense = 3 -- เพิ่ม DEF แทน หมายถึงเพิ่ม MaxHP ไปด้วย
+		}
+	},
+
+	-- อาวุธสำหรับนักเวทย์
+	apprentice_staff = {
+		id = "apprentice_staff",
+		name = "Apprentice Staff",
+		description = "ไม้เท้าสำหรับผู้เริ่มต้นศึกษาวิชาเวทมนตร์",
+		type = ITEM_TYPES.EQUIPMENT,
+		subType = EQUIPMENT_SLOTS.WEAPON,
+		rarity = 1,
+		stackable = false,
+		maxStack = 1,
+		sellPrice = 50,
+		buyPrice = 150,
+		usable = false,
+		iconId = "rbxassetid://6675226399",
+		classRestriction = "Mage",
+		stats = {
+			attack = 5,
+			magic = 15,
+			defense = 2 -- เพิ่ม DEF แทน หมายถึงเพิ่ม MaxHP ไปด้วย
+		}
+	},
+
+	-- อาวุธสำหรับขโมย
+	bronze_dagger = {
+		id = "bronze_dagger",
+		name = "Bronze Dagger",
+		description = "กริชสำหรับงานเบา ลงมือได้ไวแต่พลังโจมตีน้อย",
+		type = ITEM_TYPES.EQUIPMENT,
+		subType = EQUIPMENT_SLOTS.WEAPON,
+		rarity = 1,
+		stackable = false,
+		maxStack = 1,
+		sellPrice = 50,
+		buyPrice = 150,
+		usable = false,
+		iconId = "rbxassetid://6675226485",
+		classRestriction = "Thief",
+		stats = {
+			attack = 10,
+			magic = 5,
+			defense = 1 -- เพิ่ม DEF แทน หมายถึงเพิ่ม MaxHP ไปด้วย
+		}
+	},
+
+	-- เกราะเริ่มต้น
+	leather_armor = {
+		id = "leather_armor",
+		name = "Leather Armor",
+		description = "เกราะหนังเบา ป้องกันได้บ้างแต่ไม่มาก",
+		type = ITEM_TYPES.EQUIPMENT,
+		subType = EQUIPMENT_SLOTS.ARMOR,
+		rarity = 1,
+		stackable = false,
+		maxStack = 1,
+		sellPrice = 40,
+		buyPrice = 120,
+		usable = false,
+		iconId = "rbxassetid://6675226750",
+		stats = {
+			maxHp = 10 
+		}
+	},
+
+	-- หมวกเริ่มต้น
+	leather_helmet = {
+		id = "leather_helmet",
+		name = "Leather Helmet",
+		description = "หมวกหนังเบา ป้องกันศีรษะได้บ้าง",
+		type = ITEM_TYPES.EQUIPMENT,
+		subType = EQUIPMENT_SLOTS.HELMET,
+		rarity = 1,
+		stackable = false,
+		maxStack = 1,
+		sellPrice = 30,
+		buyPrice = 90,
+		usable = false,
+		iconId = "rbxassetid://6675226899",
+		stats = {
+			defense = 5 -- เพิ่ม DEF แทน หมายถึงเพิ่ม MaxHP ไปด้วย
+		}
+	},
+
+	-- รองเท้าเริ่มต้น
+	leather_boots = {
+		id = "leather_boots",
+		name = "Leather Boots",
+		description = "รองเท้าหนังเบา เพิ่มความคล่องตัว",
+		type = ITEM_TYPES.EQUIPMENT,
+		subType = EQUIPMENT_SLOTS.BOOTS,
+		rarity = 1,
+		stackable = false,
+		maxStack = 1,
+		sellPrice = 25,
+		buyPrice = 75,
+		usable = false,
+		iconId = "rbxassetid://6675226910",
+		stats = {
+			defense = 3 -- เพิ่ม DEF แทน หมายถึงเพิ่ม MaxHP ไปด้วย
+		}
 	}
 }
 
 -- รายการไอเทมที่อาจได้รับจากช่อง Item
 ItemData.ItemTilePool = {
 	-- เรียงตามความถี่ในการออกไอเทม (เปอร์เซ็นต์โดยประมาณ)
-	{id = "health_potion", weight = 50},   -- 70%
-	{id = "dice_bonus_1", weight = 45},    -- 25%
-	{id = "dice_bonus_2", weight = 5}      -- 5%
+	{id = "health_potion", weight = 40},   -- 40%
+	{id = "mana_potion", weight = 30},     -- 30%  
+	{id = "dice_bonus_1", weight = 20},    -- 20%
+	{id = "defense_scroll", weight = 4},   -- 4%
+	{id = "attack_scroll", weight = 3},    -- 3%
+	{id = "magic_scroll", weight = 2},     -- 2%
+	{id = "dice_bonus_2", weight = 1}      -- 1%
 }
 
 -- ค้นหาไอเทมจาก ID
@@ -275,6 +477,156 @@ ItemData.UseHandlers.dice_bonus_2 = function(player, itemData)
 		sound.Name = "MagicItemUse"
 		sound.SoundId = "rbxassetid://6026984224"
 		sound.Volume = 0.7
+		sound:Play()
+	end)
+
+	return true, message
+end
+
+-- Defense Scroll (เพิ่ม DEF ถาวร)
+ItemData.UseHandlers.defense_scroll = function(player, itemData)
+	-- ตรวจสอบว่ามีระบบ ClassSystem หรือไม่
+	local gameManager = _G.GameManager
+	local playerManager = gameManager and gameManager.playerManager
+
+	if not playerManager then
+		return false, "ระบบไม่พร้อมใช้งาน"
+	end
+
+	-- รับข้อมูลผู้เล่น
+	local playerData = playerManager:GetPlayerData(player)
+	if not playerData then
+		return false, "ไม่พบข้อมูลผู้เล่น"
+	end
+
+	-- เพิ่มค่า Defense ถาวร
+	local defBonus = itemData.stats.defensePermanent or 3
+
+	-- อัพเดทค่า defense ในข้อมูลผู้เล่น
+	playerData.stats.defense = playerData.stats.defense + defBonus
+	playerData.stats.maxHp = playerData.stats.defense  -- MaxHP = Defense
+
+	-- อัพเดทค่าใน baseStats ด้วย
+	if playerData.baseStats then
+		playerData.baseStats.defense = playerData.baseStats.defense + defBonus
+		playerData.baseStats.maxHp = playerData.baseStats.defense
+	end
+
+	-- อัพเดทค่า HP ให้เพิ่มตาม maxHp ที่เพิ่มขึ้น
+	playerData.stats.hp = playerData.stats.hp + defBonus
+
+	-- อัพเดท Humanoid
+	if player.Character and player.Character:FindFirstChild("Humanoid") then
+		local humanoid = player.Character:FindFirstChild("Humanoid")
+		humanoid.MaxHealth = playerData.stats.maxHp
+		humanoid.Health = humanoid.Health + defBonus
+	end
+
+	-- ส่งอัพเดทสถานะไปยัง client
+	playerManager:SyncPlayerStats(player)
+
+	-- แสดงข้อความแจ้งเตือน
+	local message = "🛡️ เพิ่มพลังป้องกัน (DEF) ถาวร +" .. defBonus .. " (พลังชีวิตสูงสุดเพิ่มขึ้นด้วย)"
+
+	-- เล่นเสียงเอฟเฟกต์
+	pcall(function()
+		local soundService = game:GetService("SoundService")
+		local sound = soundService:FindFirstChild("StatUpSound") or Instance.new("Sound", soundService)
+		sound.Name = "StatUpSound"
+		sound.SoundId = "rbxassetid://9114835652"
+		sound.Volume = 0.8
+		sound:Play()
+	end)
+
+	return true, message
+end
+
+-- Attack Scroll (เพิ่ม ATK ถาวร)
+ItemData.UseHandlers.attack_scroll = function(player, itemData)
+	-- ตรวจสอบว่ามีระบบ ClassSystem หรือไม่
+	local gameManager = _G.GameManager
+	local playerManager = gameManager and gameManager.playerManager
+
+	if not playerManager then
+		return false, "ระบบไม่พร้อมใช้งาน"
+	end
+
+	-- รับข้อมูลผู้เล่น
+	local playerData = playerManager:GetPlayerData(player)
+	if not playerData then
+		return false, "ไม่พบข้อมูลผู้เล่น"
+	end
+
+	-- เพิ่มค่า Attack ถาวร
+	local atkBonus = itemData.stats.attackPermanent or 3
+
+	-- อัพเดทค่า attack ในข้อมูลผู้เล่น
+	playerData.stats.attack = playerData.stats.attack + atkBonus
+
+	-- อัพเดทค่าใน baseStats ด้วย
+	if playerData.baseStats then
+		playerData.baseStats.attack = playerData.baseStats.attack + atkBonus
+	end
+
+	-- ส่งอัพเดทสถานะไปยัง client
+	playerManager:SyncPlayerStats(player)
+
+	-- แสดงข้อความแจ้งเตือน
+	local message = "⚔️ เพิ่มพลังโจมตี (ATK) ถาวร +" .. atkBonus
+
+	-- เล่นเสียงเอฟเฟกต์
+	pcall(function()
+		local soundService = game:GetService("SoundService")
+		local sound = soundService:FindFirstChild("StatUpSound") or Instance.new("Sound", soundService)
+		sound.Name = "StatUpSound"
+		sound.SoundId = "rbxassetid://9114835652"
+		sound.Volume = 0.8
+		sound:Play()
+	end)
+
+	return true, message
+end
+
+-- Magic Scroll (เพิ่ม MAGIC ถาวร)
+ItemData.UseHandlers.magic_scroll = function(player, itemData)
+	-- ตรวจสอบว่ามีระบบ ClassSystem หรือไม่
+	local gameManager = _G.GameManager
+	local playerManager = gameManager and gameManager.playerManager
+
+	if not playerManager then
+		return false, "ระบบไม่พร้อมใช้งาน"
+	end
+
+	-- รับข้อมูลผู้เล่น
+	local playerData = playerManager:GetPlayerData(player)
+	if not playerData then
+		return false, "ไม่พบข้อมูลผู้เล่น"
+	end
+
+	-- เพิ่มค่า Magic ถาวร
+	local magicBonus = itemData.stats.magicPermanent or 3
+
+	-- อัพเดทค่า magic ในข้อมูลผู้เล่น
+	playerData.stats.magic = playerData.stats.magic + magicBonus
+
+	-- อัพเดทค่าใน baseStats ด้วย
+	if playerData.baseStats then
+		playerData.baseStats.magic = playerData.baseStats.magic + magicBonus
+	end
+
+	-- ส่งอัพเดทสถานะไปยัง client
+	playerManager:SyncPlayerStats(player)
+
+	-- แสดงข้อความแจ้งเตือน
+	local message = "✨ เพิ่มพลังเวทมนตร์ (MAGIC) ถาวร +" .. magicBonus
+
+	-- เล่นเสียงเอฟเฟกต์
+	pcall(function()
+		local soundService = game:GetService("SoundService")
+		local sound = soundService:FindFirstChild("StatUpSound") or Instance.new("Sound", soundService)
+		sound.Name = "StatUpSound"
+		sound.SoundId = "rbxassetid://9114835652"
+		sound.Volume = 0.8
 		sound:Play()
 	end)
 
