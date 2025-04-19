@@ -1,13 +1,13 @@
 -- ItemData.lua
--- ข้อมูลไอเทมทั้งหมดในเกม (เวอร์ชันอัพเดต)
--- Version: 2.0.0 - เปลี่ยนจาก MaxHP เป็น DEF และเพิ่ม Defense Items
+-- Complete item data for the game (Updated version)
+-- Version: 2.1.0 - Added Crystal Movement Items
 
 -- Constants
 local ITEM_TYPES = {
-	GENERAL = 1,    -- ไอเทมทั่วไป
-	EQUIPMENT = 2,  -- อาวุธและเกราะ
-	SKILL = 3,      -- คัมภีร์สกิล
-	SPECIAL = 4     -- ไอเทมพิเศษ/เควส
+	GENERAL = 1,    -- General items
+	EQUIPMENT = 2,  -- Weapons and armor
+	SKILL = 3,      -- Skill books
+	SPECIAL = 4     -- Special/quest items
 }
 
 local EQUIPMENT_SLOTS = {
@@ -21,12 +21,12 @@ local EQUIPMENT_SLOTS = {
 
 local ItemData = {}
 
--- ฟังก์ชันใช้ไอเทม (จะถูกกำหนดโดย InventoryService)
+-- Function for using items (will be defined by InventoryService)
 ItemData.UseHandlers = ItemData.UseHandlers or {}
 
--- เพิ่มไอเทม Defense Boost
+-- Add Defense Boost items
 ItemData.Items = {
-	-- ไอเทมเดิม
+	-- Test item
 	test_item = {
 		id = "test_item",
 		name = "Test Item",
@@ -45,7 +45,7 @@ ItemData.Items = {
 		}
 	},
 
-	-- ไอเทมใหม่: เต๋าเพิ่มแต้ม +1
+	-- Dice bonus +1
 	dice_bonus_1 = {
 		id = "dice_bonus_1",
 		name = "BonusDice +1",
@@ -58,13 +58,13 @@ ItemData.Items = {
 		buyPrice = 300,
 		usable = true,
 		consumable = true,
-		iconId = "rbxassetid://122493284803076", -- รูปลูกเต๋า
+		iconId = "rbxassetid://122493284803076", -- Dice image
 		stats = {
 			diceRollBonus = 1
 		}
 	},
 
-	-- ไอเทมใหม่: เต๋าเพิ่มแต้ม +2
+	-- Dice bonus +2
 	dice_bonus_2 = {
 		id = "dice_bonus_2",
 		name = "BonusDice +2",
@@ -77,17 +77,17 @@ ItemData.Items = {
 		buyPrice = 600,
 		usable = true,
 		consumable = true,
-		iconId = "rbxassetid://106756897158809", -- รูปลูกเต๋า
+		iconId = "rbxassetid://106756897158809", -- Dice image
 		stats = {
 			diceRollBonus = 2
 		}
 	},
 
-	-- ไอเทมใหม่: ยาฟื้นพลัง
+	-- Health potion
 	health_potion = {
 		id = "health_potion",
 		name = "Health Potion",
-		description = "ฟื้นพลังชีวิต 50 หน่วย",
+		description = "Restores 50 HP",
 		type = ITEM_TYPES.GENERAL,
 		rarity = 1,
 		stackable = true,
@@ -96,17 +96,17 @@ ItemData.Items = {
 		buyPrice = 150,
 		usable = true,
 		consumable = true,
-		iconId = "rbxassetid://7060145106", -- รูปขวดยา
+		iconId = "rbxassetid://7060145106", -- Potion image
 		stats = {
 			hp = 50
 		}
 	},
 
-	-- ไอเทมใหม่: น้ำยาฟื้นฟูพลังงาน
+	-- Mana potion
 	mana_potion = {
 		id = "mana_potion",
 		name = "Mana Potion",
-		description = "ฟื้นฟูพลังเวท 30 หน่วย",
+		description = "Restores 30 MP",
 		type = ITEM_TYPES.GENERAL,
 		rarity = 1,
 		stackable = true,
@@ -115,17 +115,17 @@ ItemData.Items = {
 		buyPrice = 180,
 		usable = true,
 		consumable = true,
-		iconId = "rbxassetid://7060145299", -- รูปขวดยา
+		iconId = "rbxassetid://7060145299", -- Potion image
 		stats = {
 			mp = 30
 		}
 	},
 
-	-- ไอเทมใหม่: ตำราเพิ่มพลังป้องกัน +3
+	-- Defense scroll
 	defense_scroll = {
 		id = "defense_scroll",
 		name = "Defense Scroll",
-		description = "เพิ่มค่าพลังป้องกัน (DEF) ถาวร +3",
+		description = "Permanently increases DEF by +3",
 		type = ITEM_TYPES.GENERAL,
 		rarity = 2,
 		stackable = true,
@@ -134,17 +134,17 @@ ItemData.Items = {
 		buyPrice = 500,
 		usable = true,
 		consumable = true,
-		iconId = "rbxassetid://7060146509", -- รูปตำรา
+		iconId = "rbxassetid://7060146509", -- Scroll image
 		stats = {
 			defensePermanent = 3
 		}
 	},
 
-	-- ไอเทมใหม่: ตำราเพิ่มพลังโจมตี +3
+	-- Attack scroll
 	attack_scroll = {
 		id = "attack_scroll",
 		name = "Attack Scroll",
-		description = "เพิ่มค่าพลังโจมตี (ATK) ถาวร +3",
+		description = "Permanently increases ATK by +3",
 		type = ITEM_TYPES.GENERAL,
 		rarity = 2,
 		stackable = true,
@@ -153,17 +153,17 @@ ItemData.Items = {
 		buyPrice = 500,
 		usable = true,
 		consumable = true,
-		iconId = "rbxassetid://7060146202", -- รูปตำรา
+		iconId = "rbxassetid://7060146202", -- Scroll image
 		stats = {
 			attackPermanent = 3
 		}
 	},
 
-	-- ไอเทมใหม่: ตำราเพิ่มพลังเวท +3
+	-- Magic scroll
 	magic_scroll = {
 		id = "magic_scroll",
 		name = "Magic Scroll",
-		description = "เพิ่มค่าพลังเวท (MAGIC) ถาวร +3",
+		description = "Permanently increases MAGIC by +3",
 		type = ITEM_TYPES.GENERAL,
 		rarity = 2,
 		stackable = true,
@@ -172,16 +172,130 @@ ItemData.Items = {
 		buyPrice = 500,
 		usable = true,
 		consumable = true,
-		iconId = "rbxassetid://7060146799", -- รูปตำรา
+		iconId = "rbxassetid://7060146799", -- Scroll image
 		stats = {
 			magicPermanent = 3
 		}
-	}
+	},
+	
+	-- NEW: Crystal that allows moving exactly 1 space
+	crystal_1 = {
+		id = "crystal_1",
+		name = "Movement Crystal (1)",
+		description = "Allows you to move exactly 1 space instead of rolling the dice.",
+		type = ITEM_TYPES.GENERAL,
+		rarity = 1,
+		stackable = true,
+		maxStack = 5,
+		sellPrice = 100,
+		buyPrice = 250,
+		usable = true,
+		consumable = true,
+		iconId = "rbxassetid://7060876128", -- Replace with appropriate crystal icon
+		stats = {
+			fixedMovement = 1
+		}
+	},
+
+	-- NEW: Crystal that allows moving exactly 2 spaces
+	crystal_2 = {
+		id = "crystal_2",
+		name = "Movement Crystal (2)",
+		description = "Allows you to move exactly 2 spaces instead of rolling the dice.",
+		type = ITEM_TYPES.GENERAL,
+		rarity = 2,
+		stackable = true,
+		maxStack = 5,
+		sellPrice = 150,
+		buyPrice = 350,
+		usable = true,
+		consumable = true,
+		iconId = "rbxassetid://7060876235", -- Replace with appropriate crystal icon
+		stats = {
+			fixedMovement = 2
+		}
+	},
+
+	-- NEW: Crystal that allows moving exactly 3 spaces
+	crystal_3 = {
+		id = "crystal_3",
+		name = "Movement Crystal (3)",
+		description = "Allows you to move exactly 3 spaces instead of rolling the dice.",
+		type = ITEM_TYPES.GENERAL,
+		rarity = 2,
+		stackable = true,
+		maxStack = 5,
+		sellPrice = 200,
+		buyPrice = 450,
+		usable = true,
+		consumable = true,
+		iconId = "rbxassetid://7060876342", -- Replace with appropriate crystal icon
+		stats = {
+			fixedMovement = 3
+		}
+	},
+
+	-- NEW: Crystal that allows moving exactly 4 spaces
+	crystal_4 = {
+		id = "crystal_4",
+		name = "Movement Crystal (4)",
+		description = "Allows you to move exactly 4 spaces instead of rolling the dice.",
+		type = ITEM_TYPES.GENERAL,
+		rarity = 3,
+		stackable = true,
+		maxStack = 5,
+		sellPrice = 250,
+		buyPrice = 550,
+		usable = true,
+		consumable = true,
+		iconId = "rbxassetid://7060876458", -- Replace with appropriate crystal icon
+		stats = {
+			fixedMovement = 4
+		}
+	},
+
+	-- NEW: Crystal that allows moving exactly 5 spaces
+	crystal_5 = {
+		id = "crystal_5",
+		name = "Movement Crystal (5)",
+		description = "Allows you to move exactly 5 spaces instead of rolling the dice.",
+		type = ITEM_TYPES.GENERAL,
+		rarity = 3,
+		stackable = true,
+		maxStack = 5,
+		sellPrice = 300,
+		buyPrice = 650,
+		usable = true,
+		consumable = true,
+		iconId = "rbxassetid://7060876575", -- Replace with appropriate crystal icon
+		stats = {
+			fixedMovement = 5
+		}
+	},
+
+	-- NEW: Crystal that allows moving exactly 6 spaces
+	crystal_6 = {
+		id = "crystal_6",
+		name = "Movement Crystal (6)",
+		description = "Allows you to move exactly 6 spaces instead of rolling the dice.",
+		type = ITEM_TYPES.GENERAL,
+		rarity = 4,
+		stackable = true,
+		maxStack = 5,
+		sellPrice = 350,
+		buyPrice = 750,
+		usable = true,
+		consumable = true,
+		iconId = "rbxassetid://7060876684", -- Replace with appropriate crystal icon
+		stats = {
+			fixedMovement = 6
+		}
+	},
 }
 
--- อุปกรณ์ใหม่รองรับระบบ DEF
+-- Equipment with DEF support
 ItemData.Equipment = {
-	-- อุปกรณ์ทดสอบ
+	-- Test equipment
 	test_equipment = {
 		id = "test_equipment",
 		name = "Test Equipment",
@@ -201,11 +315,11 @@ ItemData.Equipment = {
 		}
 	},
 
-	-- อาวุธเริ่มต้นสำหรับนักรบ
+	-- Warrior starting weapon
 	bronze_sword = {
 		id = "bronze_sword",
 		name = "Bronze Sword",
-		description = "อาวุธเบื้องต้นสำหรับนักรบ",
+		description = "Basic weapon for warriors",
 		type = ITEM_TYPES.EQUIPMENT,
 		subType = EQUIPMENT_SLOTS.WEAPON,
 		rarity = 1,
@@ -218,15 +332,15 @@ ItemData.Equipment = {
 		classRestriction = "Warrior",
 		stats = {
 			attack = 15,
-			defense = 3 -- เพิ่ม DEF แทน หมายถึงเพิ่ม MaxHP ไปด้วย
+			defense = 3 -- Added DEF which also increases MaxHP
 		}
 	},
 
-	-- อาวุธสำหรับนักเวทย์
+	-- Mage starting weapon
 	apprentice_staff = {
 		id = "apprentice_staff",
 		name = "Apprentice Staff",
-		description = "ไม้เท้าสำหรับผู้เริ่มต้นศึกษาวิชาเวทมนตร์",
+		description = "Staff for beginner magic users",
 		type = ITEM_TYPES.EQUIPMENT,
 		subType = EQUIPMENT_SLOTS.WEAPON,
 		rarity = 1,
@@ -240,15 +354,15 @@ ItemData.Equipment = {
 		stats = {
 			attack = 5,
 			magic = 15,
-			defense = 2 -- เพิ่ม DEF แทน หมายถึงเพิ่ม MaxHP ไปด้วย
+			defense = 2 -- Added DEF which also increases MaxHP
 		}
 	},
 
-	-- อาวุธสำหรับขโมย
+	-- Thief starting weapon
 	bronze_dagger = {
 		id = "bronze_dagger",
 		name = "Bronze Dagger",
-		description = "กริชสำหรับงานเบา ลงมือได้ไวแต่พลังโจมตีน้อย",
+		description = "Light dagger for quick attacks but low damage",
 		type = ITEM_TYPES.EQUIPMENT,
 		subType = EQUIPMENT_SLOTS.WEAPON,
 		rarity = 1,
@@ -262,15 +376,15 @@ ItemData.Equipment = {
 		stats = {
 			attack = 10,
 			magic = 5,
-			defense = 1 -- เพิ่ม DEF แทน หมายถึงเพิ่ม MaxHP ไปด้วย
+			defense = 1 -- Added DEF which also increases MaxHP
 		}
 	},
 
-	-- เกราะเริ่มต้น
+	-- Starting armor
 	leather_armor = {
 		id = "leather_armor",
 		name = "Leather Armor",
-		description = "เกราะหนังเบา ป้องกันได้บ้างแต่ไม่มาก",
+		description = "Light leather armor providing minimal protection",
 		type = ITEM_TYPES.EQUIPMENT,
 		subType = EQUIPMENT_SLOTS.ARMOR,
 		rarity = 1,
@@ -285,11 +399,11 @@ ItemData.Equipment = {
 		}
 	},
 
-	-- หมวกเริ่มต้น
+	-- Starting helmet
 	leather_helmet = {
 		id = "leather_helmet",
 		name = "Leather Helmet",
-		description = "หมวกหนังเบา ป้องกันศีรษะได้บ้าง",
+		description = "Light leather helmet providing minimal head protection",
 		type = ITEM_TYPES.EQUIPMENT,
 		subType = EQUIPMENT_SLOTS.HELMET,
 		rarity = 1,
@@ -300,15 +414,15 @@ ItemData.Equipment = {
 		usable = false,
 		iconId = "rbxassetid://6675226899",
 		stats = {
-			defense = 5 -- เพิ่ม DEF แทน หมายถึงเพิ่ม MaxHP ไปด้วย
+			defense = 5 -- Added DEF which also increases MaxHP
 		}
 	},
 
-	-- รองเท้าเริ่มต้น
+	-- Starting boots
 	leather_boots = {
 		id = "leather_boots",
 		name = "Leather Boots",
-		description = "รองเท้าหนังเบา เพิ่มความคล่องตัว",
+		description = "Light leather boots increasing mobility",
 		type = ITEM_TYPES.EQUIPMENT,
 		subType = EQUIPMENT_SLOTS.BOOTS,
 		rarity = 1,
@@ -319,31 +433,37 @@ ItemData.Equipment = {
 		usable = false,
 		iconId = "rbxassetid://6675226910",
 		stats = {
-			defense = 3 -- เพิ่ม DEF แทน หมายถึงเพิ่ม MaxHP ไปด้วย
+			defense = 3 -- Added DEF which also increases MaxHP
 		}
 	}
 }
 
--- รายการไอเทมที่อาจได้รับจากช่อง Item
+-- Item pool for Item Tiles
 ItemData.ItemTilePool = {
-	-- เรียงตามความถี่ในการออกไอเทม (เปอร์เซ็นต์โดยประมาณ)
-	{id = "health_potion", weight = 40},   -- 40%
-	{id = "mana_potion", weight = 30},     -- 30%  
-	{id = "dice_bonus_1", weight = 20},    -- 20%
-	{id = "defense_scroll", weight = 4},   -- 4%
-	{id = "attack_scroll", weight = 3},    -- 3%
-	{id = "magic_scroll", weight = 2},     -- 2%
-	{id = "dice_bonus_2", weight = 1}      -- 1%
+	-- Sorted by drop frequency (approximate percentages)
+	{id = "health_potion", weight = 35},  -- 35%
+	{id = "mana_potion", weight = 25},    -- 25%  
+	{id = "dice_bonus_1", weight = 15},   -- 15%
+	{id = "crystal_1", weight = 8},       -- 8% (NEW)
+	{id = "crystal_2", weight = 6},       -- 6% (NEW)
+	{id = "crystal_3", weight = 4},       -- 4% (NEW)
+	{id = "defense_scroll", weight = 3},  -- 3%
+	{id = "attack_scroll", weight = 2},   -- 2%
+	{id = "crystal_4", weight = 1},       -- 1% (NEW)
+	{id = "crystal_5", weight = 0.5},     -- 0.5% (NEW)
+	{id = "magic_scroll", weight = 0.3},  -- 0.3%
+	{id = "dice_bonus_2", weight = 0.1},  -- 0.1%
+	{id = "crystal_6", weight = 0.1}      -- 0.1% (NEW)
 }
 
--- ค้นหาไอเทมจาก ID
+-- Find item by ID
 function ItemData.GetItemById(itemId)
-	-- ค้นหาในไอเทมทั่วไป
+	-- Check general items
 	if ItemData.Items[itemId] then
 		return ItemData.Items[itemId]
 	end
 
-	-- ค้นหาในอุปกรณ์
+	-- Check equipment
 	if ItemData.Equipment[itemId] then
 		return ItemData.Equipment[itemId]
 	end
@@ -351,18 +471,18 @@ function ItemData.GetItemById(itemId)
 	return nil
 end
 
--- ฟังก์ชั่นเพิ่มเติมที่อาจจำเป็น
+-- Additional functions that may be needed
 function ItemData.GetItemsByType(itemType)
 	local result = {}
 
-	-- ค้นหาในไอเทมทั่วไป
+	-- Check general items
 	for id, item in pairs(ItemData.Items) do
 		if item.type == itemType then
 			table.insert(result, item)
 		end
 	end
 
-	-- ค้นหาในอุปกรณ์
+	-- Check equipment
 	for id, item in pairs(ItemData.Equipment) do
 		if item.type == itemType then
 			table.insert(result, item)
@@ -372,14 +492,14 @@ function ItemData.GetItemsByType(itemType)
 	return result
 end
 
--- สุ่มไอเทมจาก ItemTilePool
+-- Get a random item from the ItemTilePool
 function ItemData.GetRandomItemFromPool()
 	local totalWeight = 0
 	for _, itemInfo in ipairs(ItemData.ItemTilePool) do
 		totalWeight = totalWeight + itemInfo.weight
 	end
 
-	local randomValue = math.random(1, totalWeight)
+	local randomValue = math.random(1, totalWeight * 100) / 100 -- Support for decimal weights
 	local currentWeight = 0
 
 	for _, itemInfo in ipairs(ItemData.ItemTilePool) do
@@ -389,29 +509,29 @@ function ItemData.GetRandomItemFromPool()
 		end
 	end
 
-	-- กรณีที่ไม่พบ (ไม่ควรเกิดขึ้น)
+	-- Fallback (shouldn't happen)
 	return ItemData.GetItemById("health_potion")
 end
 
--- ส่งออกค่าคงที่
+-- Export constants
 ItemData.ITEM_TYPES = ITEM_TYPES
 ItemData.EQUIPMENT_SLOTS = EQUIPMENT_SLOTS
 
--- ====== เพิ่ม UseHandlers สำหรับไอเทม DiceBonus ======
+-- ====== ITEM USE HANDLERS ======
 
 -- Lucky Dice +1
 ItemData.UseHandlers.dice_bonus_1 = function(player, itemData)
-	-- ตรวจสอบว่าเป็นเทิร์นของผู้เล่นหรือไม่
+	-- Check if it's the player's turn
 	local turnSystem = _G.GameManager and _G.GameManager.turnSystem
 	if not turnSystem then
-		return false, "ระบบเทิร์นไม่พร้อมใช้งาน"
+		return false, "Turn system not available"
 	end
 
 	if turnSystem:GetCurrentPlayerTurn() ~= player.UserId then
-		return false, "คุณสามารถใช้ไอเทมนี้ได้เฉพาะในเทิร์นของคุณเท่านั้น"
+		return false, "You can only use this item during your turn"
 	end
 
-	-- แจ้ง client เกี่ยวกับโบนัสลูกเต๋า
+	-- Notify the client about the dice bonus
 	local remotes = game:GetService("ReplicatedStorage"):WaitForChild("Remotes")
 	local inventoryRemotes = remotes:WaitForChild("InventoryRemotes")
 	local diceBonusEvent = inventoryRemotes:FindFirstChild("DiceBonus")
@@ -422,13 +542,13 @@ ItemData.UseHandlers.dice_bonus_1 = function(player, itemData)
 		diceBonusEvent.Parent = inventoryRemotes
 	end
 
-	-- ส่งโบนัสไปยัง client
+	-- Send bonus to client
 	diceBonusEvent:FireClient(player, 1)
 
-	-- แสดงข้อความแจ้งเตือน
-	local message = "🎲 เพิ่มแต้มลูกเต๋า +1 สำหรับการทอยครั้งถัดไป!"
+	-- Show notification message
+	local message = "🎲 Added +1 dice bonus for your next roll!"
 
-	-- เล่นเสียงเอฟเฟกต์
+	-- Play sound effect
 	pcall(function()
 		local soundService = game:GetService("SoundService")
 		local sound = soundService:FindFirstChild("ItemUse") or Instance.new("Sound", soundService)
@@ -443,17 +563,17 @@ end
 
 -- Magical Dice +2
 ItemData.UseHandlers.dice_bonus_2 = function(player, itemData)
-	-- ตรวจสอบว่าเป็นเทิร์นของผู้เล่นหรือไม่
+	-- Check if it's the player's turn
 	local turnSystem = _G.GameManager and _G.GameManager.turnSystem
 	if not turnSystem then
-		return false, "ระบบเทิร์นไม่พร้อมใช้งาน"
+		return false, "Turn system not available"
 	end
 
 	if turnSystem:GetCurrentPlayerTurn() ~= player.UserId then
-		return false, "คุณสามารถใช้ไอเทมนี้ได้เฉพาะในเทิร์นของคุณเท่านั้น"
+		return false, "You can only use this item during your turn"
 	end
 
-	-- แจ้ง client เกี่ยวกับโบนัสลูกเต๋า
+	-- Notify the client about the dice bonus
 	local remotes = game:GetService("ReplicatedStorage"):WaitForChild("Remotes")
 	local inventoryRemotes = remotes:WaitForChild("InventoryRemotes")
 	local diceBonusEvent = inventoryRemotes:FindFirstChild("DiceBonus")
@@ -464,13 +584,13 @@ ItemData.UseHandlers.dice_bonus_2 = function(player, itemData)
 		diceBonusEvent.Parent = inventoryRemotes
 	end
 
-	-- ส่งโบนัสไปยัง client
+	-- Send bonus to client
 	diceBonusEvent:FireClient(player, 2)
 
-	-- แสดงข้อความแจ้งเตือน
-	local message = "🎲✨ เพิ่มแต้มลูกเต๋า +2 สำหรับการทอยครั้งถัดไป!"
+	-- Show notification message
+	local message = "🎲✨ Added +2 dice bonus for your next roll!"
 
-	-- เล่นเสียงเอฟเฟกต์ (เสียงที่พิเศษกว่า +1)
+	-- Play sound effect (special sound for +2)
 	pcall(function()
 		local soundService = game:GetService("SoundService")
 		local sound = soundService:FindFirstChild("MagicItemUse") or Instance.new("Sound", soundService)
@@ -483,52 +603,52 @@ ItemData.UseHandlers.dice_bonus_2 = function(player, itemData)
 	return true, message
 end
 
--- Defense Scroll (เพิ่ม DEF ถาวร)
+-- Defense Scroll (permanent DEF boost)
 ItemData.UseHandlers.defense_scroll = function(player, itemData)
-	-- ตรวจสอบว่ามีระบบ ClassSystem หรือไม่
+	-- Check if ClassSystem is available
 	local gameManager = _G.GameManager
 	local playerManager = gameManager and gameManager.playerManager
 
 	if not playerManager then
-		return false, "ระบบไม่พร้อมใช้งาน"
+		return false, "System not ready"
 	end
 
-	-- รับข้อมูลผู้เล่น
+	-- Get player data
 	local playerData = playerManager:GetPlayerData(player)
 	if not playerData then
-		return false, "ไม่พบข้อมูลผู้เล่น"
+		return false, "Player data not found"
 	end
 
-	-- เพิ่มค่า Defense ถาวร
+	-- Add permanent Defense boost
 	local defBonus = itemData.stats.defensePermanent or 3
 
-	-- อัพเดทค่า defense ในข้อมูลผู้เล่น
+	-- Update defense in player data
 	playerData.stats.defense = playerData.stats.defense + defBonus
 	playerData.stats.maxHp = playerData.stats.defense  -- MaxHP = Defense
 
-	-- อัพเดทค่าใน baseStats ด้วย
+	-- Update baseStats too
 	if playerData.baseStats then
 		playerData.baseStats.defense = playerData.baseStats.defense + defBonus
 		playerData.baseStats.maxHp = playerData.baseStats.defense
 	end
 
-	-- อัพเดทค่า HP ให้เพิ่มตาม maxHp ที่เพิ่มขึ้น
+	-- Increase current HP by the same amount
 	playerData.stats.hp = playerData.stats.hp + defBonus
 
-	-- อัพเดท Humanoid
+	-- Update Humanoid if available
 	if player.Character and player.Character:FindFirstChild("Humanoid") then
 		local humanoid = player.Character:FindFirstChild("Humanoid")
 		humanoid.MaxHealth = playerData.stats.maxHp
 		humanoid.Health = humanoid.Health + defBonus
 	end
 
-	-- ส่งอัพเดทสถานะไปยัง client
+	-- Sync player stats to client
 	playerManager:SyncPlayerStats(player)
 
-	-- แสดงข้อความแจ้งเตือน
-	local message = "🛡️ เพิ่มพลังป้องกัน (DEF) ถาวร +" .. defBonus .. " (พลังชีวิตสูงสุดเพิ่มขึ้นด้วย)"
+	-- Show notification message
+	local message = "🛡️ Permanently increased Defense (DEF) by +" .. defBonus .. " (Max HP increased too)"
 
-	-- เล่นเสียงเอฟเฟกต์
+	-- Play stat boost sound
 	pcall(function()
 		local soundService = game:GetService("SoundService")
 		local sound = soundService:FindFirstChild("StatUpSound") or Instance.new("Sound", soundService)
@@ -541,40 +661,40 @@ ItemData.UseHandlers.defense_scroll = function(player, itemData)
 	return true, message
 end
 
--- Attack Scroll (เพิ่ม ATK ถาวร)
+-- Attack Scroll (permanent ATK boost)
 ItemData.UseHandlers.attack_scroll = function(player, itemData)
-	-- ตรวจสอบว่ามีระบบ ClassSystem หรือไม่
+	-- Check if ClassSystem is available
 	local gameManager = _G.GameManager
 	local playerManager = gameManager and gameManager.playerManager
 
 	if not playerManager then
-		return false, "ระบบไม่พร้อมใช้งาน"
+		return false, "System not ready"
 	end
 
-	-- รับข้อมูลผู้เล่น
+	-- Get player data
 	local playerData = playerManager:GetPlayerData(player)
 	if not playerData then
-		return false, "ไม่พบข้อมูลผู้เล่น"
+		return false, "Player data not found"
 	end
 
-	-- เพิ่มค่า Attack ถาวร
+	-- Add permanent Attack boost
 	local atkBonus = itemData.stats.attackPermanent or 3
 
-	-- อัพเดทค่า attack ในข้อมูลผู้เล่น
+	-- Update attack in player data
 	playerData.stats.attack = playerData.stats.attack + atkBonus
 
-	-- อัพเดทค่าใน baseStats ด้วย
+	-- Update baseStats too
 	if playerData.baseStats then
 		playerData.baseStats.attack = playerData.baseStats.attack + atkBonus
 	end
 
-	-- ส่งอัพเดทสถานะไปยัง client
+	-- Sync player stats to client
 	playerManager:SyncPlayerStats(player)
 
-	-- แสดงข้อความแจ้งเตือน
-	local message = "⚔️ เพิ่มพลังโจมตี (ATK) ถาวร +" .. atkBonus
+	-- Show notification message
+	local message = "⚔️ Permanently increased Attack (ATK) by +" .. atkBonus
 
-	-- เล่นเสียงเอฟเฟกต์
+	-- Play stat boost sound
 	pcall(function()
 		local soundService = game:GetService("SoundService")
 		local sound = soundService:FindFirstChild("StatUpSound") or Instance.new("Sound", soundService)
@@ -587,40 +707,40 @@ ItemData.UseHandlers.attack_scroll = function(player, itemData)
 	return true, message
 end
 
--- Magic Scroll (เพิ่ม MAGIC ถาวร)
+-- Magic Scroll (permanent MAGIC boost)
 ItemData.UseHandlers.magic_scroll = function(player, itemData)
-	-- ตรวจสอบว่ามีระบบ ClassSystem หรือไม่
+	-- Check if ClassSystem is available
 	local gameManager = _G.GameManager
 	local playerManager = gameManager and gameManager.playerManager
 
 	if not playerManager then
-		return false, "ระบบไม่พร้อมใช้งาน"
+		return false, "System not ready"
 	end
 
-	-- รับข้อมูลผู้เล่น
+	-- Get player data
 	local playerData = playerManager:GetPlayerData(player)
 	if not playerData then
-		return false, "ไม่พบข้อมูลผู้เล่น"
+		return false, "Player data not found"
 	end
 
-	-- เพิ่มค่า Magic ถาวร
+	-- Add permanent Magic boost
 	local magicBonus = itemData.stats.magicPermanent or 3
 
-	-- อัพเดทค่า magic ในข้อมูลผู้เล่น
+	-- Update magic in player data
 	playerData.stats.magic = playerData.stats.magic + magicBonus
 
-	-- อัพเดทค่าใน baseStats ด้วย
+	-- Update baseStats too
 	if playerData.baseStats then
 		playerData.baseStats.magic = playerData.baseStats.magic + magicBonus
 	end
 
-	-- ส่งอัพเดทสถานะไปยัง client
+	-- Sync player stats to client
 	playerManager:SyncPlayerStats(player)
 
-	-- แสดงข้อความแจ้งเตือน
-	local message = "✨ เพิ่มพลังเวทมนตร์ (MAGIC) ถาวร +" .. magicBonus
+	-- Show notification message
+	local message = "✨ Permanently increased Magic (MAGIC) by +" .. magicBonus
 
-	-- เล่นเสียงเอฟเฟกต์
+	-- Play stat boost sound
 	pcall(function()
 		local soundService = game:GetService("SoundService")
 		local sound = soundService:FindFirstChild("StatUpSound") or Instance.new("Sound", soundService)
@@ -631,6 +751,78 @@ ItemData.UseHandlers.magic_scroll = function(player, itemData)
 	end)
 
 	return true, message
+end
+
+-- NEW: Common function for all movement crystals
+local function handleCrystalUse(player, itemData)
+    -- Check if it's the player's turn
+    local gameManager = _G.GameManager
+    local turnSystem = gameManager and gameManager.turnSystem
+    
+    if not turnSystem then
+        return false, "Turn system not available"
+    end
+    
+    if turnSystem:GetCurrentPlayerTurn() ~= player.UserId then
+        return false, "You can only use this item during your turn"
+    end
+    
+    -- Get the fixed movement value from the item's stats
+    local fixedMovement = itemData.stats and itemData.stats.fixedMovement
+    if not fixedMovement or fixedMovement < 1 or fixedMovement > 6 then
+        return false, "Invalid movement value in crystal"
+    end
+    
+    -- Get the necessary remotes
+    local remotes = game:GetService("ReplicatedStorage"):WaitForChild("Remotes")
+    local boardRemotes = remotes:WaitForChild("BoardRemotes")
+    local rollDiceRemote = boardRemotes:WaitForChild("RollDice")
+    
+    -- Trigger movement with the fixed value directly
+    -- This reuses the existing dice roll event but with our fixed value
+    rollDiceRemote:FireClient(player, fixedMovement, true) -- true indicates this is a fixed movement (will skip animation)
+    
+    -- Play sound effect for crystal use
+    pcall(function()
+        local soundService = game:GetService("SoundService")
+        local sound = soundService:FindFirstChild("CrystalUse") or Instance.new("Sound", soundService)
+        sound.Name = "CrystalUse"
+        sound.SoundId = "rbxassetid://6026984224" -- Crystal sound
+        sound.Volume = 0.7
+        sound:Play()
+    end)
+    
+    -- Format message for UI
+    local message = string.format("✨ Using Crystal to move exactly %d space%s!", 
+                                fixedMovement, 
+                                fixedMovement > 1 and "s" or "")
+    
+    return true, message
+end
+
+-- NEW: Specific handlers for each crystal
+ItemData.UseHandlers.crystal_1 = function(player, itemData)
+    return handleCrystalUse(player, itemData)
+end
+
+ItemData.UseHandlers.crystal_2 = function(player, itemData)
+    return handleCrystalUse(player, itemData)
+end
+
+ItemData.UseHandlers.crystal_3 = function(player, itemData)
+    return handleCrystalUse(player, itemData)
+end
+
+ItemData.UseHandlers.crystal_4 = function(player, itemData)
+    return handleCrystalUse(player, itemData)
+end
+
+ItemData.UseHandlers.crystal_5 = function(player, itemData)
+    return handleCrystalUse(player, itemData)
+end
+
+ItemData.UseHandlers.crystal_6 = function(player, itemData)
+    return handleCrystalUse(player, itemData)
 end
 
 return ItemData
