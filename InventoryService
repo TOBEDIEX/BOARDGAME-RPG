@@ -1,7 +1,7 @@
 -- InventoryService.server.lua
 -- Server-side inventory management service
 -- Location: ServerScriptService/Services/InventoryService.server.lua
--- Version: 1.0.0
+-- Version: 1.0.9 (Heal player only on first equip of an item instance)
 
 -- Services
 local ServerStorage = game:GetService("ServerStorage")
@@ -10,7 +10,7 @@ local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 
 -- Debug mode for detailed logging
-local DEBUG_MODE = false
+local DEBUG_MODE = true
 
 -- Helper function for logging
 local function debugLog(message)
@@ -25,8 +25,9 @@ local InventorySystem = require(Modules:WaitForChild("InventorySystem"))
 
 -- Try to load ItemData module
 local ItemData = nil
+local SharedModules = ReplicatedStorage:WaitForChild("SharedModules")
 local success, result = pcall(function()
-	return require(ReplicatedStorage:FindFirstChild("SharedModules"):WaitForChild("ItemData"))
+	return require(SharedModules:WaitForChild("ItemData"))
 end)
 
 if success then
@@ -34,757 +35,369 @@ if success then
 	debugLog("Successfully loaded ItemData module")
 else
 	warn("[InventoryService] Failed to load ItemData module: " .. tostring(result))
-	-- Create a simple ItemData fallback
 	ItemData = {
-		ITEM_TYPES = {
-			GENERAL = 1,
-			EQUIPMENT = 2,
-			SKILL = 3,
-			SPECIAL = 4
-		},
-		EQUIPMENT_SLOTS = {
-			WEAPON = 1,
-			HELMET = 2,
-			ARMOR = 3,
-			GLOVES = 4,
-			BOOTS = 5,
-			ACCESSORY = 6
-		},
-		Items = {},
-		Equipment = {},
-		GetItemById = function(itemId)
-			return ItemData.Items[itemId] or ItemData.Equipment[itemId]
-		end
+		ITEM_TYPES = InventorySystem.GetItemTypes(), EQUIPMENT_SLOTS = InventorySystem.GetEquipmentSlots(),
+		Items = {}, Equipment = {},
+		GetItemById = function(itemId) return ItemData.Items[itemId] or ItemData.Equipment[itemId] end,
+		UseHandlers = {}
 	}
 end
 
--- Initialize remote events
+-- Initialize remote events/functions
 local function initializeRemotes()
-	debugLog("Initializing remote events...")
-
+	debugLog("Initializing remote events/functions...")
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
-
-	-- Create InventoryRemotes folder if needed
 	local inventoryRemotes = remotes:FindFirstChild("InventoryRemotes")
-	if not inventoryRemotes then
-		inventoryRemotes = Instance.new("Folder")
-		inventoryRemotes.Name = "InventoryRemotes"
-		inventoryRemotes.Parent = remotes
-	end
-
-	-- Define remotes we need
-	local remoteEvents = {
-		"UpdateInventory",
-		"AddItem",
-		"RemoveItem",
-		"UseItem",
-		"EquipItem",
-		"UnequipItem",
-		"SortInventory",
-		"InspectItem",
-		"EquipmentSlotClicked",
-		"EquipmentChanged",
-		"DiceBonus"
-	}
-
-	-- Create required RemoteEvents
-	for _, eventName in ipairs(remoteEvents) do
-		if not inventoryRemotes:FindFirstChild(eventName) then
-			local event = Instance.new("RemoteEvent")
-			event.Name = eventName
-			event.Parent = inventoryRemotes
-			debugLog("Created RemoteEvent: " .. eventName)
-		end
-	end
-
+	if not inventoryRemotes then inventoryRemotes = Instance.new("Folder"); inventoryRemotes.Name = "InventoryRemotes"; inventoryRemotes.Parent = remotes end
+	local useItemRemote = inventoryRemotes:FindFirstChild("UseItem")
+	if useItemRemote and not useItemRemote:IsA("RemoteFunction") then warn("[InventoryService] Existing 'UseItem' is not a RemoteFunction. Replacing."); useItemRemote:Destroy(); useItemRemote = nil end
+	if not useItemRemote then useItemRemote = Instance.new("RemoteFunction"); useItemRemote.Name = "UseItem"; useItemRemote.Parent = inventoryRemotes; debugLog("Created RemoteFunction: UseItem") end
+	local remoteEvents = { "UpdateInventory", "AddItem", "RemoveItem", "EquipItem", "UnequipItem", "SortInventory", "InspectItem", "EquipmentSlotClicked", "EquipmentChanged", "DiceBonus" }
+	for _, eventName in ipairs(remoteEvents) do if not inventoryRemotes:FindFirstChild(eventName) then local event = Instance.new("RemoteEvent"); event.Name = eventName; event.Parent = inventoryRemotes; debugLog("Created RemoteEvent: " .. eventName) end end
 	return inventoryRemotes
 end
 
 -- Player inventory cache
 local playerInventories = {}
 
--- Track dice bonus uses
+-- Track item/bonus uses per turn
 local playerDiceBonusUses = {}
+local playerItemUsedThisTurn = {}
 
 -- Get GameManager reference
 local function getGameManager()
-	local startTime = tick()
-	local attempts = 0
-	local maxAttempts = 20
-
-	while not _G.GameManager and attempts < maxAttempts do
-		wait(0.5)
-		attempts = attempts + 1
-		debugLog("Waiting for GameManager... Attempt " .. attempts)
-	end
-
-	if not _G.GameManager then
-		warn("[InventoryService] Failed to get GameManager after " .. maxAttempts .. " attempts.")
-	else
-		debugLog("GameManager found successfully.")
-	end
-
+	local startTime = tick(); local attempts = 0; local maxAttempts = 20
+	while not _G.GameManager and attempts < maxAttempts do wait(0.5); attempts = attempts + 1 end
+	if not _G.GameManager then warn("[InventoryService] Failed to get GameManager after " .. maxAttempts .. " attempts.") end
 	return _G.GameManager
 end
 
--- Main service
+-- Main service table
 local InventoryService = {}
 
--- Initialize player inventory
+-- Initialize Player Inventory
 function InventoryService.InitializePlayer(player)
-	if playerInventories[player.UserId] then
-		return playerInventories[player.UserId]
-	end
-
+	if playerInventories[player.UserId] then return playerInventories[player.UserId] end
 	local inventory = InventorySystem.new()
-
-	-- Give starting items to the player
 	InventoryService.GiveStartingItems(player, inventory)
-
-	-- Cache the inventory
 	playerInventories[player.UserId] = inventory
-
-	-- Send initial inventory data to client
 	InventoryService.SendInventoryToClient(player)
-
 	return inventory
 end
 
--- Give starting items based on player class
+-- Give Starting Items based on class
 function InventoryService.GiveStartingItems(player, inventory)
-	-- Get player data
 	local gameManager = getGameManager()
 	local playerData = gameManager and gameManager.playerManager and gameManager.playerManager:GetPlayerData(player)
 	local playerClass = playerData and playerData.class or "Unknown"
-
 	debugLog("Giving starting items to " .. player.Name .. " (Class: " .. playerClass .. ")")
-
-	-- Base items that everyone gets
-	if ItemData.Items.health_potion_small then
-		inventory:AddItem(ItemData.Items.health_potion_small, 3)
-		debugLog("Added 3x Small Health Potions")
+	if ItemData and ItemData.Items then
+		if ItemData.Items.health_potion_small then inventory:AddItem(ItemData.Items.health_potion_small, 3); debugLog("Added 3x Small Health Potions") end
+		if ItemData.Items.mana_potion_small then inventory:AddItem(ItemData.Items.mana_potion_small, 3); debugLog("Added 3x Small Mana Potions") end
+		if ItemData.Items.dice_bonus_1 then inventory:AddItem(ItemData.Items.dice_bonus_1, 2); debugLog("Added 2x Lucky Dice +1") end
 	end
-
-	if ItemData.Items.mana_potion_small then
-		inventory:AddItem(ItemData.Items.mana_potion_small, 3)
-		debugLog("Added 3x Small Mana Potions")
+	if ItemData and ItemData.Equipment then
+		if playerClass == "Warrior" and ItemData.Equipment.bronze_sword then inventory:AddItem(ItemData.Equipment.bronze_sword); debugLog("Added Bronze Sword")
+		elseif playerClass == "Mage" and ItemData.Equipment.apprentice_staff then inventory:AddItem(ItemData.Equipment.apprentice_staff); debugLog("Added Apprentice Staff")
+		elseif playerClass == "Thief" and ItemData.Equipment.bronze_dagger then inventory:AddItem(ItemData.Equipment.bronze_dagger); debugLog("Added Bronze Dagger") end
+		if ItemData.Equipment.leather_armor then inventory:AddItem(ItemData.Equipment.leather_armor); debugLog("Added Leather Armor") end
 	end
-
-	-- Class-specific starter equipment
-	if playerClass == "Warrior" then
-		if ItemData.Equipment.bronze_sword then
-			inventory:AddItem(ItemData.Equipment.bronze_sword)
-			debugLog("Added Bronze Sword for Warrior")
-		end
-	elseif playerClass == "Mage" then
-		if ItemData.Equipment.apprentice_staff then
-			inventory:AddItem(ItemData.Equipment.apprentice_staff)
-			debugLog("Added Apprentice Staff for Mage")
-		end
-	elseif playerClass == "Thief" then
-		if ItemData.Equipment.bronze_dagger then
-			inventory:AddItem(ItemData.Equipment.bronze_dagger)
-			debugLog("Added Bronze Dagger for Thief")
-		end
-	end
-
-	-- Everyone gets basic armor
-	if ItemData.Equipment.leather_armor then
-		inventory:AddItem(ItemData.Equipment.leather_armor)
-		debugLog("Added Leather Armor")
-	end
-
-	-- Add dice bonus items for testing
-	if ItemData.Items.dice_bonus_1 then
-		inventory:AddItem(ItemData.Items.dice_bonus_1, 2)
-		debugLog("Added 2x Lucky Dice +1")
-	end
-
 	return true
 end
 
--- Get player inventory
+-- Get Player Inventory (ensures initialization)
 function InventoryService.GetPlayerInventory(player)
-	if not playerInventories[player.UserId] then
-		return InventoryService.InitializePlayer(player)
-	end
-
+	if not playerInventories[player.UserId] then return InventoryService.InitializePlayer(player) end
 	return playerInventories[player.UserId]
 end
 
--- Send inventory data to client
+-- Send full inventory data to the client
 function InventoryService.SendInventoryToClient(player)
 	local inventory = InventoryService.GetPlayerInventory(player)
-	if not inventory then
-		return false
-	end
-
-	-- Filter necessary data for client
-	local clientData = {
-		items = inventory:GetAllItems(),
-		equippedItems = inventory:GetEquippedItems(),
-		maxSize = inventory.maxSize
-	}
-
-	-- Send data via Remote
+	if not inventory then return false end
+	local clientData = { items = inventory:GetAllItems(), equippedItems = inventory:GetEquippedItems(), maxSize = inventory.maxSize }
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
 	local inventoryRemotes = remotes:WaitForChild("InventoryRemotes")
 	local updateEvent = inventoryRemotes:WaitForChild("UpdateInventory")
 	updateEvent:FireClient(player, clientData)
-
 	return true
 end
 
--- Add item to player inventory
+-- Add an item to a player's inventory
 function InventoryService.AddItemToPlayer(player, itemId, quantity)
 	local inventory = InventoryService.GetPlayerInventory(player)
-	if not inventory then
-		return false, "Failed to get player inventory"
-	end
-
-	-- Find item data
+	if not inventory then return false, "Failed to get player inventory" end
+	if not ItemData then warn("[InventoryService] ItemData module not loaded!"); return false, "Item data not available" end
 	local itemData = ItemData.GetItemById(itemId)
-	if not itemData then
-		return false, "Item not found"
-	end
-
-	-- Add item to inventory
+	if not itemData then return false, "Item not found" end
 	local success, message = inventory:AddItem(itemData, quantity)
-
-	-- Send updated inventory to client
-	if success then
-		InventoryService.SendInventoryToClient(player)
-		debugLog("Added item " .. itemId .. " x" .. tostring(quantity) .. " to player " .. player.Name)
-	end
-
+	if success then InventoryService.SendInventoryToClient(player); debugLog("Added item " .. itemId .. " x" .. tostring(quantity) .. " to player " .. player.Name) end
 	return success, message
 end
 
--- Remove item from player inventory
+-- Remove an item from a player's inventory using its unique inventory ID
 function InventoryService.RemoveItemFromPlayer(player, inventoryId, quantity)
 	local inventory = InventoryService.GetPlayerInventory(player)
-	if not inventory then
-		return false, "Failed to get player inventory"
-	end
-
-	-- Find item to log info
+	if not inventory then return false, "Failed to get player inventory" end
 	local item = inventory:FindItemByInventoryId(inventoryId)
 	local itemName = item and item.name or "Unknown Item"
-
-	-- Remove item from inventory
 	local success, message = inventory:RemoveItem(inventoryId, quantity)
-
-	-- Send updated inventory to client
-	if success then
-		InventoryService.SendInventoryToClient(player)
-		debugLog("Removed item " .. itemName .. " from player " .. player.Name)
-	end
-
+	if success then InventoryService.SendInventoryToClient(player); debugLog("Removed item " .. itemName .. " from player " .. player.Name) end
 	return success, message
 end
 
--- Update player stats based on equipment
+-- Update player stats based on currently equipped items
 function InventoryService.UpdatePlayerStats(player, equipmentStats)
 	local gameManager = getGameManager()
-	if not gameManager or not gameManager.playerManager then
-		return false, "Player manager not available"
-	end
-
+	if not gameManager or not gameManager.playerManager then return false, "Player manager not available" end
 	local playerData = gameManager.playerManager:GetPlayerData(player)
-	if not playerData or not playerData.stats then
-		return false, "Player data not found"
-	end
-
-	-- Store base stats if not already present
+	if not playerData or not playerData.stats then return false, "Player data not found" end
 	local baseStats = playerData.baseStats
-	if not baseStats then
-		debugLog("Creating new baseStats from current stats for " .. player.Name)
-
-		-- Create baseStats from current stats
-		baseStats = {
-			maxHp = playerData.stats.maxHp,
-			hp = playerData.stats.hp,
-			maxMp = playerData.stats.maxMp,
-			mp = playerData.stats.mp,
-			attack = playerData.stats.attack,
-			defense = 0, -- Always 0 as per requirements
-			magic = playerData.stats.magic,
-			money = playerData.stats.money or 100
-		}
-		playerData.baseStats = baseStats
-	end
-
-	-- Log baseStats and equipmentStats for debugging
-	debugLog("Base Stats for " .. player.Name .. ":")
-	for stat, value in pairs(baseStats) do
-		debugLog("  " .. stat .. " = " .. value)
-	end
-
-	debugLog("Equipment Stats for " .. player.Name .. ":")
-	for stat, value in pairs(equipmentStats) do
-		debugLog("  " .. stat .. " = " .. value)
-	end
-
-	-- Calculate total stats from base + equipment
+	if not baseStats then debugLog("Creating new baseStats from current stats for " .. player.Name); baseStats = table.clone(playerData.stats); baseStats.defense = 0; playerData.baseStats = baseStats end
 	local newStats = {}
-	for stat, baseValue in pairs(baseStats) do
-		if equipmentStats[stat] then
-			newStats[stat] = baseValue + equipmentStats[stat]
-		else
-			newStats[stat] = baseValue
-		end
-	end
-	-- Allow defense to be modified by equipment
-
-	-- Ensure HP/MP don't exceed maximums
+	for stat, baseValue in pairs(baseStats) do newStats[stat] = baseValue + (equipmentStats[stat] or 0) end
 	newStats.hp = math.min(playerData.stats.hp, newStats.maxHp)
 	newStats.mp = math.min(playerData.stats.mp, newStats.maxMp)
-
-	-- Apply the new stats
-	for stat, value in pairs(newStats) do
-		playerData.stats[stat] = value
-	end
-
-	-- Update stats on client
-	gameManager.playerManager:UpdatePlayerStats(player, newStats)
-
+	for stat, value in pairs(newStats) do playerData.stats[stat] = value end
+	gameManager.playerManager:SyncPlayerStats(player)
 	debugLog("Updated stats with equipment bonuses for " .. player.Name)
 	return true
 end
 
--- Equip item for player
+-- Equip an item for a player
+-- *** MODIFIED HEAL LOGIC TO CHECK FLAG ***
 function InventoryService.EquipItemForPlayer(player, inventoryId)
 	local inventory = InventoryService.GetPlayerInventory(player)
-	if not inventory then
-		return false, "Failed to get player inventory"
-	end
+	if not inventory then return false, "Failed to get player inventory" end
 
-	-- Find the item
+	-- Find the item *before* equipping to check its state
 	local item = inventory:FindItemByInventoryId(inventoryId)
-	if not item then
-		return false, "Item not found"
-	end
+	if not item then return false, "Item not found" end
 
-	-- Check if item can be equipped
+	-- Check if the item had been equipped before (using our custom flag)
+	local itemHadBeenEquipped = item._hasBeenEquipped == true -- Check if flag is explicitly true
+
+	-- Check if the item is actually equippable
 	if not item.equippable and item.type ~= InventorySystem.GetItemTypes().EQUIPMENT then
 		return false, "Item cannot be equipped"
 	end
 
-	-- Check class restriction if applicable
+	-- Check class restriction
 	if item.classRestriction then
 		local gameManager = getGameManager()
-		local playerClass = nil
-
-		if gameManager and gameManager.classSystem then
-			playerClass = gameManager.classSystem:GetPlayerClass(player)
-		end
-
+		local playerClass = gameManager and gameManager.classSystem and gameManager.classSystem:GetPlayerClass(player)
 		if not playerClass or playerClass ~= item.classRestriction then
 			return false, "This item is restricted to " .. item.classRestriction .. " class"
 		end
 	end
 
-	-- Equip the item
+	-- Attempt to equip the item using InventorySystem
 	local success, message = inventory:EquipItem(inventoryId)
 
 	if success then
-		-- Calculate new equipment stats
+		debugLog(player.Name .. " equipped " .. item.name)
+
+		-- Recalculate stats with the newly equipped item
 		local equipmentStats = inventory:CalculateEquipmentStats()
+		InventoryService.UpdatePlayerStats(player, equipmentStats) -- Updates stats & syncs
 
-		-- Update player stats with equipment bonuses
-		InventoryService.UpdatePlayerStats(player, equipmentStats)
+		-- *** MODIFIED HEAL LOGIC: Check _hasBeenEquipped flag ***
+		if not itemHadBeenEquipped then -- Heal only if it wasn't equipped before
+			local gameManager = getGameManager()
+			if gameManager and gameManager.playerManager then
+				local playerData = gameManager.playerManager:GetPlayerData(player)
+				if playerData and playerData.stats then
+					if playerData.stats.hp < playerData.stats.maxHp then
+						print(string.format("[InventoryService] Healing %s to full HP (%d) after equipping %s for the first time.", player.Name, playerData.stats.maxHp, item.name))
+						gameManager.playerManager:UpdatePlayerHP(player, playerData.stats.maxHp)
+					else
+						print(string.format("[InventoryService] Player %s already at full HP after first equip of %s.", player.Name, item.name))
+					end
+					-- Set the flag *after* attempting the heal for the first time
+					-- IMPORTANT: This assumes 'item' variable still references the correct item table in the inventory
+					item._hasBeenEquipped = true
+					print(string.format("[InventoryService] Marked item %s (InvID: %s) as equipped for the first time.", item.name, inventoryId))
+				else
+					warn("[InventoryService] Could not get playerData or stats to heal player after first equip.")
+				end
+			else
+				warn("[InventoryService] PlayerManager not found, cannot heal player after first equip.")
+			end
+		else
+			-- Item had been equipped before, skip heal
+			print(string.format("[InventoryService] Skipping heal for %s. Item %s (InvID: %s) has been equipped before.", player.Name, item.name, inventoryId))
+		end
+		-- *** END OF MODIFIED HEAL LOGIC ***
 
-		-- Send updated inventory to client
+		-- Update the client's inventory UI
 		InventoryService.SendInventoryToClient(player)
 
-		-- Notify clients about equipment change
+		-- Notify the client specifically about the equipment change
 		local remotes = ReplicatedStorage:WaitForChild("Remotes")
 		local inventoryRemotes = remotes:WaitForChild("InventoryRemotes")
 		local equipmentChangedEvent = inventoryRemotes:WaitForChild("EquipmentChanged")
 		equipmentChangedEvent:FireClient(player, item.subType, item)
 
-		debugLog(player.Name .. " equipped " .. item.name)
 	end
-
 	return success, message
 end
 
--- Unequip item for player
+
+-- Unequip an item from a specific slot for a player
 function InventoryService.UnequipItemForPlayer(player, slotType)
 	local inventory = InventoryService.GetPlayerInventory(player)
-	if not inventory then
-		return false, "Failed to get player inventory"
-	end
-
-	-- Get the currently equipped item first
+	if not inventory then return false, "Failed to get player inventory" end
 	local currentItem = inventory:GetEquippedItemInSlot(slotType)
-	if not currentItem then
-		return false, "No item equipped in this slot"
-	end
-
-	-- Unequip the item
+	if not currentItem then return false, "No item equipped in this slot" end
 	local success, message = inventory:UnequipItem(slotType)
-
 	if success then
-		-- Calculate new equipment stats
+		debugLog(player.Name .. " unequipped " .. currentItem.name)
 		local equipmentStats = inventory:CalculateEquipmentStats()
-
-		-- Update player stats with equipment bonuses
 		InventoryService.UpdatePlayerStats(player, equipmentStats)
-
-		-- Send updated inventory to client
 		InventoryService.SendInventoryToClient(player)
-
-		-- Notify clients about equipment change
 		local remotes = ReplicatedStorage:WaitForChild("Remotes")
 		local inventoryRemotes = remotes:WaitForChild("InventoryRemotes")
 		local equipmentChangedEvent = inventoryRemotes:WaitForChild("EquipmentChanged")
 		equipmentChangedEvent:FireClient(player, slotType, nil)
-
-		debugLog(player.Name .. " unequipped " .. currentItem.name)
+		-- No heal logic on unequip
 	end
-
 	return success, message
 end
 
--- Handle using items
+-- Use an item for a player (Invoked by client via RemoteFunction)
 function InventoryService.UseItemForPlayer(player, inventoryId)
 	local inventory = InventoryService.GetPlayerInventory(player)
-	if not inventory then
-		return false, "Failed to get player inventory"
-	end
-
-	-- Find the item
+	if not inventory then return false, "Failed to get player inventory" end
 	local item = inventory:FindItemByInventoryId(inventoryId)
-	if not item then
-		return false, "Item not found"
-	end
+	if not item then return false, "Item not found" end
+	local itemName = item.name or "Unknown Item"; local itemId = item.id
+	if not item.usable then debugLog(itemName .. " cannot be used (not usable)."); return false, "Item cannot be used" end
 
-	local itemName = item.name or "Unknown Item"
-	local itemId = item.id
-
-	-- Check if item can be used
-	if not item.usable then
-		return false, "Item cannot be used"
-	end
-
-	-- Check if it's a dice bonus item
-	local isDiceBonus = item.stats and item.stats.diceBonus and item.stats.diceBonus > 0
-
-	if isDiceBonus then
-		-- Check if it's the player's turn
-		local gameManager = getGameManager()
-		local turnSystem = gameManager and gameManager.turnSystem
-
-		if not turnSystem then
-			return false, "Turn system not available"
-		end
-
-		if turnSystem:GetCurrentPlayerTurn() ~= player.UserId then
-			return false, "You can only use this item during your turn"
-		end
-
-		-- Check if player already used a dice bonus item this turn
-		if playerDiceBonusUses[player.UserId] then
-			return false, "You already used a dice bonus item this turn"
-		end
-	end
-
-	-- Define use function
-	local useFunction
-
-	-- Check if there's a custom use handler in ItemData
-	if ItemData.UseHandlers and ItemData.UseHandlers[item.id] then
-		useFunction = function(itemData)
-			return ItemData.UseHandlers[item.id](player, itemData)
-		end
+	local gameManager = getGameManager()
+	local turnSystem = gameManager and gameManager.turnSystem
+	if not turnSystem then warn("[InventoryService] Turn system not available for usage checks.")
 	else
-		-- Default use function
-		useFunction = function(itemData)
-			-- Check item type
-			if itemData.type == InventorySystem.GetItemTypes().GENERAL then
-				-- If it's a general item like a potion
-				if itemData.stats then
-					local gameManager = getGameManager()
-					if gameManager and gameManager.playerManager then
-						local playerData = gameManager.playerManager:GetPlayerData(player)
-						if playerData and playerData.stats then
-							local changed = false
+		local itemUsedFlag = playerItemUsedThisTurn[player.UserId]
+		debugLog(string.format("Checking item use limit for %s attempting to use '%s'. Flag value: %s", player.Name, itemName, tostring(itemUsedFlag)))
+		if itemUsedFlag then debugLog(player.Name .. " tried item " .. itemName .. " but already used item this turn. Blocking use."); return false, "You can only use one item per turn"
+		else debugLog("Item use limit check passed for " .. player.Name) end
 
-							-- Apply stat changes
-							for statName, statValue in pairs(itemData.stats) do
-								if statName == "diceBonus" then
-									-- Handle dice bonus
-									if gameManager.diceBonusService then
-										gameManager.diceBonusService.SetPlayerDiceBonus(player, statValue)
-									end
+		if turnSystem:GetCurrentPlayerTurn() ~= player.UserId then debugLog(player.Name .. " tried item " .. itemName .. " outside turn."); return false, "You can only use this item during your turn" end
 
-									-- Record that we used a dice bonus item this turn
-									playerDiceBonusUses[player.UserId] = {
-										itemId = itemId,
-										bonusAmount = statValue,
-										timestamp = os.time()
-									}
+		local isDiceBonus = item.stats and item.stats.diceBonus and item.stats.diceBonus > 0
+		if isDiceBonus then if playerDiceBonusUses[player.UserId] then debugLog(player.Name .. " already used dice bonus this turn."); return false, "You already used a dice bonus item this turn" end end
+	end
 
-									debugLog(player.Name .. " used dice bonus +" .. statValue)
-									changed = true
-								elseif playerData.stats[statName] ~= nil then
-									-- Apply stat change (e.g., healing)
-									if statName == "hp" then
-										local newHP = math.min(playerData.stats.hp + statValue, playerData.stats.maxHp)
-										gameManager.playerManager:UpdatePlayerHP(player, newHP)
-									elseif statName == "mp" then
-										local newMP = math.min(playerData.stats.mp + statValue, playerData.stats.maxMp)
-										gameManager.playerManager:UpdatePlayerMP(player, newMP)
-									else
-										playerData.stats[statName] = playerData.stats[statName] + statValue
-									end
-									changed = true
-								end
-							end
-
-							-- Update stats if changed
-							if changed and not isDiceBonus then
-								gameManager.playerManager:SyncPlayerStats(player)
-							end
+	local useFunction
+	if ItemData and ItemData.UseHandlers and ItemData.UseHandlers[item.id] then useFunction = ItemData.UseHandlers[item.id]; debugLog("Using custom UseHandler for item: " .. item.id)
+	else
+		useFunction = function(playerArg, itemDataArg)
+			debugLog("Using default use function for item: " .. itemDataArg.id); local gm = getGameManager(); local changed = false; local appliedBonus = 0
+			if itemDataArg.stats and gm and gm.playerManager then
+				local pData = gm.playerManager:GetPlayerData(playerArg); if pData and pData.stats then
+					for statName, statValue in pairs(itemDataArg.stats) do
+						if statName == "diceBonus" then if gm.diceBonusService then gm.diceBonusService.SetPlayerDiceBonus(playerArg, statValue); appliedBonus = statValue; changed = true else warn("[InventoryService] DiceBonusService not found!") end
+						elseif pData.stats[statName] ~= nil then
+							if statName == "hp" then local current = pData.stats.hp; local maxV = pData.stats.maxHp; local newV = math.min(current + statValue, maxV); if newV ~= current then gm.playerManager:UpdatePlayerHP(playerArg, newV); changed = true end
+							elseif statName == "mp" then local current = pData.stats.mp; local maxV = pData.stats.maxMp; local newV = math.min(current + statValue, maxV); if newV ~= current then gm.playerManager:UpdatePlayerMP(playerArg, newV); changed = true end
+							else debugLog("Ignoring direct stat change for '" .. statName .. "' in default item use.") end
 						end
 					end
-				end
-			elseif itemData.type == InventorySystem.GetItemTypes().SKILL then
-				-- Handle skill books
-				local skillId = itemData.skillId
-				if skillId and gameManager and gameManager.skillSystem then
-					local success = gameManager.skillSystem:LearnSkill(player, skillId)
-					if success then
-						return true, "Learned new skill: " .. (itemData.skillName or "Unknown Skill")
-					else
-						return false, "Could not learn this skill"
-					end
-				end
+					if appliedBonus > 0 then playerDiceBonusUses[playerArg.UserId] = { itemId = itemDataArg.id, bonusAmount = appliedBonus, timestamp = os.time() }; debugLog(playerArg.Name .. " used dice bonus +" .. appliedBonus) end
+					if changed and appliedBonus == 0 then debugLog("Stats changed for " .. playerArg.Name) end
+				else warn("[InventoryService] Could not get PlayerData/Stats for " .. playerArg.Name) end
+			elseif itemDataArg.type == InventorySystem.GetItemTypes().SKILL then
+				local skillId = itemDataArg.skillId; if skillId and gm and gm.skillSystem then debugLog("Attempting to learn skill: " .. tostring(skillId)); local successLearn, learnMsg = gm.skillSystem:LearnSkill(playerArg, skillId); if successLearn then return true, learnMsg or "Learned skill: " .. (itemDataArg.skillName or "?") else return false, learnMsg or "Could not learn skill" end
+				else warn("[InventoryService] SkillSystem/skillId missing for: " .. itemDataArg.id); return false, "Cannot learn skill" end
 			end
-
-			return true, "Used " .. itemData.name
+			return true, "Used " .. itemDataArg.name
 		end
 	end
 
-	-- Assign the use function to the item
-	item.useFunction = useFunction
+	local successCall, messageOrError = pcall(useFunction, player, item)
+	if not successCall then warn("Error executing use function for item " .. itemName .. ": " .. tostring(messageOrError)); return false, "Error using item" end
+	if type(messageOrError) == "boolean" and not messageOrError then local _, failMessage = messageOrError; return false, failMessage or "Could not use item" end
 
-	-- Use the item
-	local success, message = inventory:UseItem(inventoryId)
+	playerItemUsedThisTurn[player.UserId] = true
+	debugLog(player.Name .. " marked as having used an item this turn.")
 
-	-- Update client inventory
-	if success then
-		InventoryService.SendInventoryToClient(player)
-		debugLog(player.Name .. " used " .. itemName)
+	debugLog("Checking if item '" .. itemName .. "' is consumable. Value: " .. tostring(item.consumable))
+	if item.consumable then
+		debugLog("Item " .. itemName .. " is consumable, removing 1.")
+		local removeSuccess, removeMessage = InventoryService.RemoveItemFromPlayer(player, inventoryId, 1)
+		if not removeSuccess then warn("[InventoryService] Failed to remove consumable item " .. itemName .. " after use:", removeMessage) end
 	end
 
-	return success, message
+	local useMessage = type(messageOrError) == "string" and messageOrError or "Item used successfully"
+	debugLog(player.Name .. " successfully used " .. itemName .. ". Message: " .. tostring(useMessage))
+	return true, useMessage
 end
 
--- Reset dice bonus use when turn changes
-function InventoryService.ResetDiceBonusUse(player)
+
+-- Reset usage flags for a player (Called by TurnSystem at turn start)
+function InventoryService.ResetTurnFlagsForPlayer(player)
 	if not player then return false end
-
 	local playerId = typeof(player) == "number" and player or player.UserId
-
-	if playerDiceBonusUses[playerId] then
-		playerDiceBonusUses[playerId] = nil
-		debugLog("Reset dice bonus use for player: " .. playerId)
-		return true
-	end
-
-	return false
+	debugLog(string.format("Attempting ResetTurnFlagsForPlayer for PlayerID: %s (Type: %s)", tostring(playerId), type(playerId)))
+	local diceReset = false
+	if playerDiceBonusUses[playerId] then debugLog(string.format("  > Found dice bonus flag for %s. Resetting.", tostring(playerId))); playerDiceBonusUses[playerId] = nil; diceReset = true end
+	local itemReset = false
+	local currentItemFlagValue = playerItemUsedThisTurn[playerId]
+	debugLog(string.format("  > Checking item usage flag for %s. Current value: %s", tostring(playerId), tostring(currentItemFlagValue)))
+	if currentItemFlagValue then debugLog(string.format("  > Resetting item usage flag for %s.", tostring(playerId))); playerItemUsedThisTurn[playerId] = nil; itemReset = true; debugLog(string.format("  > Item usage flag for %s should now be nil. Verification: %s", tostring(playerId), tostring(playerItemUsedThisTurn[playerId])))
+	else debugLog(string.format("  > No item usage flag found to reset for %s.", tostring(playerId))) end
+	if diceReset or itemReset then debugLog("Reset turn flags completed for player: " .. tostring(playerId) .. " (Dice: " .. tostring(diceReset) .. ", Item: " .. tostring(itemReset) .. ")"); return true
+	else debugLog("No flags needed resetting for player: " .. tostring(playerId)); return false end
 end
 
--- Handle equipment slot click
+
+-- Handle clicking on an equipment slot in the UI (called via RemoteEvent)
 function InventoryService.HandleEquipmentSlotClick(player, slotType)
 	local inventory = InventoryService.GetPlayerInventory(player)
-	if not inventory then
-		return false, "Failed to get player inventory"
-	end
-
-	-- Check if there's an item in this slot
-	if inventory:HasEquippedItemInSlot(slotType) then
-		-- If there is, unequip it
-		return InventoryService.UnequipItemForPlayer(player, slotType)
-	else
-		-- If slot is empty, do nothing or show inventory with items that can go in this slot
-		local remotes = ReplicatedStorage:WaitForChild("Remotes")
-		local inventoryRemotes = remotes:WaitForChild("InventoryRemotes")
-		local equipmentSlotClickedEvent = inventoryRemotes:WaitForChild("EquipmentSlotClicked")
-		equipmentSlotClickedEvent:FireClient(player, slotType)
-
-		return true, "Opening equipment selection for slot " .. slotType
-	end
+	if not inventory then return false, "Failed to get player inventory" end
+	if inventory:HasEquippedItemInSlot(slotType) then return InventoryService.UnequipItemForPlayer(player, slotType)
+	else local remotes = ReplicatedStorage:WaitForChild("Remotes"); local inventoryRemotes = remotes:WaitForChild("InventoryRemotes"); local equipmentSlotClickedEvent = inventoryRemotes:WaitForChild("EquipmentSlotClicked"); equipmentSlotClickedEvent:FireClient(player, slotType); return true, "Opening equipment selection for slot " .. slotType end
 end
 
--- Set up remote events
-local function setupRemoteEvents()
-	debugLog("Setting up remote events...")
-
+-- Set up remote event/function connections
+local function setupRemotes()
+	debugLog("Setting up remotes...")
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
 	local inventoryRemotes = initializeRemotes()
-
-	-- Add Item
+	local useItemFunc = inventoryRemotes:WaitForChild("UseItem")
+	useItemFunc.OnServerInvoke = InventoryService.UseItemForPlayer
 	local addItemEvent = inventoryRemotes:WaitForChild("AddItem")
-	addItemEvent.OnServerEvent:Connect(function(player, itemId, quantity)
-		InventoryService.AddItemToPlayer(player, itemId, quantity)
-	end)
-
-	-- Remove Item
+	addItemEvent.OnServerEvent:Connect(function(p, id, q) InventoryService.AddItemToPlayer(p, id, q) end)
 	local removeItemEvent = inventoryRemotes:WaitForChild("RemoveItem")
-	removeItemEvent.OnServerEvent:Connect(function(player, inventoryId, quantity)
-		InventoryService.RemoveItemFromPlayer(player, inventoryId, quantity)
-	end)
-
-	-- Equip Item
+	removeItemEvent.OnServerEvent:Connect(function(p, invId, q) InventoryService.RemoveItemFromPlayer(p, invId, q) end)
 	local equipItemEvent = inventoryRemotes:WaitForChild("EquipItem")
-	equipItemEvent.OnServerEvent:Connect(function(player, inventoryId)
-		InventoryService.EquipItemForPlayer(player, inventoryId)
-	end)
-
-	-- Unequip Item
+	equipItemEvent.OnServerEvent:Connect(function(p, invId) InventoryService.EquipItemForPlayer(p, invId) end)
 	local unequipItemEvent = inventoryRemotes:WaitForChild("UnequipItem")
-	unequipItemEvent.OnServerEvent:Connect(function(player, slotType)
-		InventoryService.UnequipItemForPlayer(player, slotType)
-	end)
-
-	-- Use Item
-	local useItemEvent = inventoryRemotes:WaitForChild("UseItem")
-	useItemEvent.OnServerEvent:Connect(function(player, inventoryId)
-		InventoryService.UseItemForPlayer(player, inventoryId)
-	end)
-
-	-- Equipment Slot Clicked
+	unequipItemEvent.OnServerEvent:Connect(function(p, slot) InventoryService.UnequipItemForPlayer(p, slot) end)
 	local slotClickEvent = inventoryRemotes:WaitForChild("EquipmentSlotClicked")
-	slotClickEvent.OnServerEvent:Connect(function(player, slotType)
-		InventoryService.HandleEquipmentSlotClick(player, slotType)
-	end)
-
-	-- Inspect Item
+	slotClickEvent.OnServerEvent:Connect(function(p, slot) InventoryService.HandleEquipmentSlotClick(p, slot) end)
 	local inspectItemEvent = inventoryRemotes:WaitForChild("InspectItem")
-	inspectItemEvent.OnServerEvent:Connect(function(player, inventoryId)
-		local inventory = InventoryService.GetPlayerInventory(player)
-		if not inventory then return end
-
-		local item = inventory:FindItemByInventoryId(inventoryId)
-		if item then
-			inspectItemEvent:FireClient(player, item)
-		end
-	end)
-
-	debugLog("Remote events set up successfully")
+	inspectItemEvent.OnServerEvent:Connect(function(p, invId) local inv = InventoryService.GetPlayerInventory(p); if inv then local item = inv:FindItemByInventoryId(invId); if item then inspectItemEvent:FireClient(p, item) end end end)
+	debugLog("Remotes set up successfully")
 end
 
--- Set up player events
-local function setupPlayerEvents()
+-- Set up player join/leave events for inventory management
+local function setupPlayerAndTurnEvents()
 	debugLog("Setting up player events...")
-
-	-- Player joining
-	Players.PlayerAdded:Connect(function(player)
-		-- Initialize inventory when player joins
-		InventoryService.InitializePlayer(player)
-	end)
-
-	-- Player leaving
-	Players.PlayerRemoving:Connect(function(player)
-		-- Clear from cache
-		playerInventories[player.UserId] = nil
-
-		-- Reset dice bonus use data
-		if playerDiceBonusUses[player.UserId] then
-			playerDiceBonusUses[player.UserId] = nil
-		end
-	end)
-
-	-- Initialize for existing players
-	for _, player in pairs(Players:GetPlayers()) do
-		task.spawn(function()
-			InventoryService.InitializePlayer(player)
-		end)
-	end
-
-	-- Connect to turn system
-	local remotes = ReplicatedStorage:WaitForChild("Remotes")
-	local gameRemotes = remotes:WaitForChild("GameRemotes", 10)
-
-	if gameRemotes then
-		local updateTurnEvent = gameRemotes:WaitForChild("UpdateTurn", 10)
-		if updateTurnEvent then
-			updateTurnEvent.OnServerEvent:Connect(function(_, playerId)
-				-- Reset dice bonus uses for new turn
-				for pid, _ in pairs(playerDiceBonusUses) do
-					if pid ~= playerId then
-						playerDiceBonusUses[pid] = nil
-						debugLog("Reset dice bonus use for player " .. pid .. " on turn change")
-					end
-				end
-			end)
-		end
-	end
-
+	Players.PlayerAdded:Connect(function(player) InventoryService.InitializePlayer(player) end)
+	Players.PlayerRemoving:Connect(function(player) local userId = player.UserId; playerInventories[userId] = nil; playerDiceBonusUses[userId] = nil; playerItemUsedThisTurn[userId] = nil; debugLog("Cleared inventory and usage cache for leaving player: " .. userId) end)
+	for _, player in pairs(Players:GetPlayers()) do task.spawn(InventoryService.InitializePlayer, player) end
 	debugLog("Player events set up successfully")
 end
 
 -- Initialize the service
 local function init()
 	debugLog("Initializing InventoryService...")
-
-	-- Register with GameManager if available
 	local gameManager = getGameManager()
-	if gameManager then
-		gameManager.inventoryService = InventoryService
-		debugLog("InventoryService registered with GameManager")
-	end
-
-	-- Set up remote events
-	setupRemoteEvents()
-
-	-- Set up player events
-	setupPlayerEvents()
-
-	-- Add testing function
-	_G.TestDiceBonus = function(player, bonusAmount)
-		-- If no player specified, use first player in server
-		if not player then
-			local players = Players:GetPlayers()
-			if #players == 0 then 
-				warn("[InventoryService] No players in game")
-				return false 
-			end
-			player = players[1]
-		end
-
-		bonusAmount = bonusAmount or 1
-
-		-- Check if it's the player's turn
-		local gameManager = getGameManager()
-		local turnSystem = gameManager and gameManager.turnSystem
-		if turnSystem and turnSystem:GetCurrentPlayerTurn() ~= player.UserId then
-			warn("[InventoryService] Not " .. player.Name .. "'s turn")
-			return false
-		end
-
-		-- Set dice bonus
-		if gameManager and gameManager.diceBonusService then
-			gameManager.diceBonusService.SetPlayerDiceBonus(player, bonusAmount)
-
-			-- Record that we used a dice bonus
-			playerDiceBonusUses[player.UserId] = {
-				itemId = "test_dice_bonus",
-				bonusAmount = bonusAmount,
-				timestamp = os.time()
-			}
-
-			debugLog("Test dice bonus +" .. bonusAmount .. " set for " .. player.Name)
-			return true
-		else
-			warn("[InventoryService] DiceBonusService not found")
-			return false
-		end
-	end
-
+	if gameManager then gameManager.inventoryService = InventoryService; debugLog("InventoryService registered with GameManager") end
+	setupRemotes()
+	setupPlayerAndTurnEvents()
+	_G.TestDiceBonus = function(player, bonusAmount) if not player then local players = Players:GetPlayers(); if #players == 0 then warn("[InvSvc] No players"); return false end; player = players[1] end; bonusAmount = bonusAmount or 1; local gm = getGameManager(); local ts = gm and gm.turnSystem; if ts and ts:GetCurrentPlayerTurn() ~= player.UserId then warn("[InvSvc] Not " .. player.Name .. "'s turn"); return false end; if gm and gm.diceBonusService then gm.diceBonusService.SetPlayerDiceBonus(player, bonusAmount); playerDiceBonusUses[player.UserId] = { itemId = "test_dice_bonus", bonusAmount = bonusAmount, timestamp = os.time() }; debugLog("Test dice bonus +" .. bonusAmount .. " set for " .. player.Name); return true else warn("[InvSvc] DiceBonusService not found"); return false end end
 	debugLog("InventoryService initialized successfully")
 end
 
@@ -793,9 +406,7 @@ function InventoryService.SetDebugMode(enabled)
 	DEBUG_MODE = enabled
 	debugLog("Debug mode " .. (enabled and "enabled" or "disabled"))
 end
-
--- Initialize with debug mode off
-InventoryService.SetDebugMode(false)
+InventoryService.SetDebugMode(true) -- Enable debug by default for testing
 
 -- Start initialization
 init()
