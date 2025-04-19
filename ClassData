@@ -1,7 +1,7 @@
 -- ClassData.lua
--- Class and stats data for the game
+-- Class and stats data for the game (Updated version with DEF instead of MaxHP)
 -- Location: ReplicatedStorage/SharedModules/ClassData.lua
--- Version: 1.0.0
+-- Version: 2.0.0
 
 local ClassData = {}
 
@@ -11,10 +11,9 @@ local ClassData = {}
     - Description: Class description
     - IconAssetId: Asset ID for the class icon
     - BaseStats: Base stats for the class (at level 1)
-      - MaxHP: Maximum health points
+      - DEF: Defense power (now used to calculate MaxHP: 1 DEF = 1 MaxHP)
       - MaxMP: Maximum magic points
       - ATK: Attack power
-      - DEF: Defense power (set to 0 as requested)
       - MAGIC: Magic power
     - Growth: Stat growth rates when leveling up (percentage)
     - NextClass: Next upgrade class
@@ -29,17 +28,15 @@ ClassData.Classes = {
 		Description = "Strong fighter with high HP and attack power. Excels at front-line combat.",
 		IconAssetId = "rbxassetid://0", -- Replace with actual Asset ID
 		BaseStats = {
-			MaxHP = 125,
+			DEF = 125, -- Changed from MaxHP to DEF (value remains the same)
 			MaxMP = 50,
 			ATK = 95,
-			DEF = 0,
 			MAGIC = 10
 		},
 		Growth = {
-			MaxHP = 10, -- 10% increase per level
+			DEF = 10, -- Changed from MaxHP to DEF (growth rate remains the same)
 			MaxMP = 5,  -- 5% increase per level
 			ATK = 8,    -- 8% increase per level
-			DEF = 0,    -- 0% increase per level
 			MAGIC = 2   -- 2% increase per level
 		},
 		NextClass = "Knight",
@@ -51,17 +48,15 @@ ClassData.Classes = {
 		Description = "Spell caster with high magic power and MP. Physically fragile but devastating spells.",
 		IconAssetId = "rbxassetid://0", -- Replace with actual Asset ID
 		BaseStats = {
-			MaxHP = 85,
+			DEF = 85, -- Changed from MaxHP to DEF
 			MaxMP = 120,
 			ATK = 25,
-			DEF = 0,
 			MAGIC = 95
 		},
 		Growth = {
-			MaxHP = 5,   -- 5% increase per level
+			DEF = 5,   -- Changed from MaxHP to DEF
 			MaxMP = 10,  -- 10% increase per level
 			ATK = 3,     -- 3% increase per level
-			DEF = 0,     -- 0% increase per level
 			MAGIC = 9    -- 9% increase per level
 		},
 		NextClass = "Wizard",
@@ -73,17 +68,15 @@ ClassData.Classes = {
 		Description = "Agile rogue with balanced attack and magic. Higher chance to obtain treasures.",
 		IconAssetId = "rbxassetid://0", -- Replace with actual Asset ID
 		BaseStats = {
-			MaxHP = 100,
+			DEF = 100, -- Changed from MaxHP to DEF
 			MaxMP = 60,
 			ATK = 75,
-			DEF = 0,
 			MAGIC = 30
 		},
 		Growth = {
-			MaxHP = 7,   -- 7% increase per level
+			DEF = 7,   -- Changed from MaxHP to DEF
 			MaxMP = 6,   -- 6% increase per level
 			ATK = 7,     -- 7% increase per level
-			DEF = 0,     -- 0% increase per level
 			MAGIC = 4    -- 4% increase per level
 		},
 		NextClass = "Assassin",
@@ -96,17 +89,15 @@ ClassData.Classes = {
 		Description = "Honorable warrior with improved defense and team protection abilities.",
 		IconAssetId = "rbxassetid://0", -- Replace with actual Asset ID
 		BaseStats = {
-			MaxHP = 180,
+			DEF = 180, -- Changed from MaxHP to DEF
 			MaxMP = 65,
 			ATK = 120,
-			DEF = 0,
 			MAGIC = 15
 		},
 		Growth = {
-			MaxHP = 12,  -- 12% increase per level
+			DEF = 12,  -- Changed from MaxHP to DEF
 			MaxMP = 6,   -- 6% increase per level
 			ATK = 9,     -- 9% increase per level
-			DEF = 0,     -- 0% increase per level
 			MAGIC = 3    -- 3% increase per level
 		},
 		NextClass = "Paladin",
@@ -118,17 +109,15 @@ ClassData.Classes = {
 		Description = "Holy knight combining combat prowess with support magic and protection.",
 		IconAssetId = "rbxassetid://0", -- Replace with actual Asset ID
 		BaseStats = {
-			MaxHP = 250,
+			DEF = 250, -- Changed from MaxHP to DEF
 			MaxMP = 100,
 			ATK = 150,
-			DEF = 0,
 			MAGIC = 50
 		},
 		Growth = {
-			MaxHP = 15,  -- 15% increase per level
+			DEF = 15,  -- Changed from MaxHP to DEF
 			MaxMP = 8,   -- 8% increase per level
 			ATK = 12,    -- 12% increase per level
-			DEF = 0,     -- 0% increase per level
 			MAGIC = 5    -- 5% increase per level
 		},
 		NextClass = nil, -- Highest class in this path
@@ -141,17 +130,15 @@ ClassData.Classes = {
 		Description = "Elemental magic expert with higher destructive power and more complex spells.",
 		IconAssetId = "rbxassetid://0", -- Replace with actual Asset ID
 		BaseStats = {
-			MaxHP = 110,
+			DEF = 110, -- Changed from MaxHP to DEF
 			MaxMP = 180,
 			ATK = 35,
-			DEF = 0,
 			MAGIC = 130
 		},
 		Growth = {
-			MaxHP = 6,   -- 6% increase per level
+			DEF = 6,   -- Changed from MaxHP to DEF
 			MaxMP = 12,  -- 12% increase per level
 			ATK = 4,     -- 4% increase per level
-			DEF = 0,     -- 0% increase per level
 			MAGIC = 11   -- 11% increase per level
 		},
 		NextClass = "Archmage",
@@ -163,17 +150,15 @@ ClassData.Classes = {
 		Description = "Master of the highest magical arts, wielding immense power to reshape the battlefield.",
 		IconAssetId = "rbxassetid://0", -- Replace with actual Asset ID
 		BaseStats = {
-			MaxHP = 140,
+			DEF = 140, -- Changed from MaxHP to DEF
 			MaxMP = 250,
 			ATK = 45,
-			DEF = 0,
 			MAGIC = 180
 		},
 		Growth = {
-			MaxHP = 7,   -- 7% increase per level
+			DEF = 7,   -- Changed from MaxHP to DEF
 			MaxMP = 15,  -- 15% increase per level
 			ATK = 5,     -- 5% increase per level
-			DEF = 0,     -- 0% increase per level
 			MAGIC = 14   -- 14% increase per level
 		},
 		NextClass = nil, -- Highest class in this path
@@ -186,17 +171,15 @@ ClassData.Classes = {
 		Description = "Stealth expert focusing on critical strikes and shadow movement.",
 		IconAssetId = "rbxassetid://0", -- Replace with actual Asset ID
 		BaseStats = {
-			MaxHP = 130,
+			DEF = 130, -- Changed from MaxHP to DEF
 			MaxMP = 80,
 			ATK = 110,
-			DEF = 0,
 			MAGIC = 40
 		},
 		Growth = {
-			MaxHP = 8,   -- 8% increase per level
+			DEF = 8,   -- Changed from MaxHP to DEF
 			MaxMP = 7,   -- 7% increase per level
 			ATK = 10,    -- 10% increase per level
-			DEF = 0,     -- 0% increase per level
 			MAGIC = 5    -- 5% increase per level
 		},
 		NextClass = "ShadowMaster",
@@ -208,17 +191,15 @@ ClassData.Classes = {
 		Description = "Ultimate shadow manipulator using stealth and unpredictable attacks.",
 		IconAssetId = "rbxassetid://0", -- Replace with actual Asset ID
 		BaseStats = {
-			MaxHP = 160,
+			DEF = 160, -- Changed from MaxHP to DEF
 			MaxMP = 100,
 			ATK = 140,
-			DEF = 0,
 			MAGIC = 55
 		},
 		Growth = {
-			MaxHP = 9,   -- 9% increase per level
+			DEF = 9,   -- Changed from MaxHP to DEF
 			MaxMP = 8,   -- 8% increase per level
 			ATK = 12,    -- 12% increase per level
-			DEF = 0,     -- 0% increase per level
 			MAGIC = 6    -- 6% increase per level
 		},
 		NextClass = nil, -- Highest class in this path
@@ -228,10 +209,9 @@ ClassData.Classes = {
 
 -- Default stats fallback for error handling
 ClassData.DefaultStats = {
-	MaxHP = 100,
+	DEF = 100, -- Changed from MaxHP to DEF
 	MaxMP = 50,
 	ATK = 10,
-	DEF = 0,
 	MAGIC = 10
 }
 
@@ -284,6 +264,9 @@ function ClassData:CalculateStatsAtLevel(className, level)
 		local growthRate = growth[stat] or 0
 		stats[stat] = math.floor(baseValue * (1 + (growthRate/100) * (level-1)))
 	end
+
+	-- Calculate MaxHP based on DEF (1 DEF = 1 MaxHP)
+	stats.MaxHP = stats.DEF
 
 	return stats
 end
