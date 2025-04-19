@@ -1,414 +1,237 @@
--- MainGameUIHandler.lua (ปรับแก้สำหรับ UI แบบใหม่)
--- จัดการการแสดงผลค่าสถานะระหว่างเล่นเกมอย่างถูกต้อง และรองรับการย่อ/ขยาย UI
--- Version: 4.0.0 (Medieval Fantasy Style UI)
+-- MainGameUIHandler.lua
+-- Handles main game UI updates, status bars, turn indicators, and notifications.
+-- Version: 6.0.0 (Cleaned and Refactored)
 
+--[ Services ]--
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 
--- Get local player
+--[ Local Player Setup ]--
 local player = Players.LocalPlayer
 if not player then
 	Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
 	player = Players.LocalPlayer
 end
 
--- โหลดข้อมูลคลาสจาก SharedModules
-local ClassData = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("ClassData"))
-
--- Get UI elements
+--[ UI Elements ]--
 local PlayerGui = player:WaitForChild("PlayerGui")
 local MainGameUI = PlayerGui:WaitForChild("MainGameUI")
 local StatusBarContainer = MainGameUI:WaitForChild("StatusBarContainer")
-
--- สีตามคลาส
-local CLASS_COLORS = {
-	Warrior = Color3.fromRGB(220, 60, 60),      -- สีแดง
-	Knight = Color3.fromRGB(180, 60, 60),      -- สีแดงเข้ม
-	Paladin = Color3.fromRGB(220, 100, 100),    -- สีแดงสว่าง
-
-	Mage = Color3.fromRGB(70, 100, 200),       -- สีน้ำเงิน
-	Wizard = Color3.fromRGB(50, 80, 180),       -- สีน้ำเงินเข้ม
-	Archmage = Color3.fromRGB(90, 120, 220),    -- สีน้ำเงินสว่าง
-
-	Thief = Color3.fromRGB(80, 180, 80),       -- สีเขียว
-	Assassin = Color3.fromRGB(60, 160, 60),     -- สีเขียวเข้ม
-	Shadow = Color3.fromRGB(100, 200, 100),     -- สีเขียวสว่าง
-
-	Default = Color3.fromRGB(150, 150, 150)     -- สีกลาง
-}
-
--- สีเฉดทองสำหรับ UI ใหม่
-local GOLD_COLOR = Color3.fromRGB(212, 175, 55)
-
--- Variables
-local myStatusBar = nil
-local statusExpanded = true -- เริ่มต้นในโหมดขยาย
+local PopupUI = PlayerGui:WaitForChild("PopupUI")
+local InventoryUI = PopupUI:FindFirstChild("InventoryUI")
+local QuestUI = PopupUI:FindFirstChild("QuestUI")
+local NotificationSystem = PopupUI:WaitForChild("NotificationSystem", 10)
+local NotificationTemplate = nil
+local myStatusBar = nil -- Reference to the local player's status bar UI
 local InventoryButton = MainGameUI:FindFirstChild("InventoryButton")
 local QuestButton = MainGameUI:FindFirstChild("QuestButton")
 local EndTurnButton = MainGameUI:FindFirstChild("EndTurnButton")
 local CurrentTurnIndicator = MainGameUI:FindFirstChild("CurrentTurnIndicator")
-local PopupUI = PlayerGui:WaitForChild("PopupUI")
-local InventoryUI = PopupUI:FindFirstChild("InventoryUI")
-local QuestUI = PopupUI:FindFirstChild("QuestUI")
 
--- Get remotes
+-- Initialize Notification System
+if NotificationSystem then
+	NotificationSystem.Visible = true
+	NotificationTemplate = NotificationSystem:WaitForChild("Notification", 5)
+	if NotificationTemplate then
+		NotificationTemplate.Visible = false -- Keep template hidden
+	else
+		warn("[Notification ERROR] Notification template not found in NotificationSystem!")
+	end
+else
+	warn("[Notification ERROR] NotificationSystem not found in PopupUI!")
+end
+
+--[ Constants ]--
+local CLASS_COLORS = {
+	Warrior = Color3.fromRGB(220, 60, 60), Knight = Color3.fromRGB(180, 60, 60), Paladin = Color3.fromRGB(220, 100, 100),
+	Mage = Color3.fromRGB(70, 100, 200), Wizard = Color3.fromRGB(50, 80, 180), Archmage = Color3.fromRGB(90, 120, 220),
+	Thief = Color3.fromRGB(80, 180, 80), Assassin = Color3.fromRGB(60, 160, 60), Shadow = Color3.fromRGB(100, 200, 100),
+	Default = Color3.fromRGB(150, 150, 150)
+}
+local GOLD_COLOR = Color3.fromRGB(212, 175, 55) -- Used for UI accents
+
+--[ State Variables ]--
+local statusExpanded = true -- Tracks if the player status bar is expanded
+local turnTimerActive = false
+local turnTimerConnection = nil
+local turnDetailsData = nil -- Stores the latest received turn details
+local isMyTurn = false
+local lastNotifiedTurnNumber = -1 -- Prevents duplicate turn notifications
+local playerClassInfo = { class = nil, level = 1, classLevel = 1, exp = 0, classExp = 0, nextLevelExp = 100, nextClassLevelExp = 150 }
+local currentPlayerStats = { hp = 100, maxHp = 100, mp = 50, maxMp = 50, attack = 10, defense = 10, magic = 10, magicDefense = 10, agility = 10, money = 100 }
+
+--[ Remote Events ]--
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
 local uiRemotes = remotes:WaitForChild("UIRemotes")
 local gameRemotes = remotes:WaitForChild("GameRemotes")
-
--- Get required remotes
+-- UI Updates
 local updatePlayerStatsEvent = uiRemotes:WaitForChild("UpdatePlayerStats")
-local updateTurnEvent = gameRemotes:WaitForChild("UpdateTurn")
-local endGameEvent = gameRemotes:WaitForChild("EndGame")
-local updateTurnDetailsEvent = uiRemotes:FindFirstChild("UpdateTurnDetails")
-local updateTurnTimerEvent = gameRemotes:FindFirstChild("UpdateTurnTimer")
 local statChangedEvent = uiRemotes:FindFirstChild("StatChanged")
 local updateExpEvent = uiRemotes:FindFirstChild("UpdateExperience")
 local levelUpEvent = uiRemotes:WaitForChild("LevelUp")
 local classLevelUpEvent = uiRemotes:WaitForChild("ClassLevelUp")
+-- Turn Management
+local updateTurnEvent = gameRemotes:WaitForChild("UpdateTurn")
+local updateTurnDetailsEvent = uiRemotes:FindFirstChild("UpdateTurnDetails")
+local updateTurnTimerEvent = gameRemotes:FindFirstChild("UpdateTurnTimer")
+-- Game State
+local endGameEvent = gameRemotes:WaitForChild("EndGame")
 
--- ข้อมูลสถานะเทิร์น
-local turnTimerActive = false
-local turnTimerConnection = nil
-local turnDetailsData = nil
-local isMyTurn = false
+--[ Helper Functions ]--
 
--- ข้อมูลคลาสและเลเวลของผู้เล่น
-local playerClassInfo = {
-	class = nil,
-	level = 1,
-	classLevel = 1,
-	exp = 0,
-	classExp = 0,
-	nextLevelExp = 100,
-	nextClassLevelExp = 150
-}
-
--- ข้อมูลสถานะปัจจุบันของผู้เล่น
-local currentPlayerStats = {
-	hp = 100,
-	maxHp = 100,
-	mp = 50,
-	maxMp = 50,
-	attack = 10,
-	defense = 10,
-	magic = 10,
-	magicDefense = 10,
-	agility = 10,
-	money = 100
-}
-
--- Helper function for tweening
+-- Creates a simple tween.
 local function createTween(object, properties, duration, style, direction)
-	local tweenInfo = TweenInfo.new(
-		duration or 0.3,
-		style or Enum.EasingStyle.Quad,
-		direction or Enum.EasingDirection.Out
-	)
-	local tween = TweenService:Create(object, tweenInfo, properties)
-	return tween
+	local tweenInfo = TweenInfo.new(duration or 0.3, style or Enum.EasingStyle.Quad, direction or Enum.EasingDirection.Out)
+	return TweenService:Create(object, tweenInfo, properties)
 end
 
--- ฟังก์ชันสร้าง notification สำหรับแจ้งเตือนต่างๆ
-local function createNotification(text, color, duration)
-	local notificationTemplate = MainGameUI:FindFirstChild("NotificationSystem")
-	if not notificationTemplate then
-		-- สร้าง NotificationSystem ถ้าไม่มี
-		notificationTemplate = Instance.new("Frame")
-		notificationTemplate.Name = "NotificationSystem"
-		notificationTemplate.Size = UDim2.new(0.4, 0, 0.1, 0)
-		notificationTemplate.Position = UDim2.new(0.5, 0, -0.15, 0)
-		notificationTemplate.AnchorPoint = Vector2.new(0.5, 0)
-		notificationTemplate.BackgroundColor3 = color or Color3.fromRGB(60, 60, 60)
-		notificationTemplate.BackgroundTransparency = 0.2
-		notificationTemplate.Visible = false
+-- Creates and displays a notification using the existing UI template.
+local function createNotification(text, iconId, duration)
+	if not NotificationSystem or not NotificationTemplate then return nil end
 
-		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(0.1, 0)
-		corner.Parent = notificationTemplate
+	local success, notificationClone = pcall(function()
+		local clone = NotificationTemplate:Clone()
+		clone.Name = "ActiveNotification"
+		clone.Visible = true
+		clone.BackgroundTransparency = 1 -- Start transparent
+		clone.LayoutOrder = tick() -- Ensure newest is positioned correctly by layout
 
-		local stroke = Instance.new("UIStroke")
-		stroke.Color = GOLD_COLOR
-		stroke.Thickness = 2
-		stroke.Parent = notificationTemplate
+		local textLabel = clone:FindFirstChild("NotificationText")
+		local iconImage = clone:FindFirstChild("NotificationIcon")
 
-		local notifText = Instance.new("TextLabel")
-		notifText.Name = "NotificationText"
-		notifText.Size = UDim2.new(0.95, 0, 0.8, 0)
-		notifText.Position = UDim2.new(0.5, 0, 0.5, 0)
-		notifText.AnchorPoint = Vector2.new(0.5, 0.5)
-		notifText.BackgroundTransparency = 1
-		notifText.Font = Enum.Font.GothamBold
-		notifText.TextColor3 = Color3.fromRGB(255, 255, 255)
-		notifText.TextSize = 18
-		notifText.TextWrapped = true
-		notifText.Parent = notificationTemplate
+		if textLabel and textLabel:IsA("TextLabel") then textLabel.Text = text end
 
-		notificationTemplate.Parent = MainGameUI
-	end
-
-	local notification = notificationTemplate:Clone()
-	notification.Name = "ActiveNotification"
-	notification.BackgroundColor3 = color or Color3.fromRGB(60, 60, 80)
-	notification.Visible = true
-
-	if notification:FindFirstChild("NotificationText") then
-		notification.NotificationText.Text = text
-	end
-
-	notification.Parent = MainGameUI
-
-	-- แสดงการแจ้งเตือนด้วยทวีน
-	notification:TweenPosition(
-		UDim2.new(0.5, 0, 0.1, 0),
-		Enum.EasingDirection.Out,
-		Enum.EasingStyle.Back,
-		0.5,
-		true
-	)
-
-	-- ซ่อนหลังจากระยะเวลาที่กำหนด
-	delay(duration or 3, function()
-		if notification and notification.Parent then
-			notification:TweenPosition(
-				UDim2.new(0.5, 0, -0.15, 0),
-				Enum.EasingDirection.In,
-				Enum.EasingStyle.Quad,
-				0.5,
-				true,
-				function()
-					if notification and notification.Parent then
-						notification:Destroy()
-					end
-				end
-			)
+		if iconImage and iconImage:IsA("ImageLabel") then
+			if iconId and string.find(iconId, "rbxassetid") then
+				iconImage.Image = iconId
+				iconImage.Visible = true
+			else
+				iconImage.Visible = false -- Hide if no valid iconId
+			end
 		end
+
+		clone.Parent = NotificationSystem -- Parent to the container with UIListLayout
+
+		-- Fade In
+		local targetTransparency = 0.2 -- Target visible transparency
+		local fadeInTween = createTween(clone, {BackgroundTransparency = targetTransparency}, 0.4)
+		fadeInTween:Play()
+
+		-- Schedule Fade Out and Destroy
+		task.delay(duration or 3, function()
+			if clone and clone.Parent then
+				local fadeOutTween = createTween(clone, {BackgroundTransparency = 1}, 0.4)
+				fadeOutTween:Play()
+				fadeOutTween.Completed:Connect(function()
+					if clone and clone.Parent then clone:Destroy() end
+				end)
+			end
+		end)
+		return clone
 	end)
 
-	return notification
+	if not success then
+		warn("[Notification ERROR] Failed to create notification:", notificationClone) -- Keep error warning
+		return nil
+	end
+	return notificationClone
 end
 
--- Setup player status bar for new UI
+--[ Core UI Update Functions ]--
+
+-- Finds the local player's status bar UI element.
 local function setupPlayerStatusBar()
-	-- Check if my status bar already exists
-	local existingStatusBar = StatusBarContainer:FindFirstChild("MyPlayerStatusBar")
-	if existingStatusBar then return existingStatusBar end
-
-	-- สร้าง status bar ถ้าไม่มี (หรือใช้เทมเพลต)
-	-- หมายเหตุ: ถ้าใช้โค้ดสร้าง UI แล้ว ควรจะมี MyPlayerStatusBar อยู่แล้ว
-
-	warn("ไม่พบ MyPlayerStatusBar ใน UI ใหม่!")
-	return nil
-end
-
--- อัปเดต StatusBar แบบ UI ใหม่
-local function updateMyStatusBar(stats)
-	if not myStatusBar then
+	if not myStatusBar then -- Only find it once
 		myStatusBar = StatusBarContainer:FindFirstChild("MyPlayerStatusBar")
-		if not myStatusBar then return end
+		if not myStatusBar then
+			warn("MyPlayerStatusBar not found in StatusBarContainer!") -- Keep essential warning
+		end
 	end
+	return myStatusBar
+end
 
-	-- เก็บค่าสถานะปัจจุบันไว้
+-- Updates the local player's status bar with new stats.
+local function updateMyStatusBar(stats)
+	if not myStatusBar then setupPlayerStatusBar(); if not myStatusBar then return end end -- Ensure status bar exists
+
+	-- Update internal state
 	for key, value in pairs(stats) do
-		if currentPlayerStats[key] ~= nil then
-			currentPlayerStats[key] = value
-		end
+		if currentPlayerStats[key] ~= nil then currentPlayerStats[key] = value end
+	end
+	if stats.level then playerClassInfo.level = stats.level end
+	if stats.class then playerClassInfo.class = stats.class end
+    if stats.exp then playerClassInfo.exp = stats.exp end
+    if stats.nextLevelExp then playerClassInfo.nextLevelExp = stats.nextLevelExp end
+
+	-- Update UI elements
+	if myStatusBar:FindFirstChild("PlayerName") then myStatusBar.PlayerName.Text = player.Name end
+	if stats.level and myStatusBar:FindFirstChild("PlayerLevel") then (myStatusBar.PlayerLevel:FindFirstChild("LevelLabel") or myStatusBar.PlayerLevel).Text = "Lv." .. stats.level end
+	if stats.class and myStatusBar:FindFirstChild("PlayerClass") then myStatusBar.PlayerClass.Text = "Class: " .. stats.class; --[[ Update Bar Colors based on class ]] end
+
+	-- Update HP Bar
+	if stats.hp and stats.maxHp and myStatusBar:FindFirstChild("HPBar") and myStatusBar.HPBar:FindFirstChild("HPFill") then
+		local fill = myStatusBar.HPBar.HPFill
+		local textLabel = myStatusBar.HPBar:FindFirstChild("HPText")
+		local ratio = math.clamp(stats.hp / stats.maxHp, 0, 1)
+		createTween(fill, {Size = UDim2.new(ratio, 0, 1, 0)}, 0.3, Enum.EasingStyle.Elastic):Play()
+		if textLabel then textLabel.Text = math.floor(stats.hp) .. "/" .. math.floor(stats.maxHp) end
+		--[[ Update HP Bar Color based on class or ratio ]]
 	end
 
-	-- อัปเดตชื่อผู้เล่น
-	if myStatusBar:FindFirstChild("PlayerName") then
-		myStatusBar.PlayerName.Text = player.Name
+	-- Update MP Bar
+	if stats.mp and stats.maxMp and myStatusBar:FindFirstChild("MPBar") and myStatusBar.MPBar:FindFirstChild("MPFill") then
+		local fill = myStatusBar.MPBar.MPFill
+		local textLabel = myStatusBar.MPBar:FindFirstChild("MPText")
+		local ratio = math.clamp(stats.mp / stats.maxMp, 0, 1)
+		createTween(fill, {Size = UDim2.new(ratio, 0, 1, 0)}, 0.3, Enum.EasingStyle.Elastic):Play()
+		if textLabel then textLabel.Text = math.floor(stats.mp) .. "/" .. math.floor(stats.maxMp) end
+        --[[ Update MP Bar Color based on class ]]
 	end
 
-	-- Update level if provided
-	if stats.level and myStatusBar:FindFirstChild("PlayerLevel") then
-		if myStatusBar.PlayerLevel:FindFirstChild("LevelLabel") then
-			myStatusBar.PlayerLevel.LevelLabel.Text = "Lv." .. stats.level
-		else
-			myStatusBar.PlayerLevel.Text = "Lv." .. stats.level
-		end
-		playerClassInfo.level = stats.level
-	end
-
-	-- Update class if provided
-	if stats.class and myStatusBar:FindFirstChild("PlayerClass") then
-		myStatusBar.PlayerClass.Text = "Class: " .. stats.class
-		playerClassInfo.class = stats.class
-
-		-- ปรับสีตามคลาส
-		local classColor = CLASS_COLORS[stats.class] or CLASS_COLORS.Default
-
-		-- ปรับสี HP และ MP ตามคลาส
-		if myStatusBar:FindFirstChild("HPBar") and myStatusBar.HPBar:FindFirstChild("HPFill") then
-			if stats.class == "Warrior" or stats.class == "Knight" or stats.class == "Paladin" then
-				myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
-			elseif stats.class == "Mage" or stats.class == "Wizard" or stats.class == "Archmage" then
-				myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
-			elseif stats.class == "Thief" or stats.class == "Assassin" or stats.class == "Shadow" then
-				myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(200, 80, 60)
-			end
-		end
-
-		if myStatusBar:FindFirstChild("MPBar") and myStatusBar.MPBar:FindFirstChild("MPFill") then
-			if stats.class == "Warrior" or stats.class == "Knight" or stats.class == "Paladin" then
-				myStatusBar.MPBar.MPFill.BackgroundColor3 = Color3.fromRGB(60, 60, 180)
-			elseif stats.class == "Mage" or stats.class == "Wizard" or stats.class == "Archmage" then
-				myStatusBar.MPBar.MPFill.BackgroundColor3 = Color3.fromRGB(80, 80, 220)
-			elseif stats.class == "Thief" or stats.class == "Assassin" or stats.class == "Shadow" then
-				myStatusBar.MPBar.MPFill.BackgroundColor3 = Color3.fromRGB(60, 100, 180)
-			end
-		end
-
-		-- แสดงการแจ้งเตือนคลาส
-		local classText = "Playing as " .. stats.class .. " (HP: " .. (stats.maxHp or currentPlayerStats.maxHp) ..
-			", MP: " .. (stats.maxMp or currentPlayerStats.maxMp) .. ")"
-
-		createNotification(classText, CLASS_COLORS[stats.class], 4)
-	end
-
-	-- Update HP
-	if stats.hp and stats.maxHp and
-		myStatusBar:FindFirstChild("HPBar") and
-		myStatusBar.HPBar:FindFirstChild("HPFill") then
-
-		local hpRatio = math.clamp(stats.hp / stats.maxHp, 0, 1)
-		createTween(
-			myStatusBar.HPBar.HPFill,
-			{Size = UDim2.new(hpRatio, 0, 1, 0)},
-			0.3, 
-			Enum.EasingStyle.Elastic
-		):Play()
-
-		if myStatusBar.HPBar:FindFirstChild("HPText") then
-			myStatusBar.HPBar.HPText.Text = math.floor(stats.hp) .. "/" .. math.floor(stats.maxHp)
-		end
-
-		-- Change color based on HP ratio if no class is set
-		if not playerClassInfo.class then
-			if hpRatio < 0.3 then
-				myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-			elseif hpRatio < 0.6 then
-				myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(255, 150, 50)
-			else
-				myStatusBar.HPBar.HPFill.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
-			end
-		end
-	end
-
-	-- Update MP
-	if stats.mp and stats.maxMp and
-		myStatusBar:FindFirstChild("MPBar") and
-		myStatusBar.MPBar:FindFirstChild("MPFill") then
-
-		local mpRatio = math.clamp(stats.mp / stats.maxMp, 0, 1)
-		createTween(
-			myStatusBar.MPBar.MPFill,
-			{Size = UDim2.new(mpRatio, 0, 1, 0)},
-			0.3,
-			Enum.EasingStyle.Elastic
-		):Play()
-
-		if myStatusBar.MPBar:FindFirstChild("MPText") then
-			myStatusBar.MPBar.MPText.Text = math.floor(stats.mp) .. "/" .. math.floor(stats.maxMp)
-		end
-	end
-
-	-- Update money
-	if stats.money and
-		myStatusBar:FindFirstChild("MoneyContainer") and
-		myStatusBar.MoneyContainer:FindFirstChild("MoneyAmount") then
-
-		local currentMoney = tonumber(myStatusBar.MoneyContainer.MoneyAmount.Text) or 0
+	-- Update Money Display & Notification
+	if stats.money and myStatusBar:FindFirstChild("MoneyContainer") and myStatusBar.MoneyContainer:FindFirstChild("MoneyAmount") then
+		local moneyLabel = myStatusBar.MoneyContainer.MoneyAmount
+		local currentMoney = tonumber(moneyLabel.Text) or 0
 		local newMoney = stats.money
-
 		if newMoney ~= currentMoney then
-			-- อนิเมชั่นสำหรับการเปลี่ยนแปลงเงิน
-			local direction = newMoney > currentMoney and 1 or -1
-			local color = newMoney > currentMoney and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)
-			local startSize = newMoney > currentMoney and 18 or 14
-			local easingStyle = newMoney > currentMoney and Enum.EasingStyle.Back or Enum.EasingStyle.Bounce
-
-			myStatusBar.MoneyContainer.MoneyAmount.TextColor3 = color
-
-			local moneyTween = createTween(
-				myStatusBar.MoneyContainer.MoneyAmount,
-				{TextSize = startSize},
-				0.3,
-				easingStyle
-			)
-
-			moneyTween:Play()
-			moneyTween.Completed:Connect(function()
-				createTween(
-					myStatusBar.MoneyContainer.MoneyAmount,
-					{TextSize = 14, TextColor3 = Color3.fromRGB(255, 255, 255)},
-					0.3
-				):Play()
-			end)
-
-			-- แสดงเงินที่เปลี่ยนแปลง
-			local difference = newMoney - currentMoney
-			if math.abs(difference) >= 10 then  -- เปลี่ยนแปลง >= 10 จึงแสดง
-				local moneyChangeText = direction > 0 and "+" .. difference .. " coins" or difference .. " coins"
-				createNotification(moneyChangeText, direction > 0 and Color3.fromRGB(40, 120, 40) or Color3.fromRGB(120, 40, 40), 2)
-			end
+			local diff = newMoney - currentMoney
+			local direction = diff > 0 and 1 or -1
+			--[[ Money change text animation ]]
+			createNotification((direction > 0 and "+" or "") .. diff .. " coins", direction > 0 and "rbxassetid://GAIN_ID" or "rbxassetid://LOSS_ID", 2) -- Replace with actual IDs
 		end
+		moneyLabel.Text = tostring(newMoney)
+	end
 
-		myStatusBar.MoneyContainer.MoneyAmount.Text = tostring(stats.money)
-		end
-
-		-- อัปเดตค่าสถานะ
-	-- อัปเดตค่าสถานะ
-	local statsList = {"defense", "attack", "mp", "magic"}
-	for _, statName in ipairs(statsList) do
-		if stats[statName] and myStatusBar:FindFirstChild(string.upper(statName) .. "Value") then
-			myStatusBar[string.upper(statName) .. "Value"].Text = tostring(stats[statName])
+	-- Update Stat Texts (ATK, DEF, MAG, MP Value)
+	local statList = {"defense", "attack", "mp", "magic"}
+	for _, statName in ipairs(statList) do
+		local valueLabel = myStatusBar:FindFirstChild(string.upper(statName) .. "Value")
+		if stats[statName] and valueLabel then
+			valueLabel.Text = tostring(stats[statName])
 		end
 	end
+    -- Specific stat updates if names differ (e.g., DEFValue)
+    if stats.defense and myStatusBar:FindFirstChild("DEFValue") then myStatusBar.DEFValue.Text = tostring(stats.defense) end
+	if stats.attack and myStatusBar:FindFirstChild("ATKValue") then myStatusBar.ATKValue.Text = tostring(stats.attack) end
+	if stats.mp and myStatusBar:FindFirstChild("MPValue") then myStatusBar.MPValue.Text = tostring(stats.mp) end
+	if stats.magic and myStatusBar:FindFirstChild("MAGValue") then myStatusBar.MAGValue.Text = tostring(stats.magic) end
 
-	-- สำหรับการแสดงค่าสถานะเฉพาะในรูปแบบใหม่
-	if stats.defense and myStatusBar:FindFirstChild("DEFValue") then
-		myStatusBar.DEFValue.Text = tostring(stats.defense)
-	end
 
-	if stats.attack and myStatusBar:FindFirstChild("ATKValue") then
-		myStatusBar.ATKValue.Text = tostring(stats.attack)
-	end
-
-	if stats.mp and myStatusBar:FindFirstChild("MPValue") then
-		myStatusBar.MPValue.Text = tostring(stats.mp)
-	end
-
-	if stats.magic and myStatusBar:FindFirstChild("MAGValue") then
-		myStatusBar.MAGValue.Text = tostring(stats.magic)
-	end
-
--- อัปเดตค่า ExpBar ถ้ามี
-if stats.exp and stats.nextLevelExp and
-	myStatusBar:FindFirstChild("ExpBar") and
-	myStatusBar.ExpBar:FindFirstChild("ExpFill") and
-	myStatusBar.ExpBar.Visible then
-
-	playerClassInfo.exp = stats.exp
-	playerClassInfo.nextLevelExp = stats.nextLevelExp
-
-	local expRatio = math.clamp(stats.exp / stats.nextLevelExp, 0, 1)
-	createTween(
-		myStatusBar.ExpBar.ExpFill,
-		{Size = UDim2.new(expRatio, 0, 1, 0)},
-		0.5
-	):Play()
-
-	if myStatusBar.ExpBar:FindFirstChild("ExpText") then
-		myStatusBar.ExpBar.ExpText.Text = "EXP: " .. math.floor(stats.exp) .. "/" .. math.floor(stats.nextLevelExp)
+	-- Update EXP Bar
+	if stats.exp and stats.nextLevelExp and myStatusBar:FindFirstChild("ExpBar") and myStatusBar.ExpBar:FindFirstChild("ExpFill") and myStatusBar.ExpBar.Visible then
+		local fill = myStatusBar.ExpBar.ExpFill
+		local textLabel = myStatusBar.ExpBar:FindFirstChild("ExpText")
+		local ratio = math.clamp(stats.exp / stats.nextLevelExp, 0, 1)
+		createTween(fill, {Size = UDim2.new(ratio, 0, 1, 0)}, 0.5):Play()
+		if textLabel then textLabel.Text = "EXP: " .. math.floor(stats.exp) .. "/" .. math.floor(stats.nextLevelExp) end
 	end
 end
-end
 
--- Update turn indicator function
+-- Updates the turn indicator UI based on received turn details.
 local function updateTurnIndicator(turnDetails)
+	if not turnDetails or turnDetails.playerId == nil then return end -- Ensure valid data
 	if not CurrentTurnIndicator then return end
 
 	local currentPlayerName = turnDetails.playerName or "Unknown"
@@ -417,267 +240,200 @@ local function updateTurnIndicator(turnDetails)
 	local playerLevel = turnDetails.playerLevel or 1
 	local currentPlayerId = turnDetails.playerId
 
-	-- Update turn text
-	if CurrentTurnIndicator:FindFirstChild("TurnText") then
-		CurrentTurnIndicator.TurnText.Text = currentPlayerName .. "'s Turn (Turn " .. turnNumber .. ")"
+	-- Update Text Labels
+	local turnTextLabel = CurrentTurnIndicator:FindFirstChild("TurnText")
+	local classLabel = CurrentTurnIndicator:FindFirstChild("PlayerClassLabel")
+	local levelLabel = CurrentTurnIndicator:FindFirstChild("PlayerLevelLabel")
+	if turnTextLabel then turnTextLabel.Text = currentPlayerName .. "'s Turn (Turn " .. turnNumber .. ")" end
+	if classLabel then classLabel.Text = "Class: " .. playerClass end
+	if levelLabel then levelLabel.Text = "Lv." .. playerLevel end
+
+	-- Handle Timer Frame Visibility
+	local timerFrame = CurrentTurnIndicator:FindFirstChild("TurnTimerFrame")
+	if timerFrame then
+		if turnTimerConnection then turnTimerConnection:Disconnect(); turnTimerConnection = nil end
+		timerFrame.Visible = true -- Assuming timer starts with turn
 	end
 
-	-- Update class and level info
-	if CurrentTurnIndicator:FindFirstChild("PlayerClassLabel") then
-		CurrentTurnIndicator.PlayerClassLabel.Text = "Class: " .. playerClass
-	end
-	if CurrentTurnIndicator:FindFirstChild("PlayerLevelLabel") then
-		CurrentTurnIndicator.PlayerLevelLabel.Text = "Lv." .. playerLevel
-	end
-
-	-- Setup timer if available
-	if CurrentTurnIndicator:FindFirstChild("TurnTimerFrame") then
-		if turnTimerConnection then
-			turnTimerConnection:Disconnect()
-			turnTimerConnection = nil
-		end
-		CurrentTurnIndicator.TurnTimerFrame.Visible = true
-	end
-
-	-- Set turn status
+	-- Check if it's the local player's turn
 	isMyTurn = (currentPlayerId == player.UserId)
 
-	-- Highlight UI if it's player's turn
 	if isMyTurn then
+		-- Highlight Player's UI (e.g., status bar border)
 		if myStatusBar then
-			local highlightColor = CLASS_COLORS[playerClassInfo.class] or Color3.fromRGB(70, 120, 200)
-			-- ไม่เปลี่ยนสีพื้นหลัง แต่ทำให้ขอบสว่างขึ้น
-			local uiStrokeElements = myStatusBar:GetDescendants()
-			for _, element in ipairs(uiStrokeElements) do
-				if element:IsA("UIStroke") then
-					local originalColor = element.Color
-					createTween(element, 
-						{Color = highlightColor:Lerp(GOLD_COLOR, 0.5), Thickness = element.Thickness + 1}, 
-						0.5
-					):Play()
-
-					delay(0.6, function()
-						createTween(element, 
-							{Color = GOLD_COLOR, Thickness = element.Thickness - 1}, 
-							0.5
-						):Play()
-					end)
-				end
-			end
+			--[[ Add highlight effect, e.g., tweening UIStroke Color/Thickness ]]
 		end
 
-		-- Animate turn indicator
-		local originalPosition = CurrentTurnIndicator.Position
-		local originalSize = CurrentTurnIndicator.Size
-		local expandTween = createTween(
-			CurrentTurnIndicator,
-			{
-				Size = UDim2.new(originalSize.X.Scale + 0.02, 0, originalSize.Y.Scale + 0.02, 0),
-				Position = UDim2.new(originalPosition.X.Scale - 0.01, 0, originalPosition.Y.Scale - 0.01, 0),
-				BackgroundColor3 = Color3.fromRGB(60, 140, 200)
-			}, 0.5, Enum.EasingStyle.Back)
-		local contractTween = createTween(
-			CurrentTurnIndicator,
-			{
-				Size = originalSize,
-				Position = originalPosition,
-				BackgroundColor3 = Color3.fromRGB(50, 100, 150)
-			}, 0.5, Enum.EasingStyle.Back)
-		expandTween:Play()
-		expandTween.Completed:Connect(function() contractTween:Play() end)
+		-- Notify Player (only once per turn number)
+		if turnNumber > lastNotifiedTurnNumber then
+			createNotification("It's your turn!", "rbxassetid://YOUR_TURN_ICON_ID", 2) -- Replace with actual ID
+			lastNotifiedTurnNumber = turnNumber
+		end
 
-		-- แสดงการแจ้งเตือน
-		createNotification("It's your turn!", CLASS_COLORS[playerClassInfo.class] or Color3.fromRGB(60, 140, 200), 2)
+		-- Animate Turn Indicator (Optional visual cue)
+		--[[ Add tweening for size/color change ]]
 	else
-		-- Reset highlights if not player's turn
-		CurrentTurnIndicator.BackgroundColor3 = Color3.fromRGB(80, 80, 100)
+		-- Reset Turn Indicator style if needed
+		CurrentTurnIndicator.BackgroundColor3 = Color3.fromRGB(80, 80, 100) -- Example reset
 	end
 
-	-- Store latest turn data
-	turnDetailsData = turnDetails
+	turnDetailsData = turnDetails -- Store latest details
 end
 
--- Update turn timer function
+-- Updates the turn timer UI.
 local function updateTurnTimer(timeRemaining)
-	if not CurrentTurnIndicator or
-		not CurrentTurnIndicator:FindFirstChild("TurnTimerFrame") or
-		not CurrentTurnIndicator.TurnTimerFrame:FindFirstChild("TimerFill") or
-		not CurrentTurnIndicator.TurnTimerFrame:FindFirstChild("TimerText") then
-		return
-	end
+	if not CurrentTurnIndicator then return end
+	local timerFrame = CurrentTurnIndicator:FindFirstChild("TurnTimerFrame")
+	if not timerFrame then return end
+	local fill = timerFrame:FindFirstChild("TimerFill")
+	local textLabel = timerFrame:FindFirstChild("TimerText")
+	if not fill or not textLabel then return end
 
-	local timerFrame = CurrentTurnIndicator.TurnTimerFrame
-	local timerFill = timerFrame.TimerFill
-	local timerText = timerFrame.TimerText
+	textLabel.Text = tostring(timeRemaining) .. "s"
+	local maxTime = 120 -- Assuming max turn time
+	local ratio = math.clamp(timeRemaining / maxTime, 0, 1)
+	createTween(fill, {Size = UDim2.new(ratio, 0, 1, 0)}, 0.3):Play()
 
-	timerText.Text = tostring(timeRemaining) .. "s"
-	local maxTime = 120 -- Assuming max time is 120 seconds
-	local fillRatio = math.clamp(timeRemaining / maxTime, 0, 1)
-
-	createTween(timerFill, {Size = UDim2.new(fillRatio, 0, 1, 0)}, 0.3):Play()
-
-	if timeRemaining <= 10 then
-		timerFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-	elseif timeRemaining <= 30 then
-		timerFill.BackgroundColor3 = Color3.fromRGB(255, 150, 50)
-	else
-		timerFill.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
-	end
+	-- Change timer color based on time left
+	if timeRemaining <= 10 then fill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+	elseif timeRemaining <= 30 then fill.BackgroundColor3 = Color3.fromRGB(255, 150, 50)
+	else fill.BackgroundColor3 = Color3.fromRGB(50, 200, 50) end
 end
 
--- Setup End Turn button
+--[ Button Setup Functions ]--
+
+-- Sets up the End Turn button functionality.
 local function setupEndTurnButton()
-	if not EndTurnButton then return nil end
+	if not EndTurnButton then warn("EndTurnButton not found!"); return nil end
+	if EndTurnButton:GetAttribute("Connected") then return EndTurnButton end -- Prevent double connection
 
-	if not EndTurnButton:GetAttribute("Connected") then
-		EndTurnButton.MouseButton1Click:Connect(function()
-			if isMyTurn then
-				local turnActionEvent = gameRemotes:WaitForChild("TurnAction")
-				turnActionEvent:FireServer("endTurn")
-				EndTurnButton.Visible = false -- Hide immediately on click
-			end
-		end)
-		EndTurnButton:SetAttribute("Connected", true)
-	end
+	EndTurnButton.MouseButton1Click:Connect(function()
+		if isMyTurn then
+			gameRemotes:WaitForChild("TurnAction"):FireServer("endTurn")
+			EndTurnButton.Visible = false -- Hide immediately
+		end
+	end)
+	EndTurnButton:SetAttribute("Connected", true)
 
-	-- Update button visibility based on turn
+	-- Control visibility based on turn state
 	RunService.Heartbeat:Connect(function()
-		-- Only show if it's my turn AND MainGameUI is enabled
-		EndTurnButton.Visible = isMyTurn and MainGameUI.Enabled
-
-		if EndTurnButton.Visible then
-			local classColor = CLASS_COLORS[playerClassInfo.class] or Color3.fromRGB(60, 120, 180)
-			EndTurnButton.BackgroundColor3 = classColor
-			if EndTurnButton:FindFirstChild("UIStroke") then
-				EndTurnButton.UIStroke.Color = classColor:Lerp(Color3.fromRGB(255, 255, 255), 0.5)
+		local shouldBeVisible = isMyTurn and MainGameUI.Enabled
+		if EndTurnButton.Visible ~= shouldBeVisible then
+			EndTurnButton.Visible = shouldBeVisible
+			if shouldBeVisible then
+				-- Style button when visible (e.g., based on class color)
+				local classColor = CLASS_COLORS[playerClassInfo.class] or Color3.fromRGB(60, 120, 180)
+				EndTurnButton.BackgroundColor3 = classColor
+				local stroke = EndTurnButton:FindFirstChild("UIStroke")
+				if stroke then stroke.Color = classColor:Lerp(Color3.fromRGB(255, 255, 255), 0.5) end
 			end
 		end
 	end)
-
 	return EndTurnButton
 end
 
--- Setup button handlers
+-- Sets up common button handlers for Inventory, Quest, Close buttons, etc.
 local function setupButtonHandlers()
-	if InventoryButton and not InventoryButton:GetAttribute("Connected") then
-		InventoryButton.MouseButton1Click:Connect(function()
-			if InventoryUI then
-				local shouldBeVisible = not InventoryUI.Visible
-				InventoryUI.Visible = shouldBeVisible
+	-- Helper to connect main action buttons (Inventory, Quest)
+	local function setupActionButton(button, uiElement, otherUIElement)
+		if button and not button:GetAttribute("Connected") then
+			button.MouseButton1Click:Connect(function()
+				if uiElement then
+					local shouldBeVisible = not uiElement.Visible
+					uiElement.Visible = shouldBeVisible
+					MainGameUI.Enabled = not shouldBeVisible -- Hide main game UI when popup is open
 
-				-- *** CHANGE: Hide/Show MainGameUI ***
-				MainGameUI.Enabled = not shouldBeVisible
-
-				-- Hide other popups
-				if shouldBeVisible and QuestUI then
-					QuestUI.Visible = false
-				end
-
-				-- Visual feedback
-				InventoryButton.BackgroundColor3 = shouldBeVisible and
-					Color3.fromRGB(80, 120, 80) or Color3.fromRGB(50, 50, 50)
-			end
-		end)
-		InventoryButton:SetAttribute("Connected", true)
-	end
-
-	if QuestButton and not QuestButton:GetAttribute("Connected") then
-		QuestButton.MouseButton1Click:Connect(function()
-			if QuestUI then
-				local shouldBeVisible = not QuestUI.Visible
-				QuestUI.Visible = shouldBeVisible
-
-				-- Hide other popups
-				if shouldBeVisible and InventoryUI then
-					InventoryUI.Visible = false
-					-- *** CHANGE: Ensure MainGameUI is shown if Inventory was closed by opening QuestUI ***
-					MainGameUI.Enabled = true
-					if InventoryButton then
-						InventoryButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+					-- Close other popup if opening this one
+					if shouldBeVisible and otherUIElement then
+						otherUIElement.Visible = false
 					end
+                    -- Update button colors after state change
+                    if InventoryButton then InventoryButton.BackgroundColor3 = InventoryUI and InventoryUI.Visible and Color3.fromRGB(80,120,80) or Color3.fromRGB(50,50,50) end
+                    if QuestButton then QuestButton.BackgroundColor3 = QuestUI and QuestUI.Visible and Color3.fromRGB(80,120,80) or Color3.fromRGB(50,50,50) end
 				end
-
-				-- Visual feedback
-				QuestButton.BackgroundColor3 = shouldBeVisible and
-					Color3.fromRGB(80, 120, 80) or Color3.fromRGB(50, 50, 50)
-			end
-		end)
-		QuestButton:SetAttribute("Connected", true)
+			end)
+			button:SetAttribute("Connected", true)
+		end
 	end
 
-	-- ตรวจสอบปุ่มปิดใน PopupUI
-	if InventoryUI and InventoryUI:FindFirstChild("CloseButton") and not InventoryUI.CloseButton:GetAttribute("Connected") then
-		InventoryUI.CloseButton.MouseButton1Click:Connect(function()
-			InventoryUI.Visible = false
-			-- *** CHANGE: Show MainGameUI when closing Inventory ***
-			MainGameUI.Enabled = true
-			if InventoryButton then
-				InventoryButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-			end
-		end)
-		InventoryUI.CloseButton:SetAttribute("Connected", true)
+	-- Helper to connect close buttons within popups
+	local function setupCloseButton(closeButton, uiElement, associatedButton)
+		if uiElement and closeButton and not closeButton:GetAttribute("Connected") then
+			closeButton.MouseButton1Click:Connect(function()
+				uiElement.Visible = false
+				-- Show main game UI only if no other popups are visible
+				if (not InventoryUI or not InventoryUI.Visible) and (not QuestUI or not QuestUI.Visible) then
+					MainGameUI.Enabled = true
+				end
+                -- Reset associated button color
+				if associatedButton then associatedButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50) end
+			end)
+			closeButton:SetAttribute("Connected", true)
+		end
 	end
 
-	if QuestUI and QuestUI:FindFirstChild("CloseButton") and not QuestUI.CloseButton:GetAttribute("Connected") then
-		QuestUI.CloseButton.MouseButton1Click:Connect(function()
-			QuestUI.Visible = false
-			-- *** CHANGE: Show MainGameUI when closing QuestUI (if Inventory isn't open) ***
-			if not InventoryUI.Visible then
-				MainGameUI.Enabled = true
-			end
-			if QuestButton then
-				QuestButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-			end
-		end)
-		QuestUI.CloseButton:SetAttribute("Connected", true)
-	end
+	-- Connect Inventory and Quest buttons
+	setupActionButton(InventoryButton, InventoryUI, QuestUI)
+	setupActionButton(QuestButton, QuestUI, InventoryUI)
 
-	-- ตรวจสอบปุ่มลูกศร collapse/expand ใน UI ใหม่
-	local arrowButton = StatusBarContainer:FindFirstChild("ArrowButton")
-	if arrowButton and arrowButton:FindFirstChild("Button") and not arrowButton:GetAttribute("Connected") then
-		arrowButton.Button.MouseButton1Click:Connect(function()
-			local playerStatusBar = StatusBarContainer:FindFirstChild("MyPlayerStatusBar")
-			if not playerStatusBar then return end
+	-- Connect Close buttons (assuming they exist within the respective UI frames)
+	setupCloseButton(InventoryUI and InventoryUI:FindFirstChild("CloseButton"), InventoryUI, InventoryButton)
+	setupCloseButton(QuestUI and QuestUI:FindFirstChild("CloseButton"), QuestUI, QuestButton)
 
-			statusExpanded = not statusExpanded
+	-- Connect Status Bar Collapse/Expand button
+	local arrowButtonFrame = StatusBarContainer:FindFirstChild("ArrowButton")
+	if arrowButtonFrame then
+        local arrowButton = arrowButtonFrame:FindFirstChild("Button")
+        if arrowButton and not arrowButton:GetAttribute("Connected") then
+            arrowButton.MouseButton1Click:Connect(function()
+                local playerStatusBar = StatusBarContainer:FindFirstChild("MyPlayerStatusBar")
+                if not playerStatusBar then return end
+                statusExpanded = not statusExpanded
+                local arrowIcon = arrowButtonFrame:FindFirstChild("ArrowIcon") -- Assuming icon is sibling of button
 
-			if statusExpanded then
-				-- ขยาย - แสดง UI เต็มรูปแบบ
-				playerStatusBar.Visible = true
-				createTween(playerStatusBar, {Size = UDim2.new(1, 0, 1.4, 0)}, 0.4, Enum.EasingStyle.Back):Play()
-			else
-				-- ย่อ - ซ่อน UI
-				createTween(playerStatusBar, {Size = UDim2.new(1, 0, 0, 0)}, 0.3):Play()
-				delay(0.2, function() playerStatusBar.Visible = false end)
-			end
-
-			arrowButton.ArrowIcon.Text = statusExpanded and "<" or ">"
-		end)
-
-		arrowButton:SetAttribute("Connected", true)
-	end
+                if statusExpanded then
+                    playerStatusBar.Visible = true
+                    createTween(playerStatusBar, {Size = UDim2.new(1, 0, 1.4, 0)}, 0.4, Enum.EasingStyle.Back):Play()
+                    if arrowIcon then arrowIcon.Text = "<" end -- Or adjust rotation/image
+                else
+                    createTween(playerStatusBar, {Size = UDim2.new(1, 0, 0, 0)}, 0.3):Play()
+                    task.delay(0.2, function() if not statusExpanded then playerStatusBar.Visible = false end end) -- Hide after tween if still collapsed
+                    if arrowIcon then arrowIcon.Text = ">" end -- Or adjust rotation/image
+                end
+            end)
+            arrowButton:SetAttribute("Connected", true)
+        end
+    end
 end
 
--- แสดงการแจ้งเตือนการเลเวลอัพ
+--[ Notification Functions ]--
+
+-- Shows a level up notification.
 local function showLevelUpNotification(newLevel, statIncreases)
-	-- สร้างข้อความแสดงค่าสถานะที่เพิ่มขึ้น
-	local statText = "LEVEL UP! You reached level " .. newLevel .. "!\n"
+	local statText = "LEVEL UP! Reached level " .. newLevel .. "!\n"
 	for stat, increase in pairs(statIncreases) do
-		local statName = stat:gsub("Max", "") -- Simplify name (MaxHP -> HP)
+		local statName = stat:gsub("Max", "") -- e.g., MaxHP -> HP
 		if increase > 0 then
 			statText = statText .. statName .. " +" .. increase .. " "
 		end
 	end
+	createNotification(statText, "rbxassetid://YOUR_LEVELUP_ICON_ID", 5) -- Replace with actual ID
+end
 
-	-- แสดงการแจ้งเตือน
-	createNotification(statText, Color3.fromRGB(80, 120, 200), 5)
+-- Shows a class level up notification.
+local function showClassLevelUpNotification(newClassLevel, statIncreases, nextClass)
+	local message = "CLASS LEVEL UP! " .. (playerClassInfo.class or "Class") .. " reached level " .. newClassLevel .. "!"
+	if nextClass then
+		message = message .. "\nUpgrade to " .. nextClass .. " is now available!"
 	end
+	createNotification(message, "rbxassetid://YOUR_CLASS_UP_ICON_ID", 5) -- Replace with actual ID
+end
 
-	-- Connect remote events
+
+--[ Remote Event Connections ]--
+
 updatePlayerStatsEvent.OnClientEvent:Connect(function(playerId, stats)
-	if playerId == player.UserId then
-		updateMyStatusBar(stats)
-	end
+	if playerId == player.UserId then updateMyStatusBar(stats) end
 end)
 
 if statChangedEvent then
@@ -685,131 +441,102 @@ if statChangedEvent then
 		local statsToUpdate = {}
 		for stat, values in pairs(changedStats) do
 			statsToUpdate[stat] = values.newValue
+			-- Update local cache immediately
 			currentPlayerStats[stat] = values.newValue
 		end
-		if statsToUpdate.hp and not statsToUpdate.maxHp then
-			statsToUpdate.maxHp = currentPlayerStats.maxHp
-		end
-		if statsToUpdate.mp and not statsToUpdate.maxMp then
-			statsToUpdate.maxMp = currentPlayerStats.maxMp
-		end
+		-- Ensure MaxHP/MaxMP are included if HP/MP changed
+		if statsToUpdate.hp and not statsToUpdate.maxHp then statsToUpdate.maxHp = currentPlayerStats.maxHp end
+		if statsToUpdate.mp and not statsToUpdate.maxMp then statsToUpdate.maxMp = currentPlayerStats.maxMp end
 		updateMyStatusBar(statsToUpdate)
 	end)
 end
 
 updateTurnEvent.OnClientEvent:Connect(function(currentPlayerId)
-	local turnDetails = {
+	-- This event provides only the ID, create basic details
+	local details = {
 		playerId = currentPlayerId,
-		playerName = "Unknown",
-		turnNumber = turnDetailsData and turnDetailsData.turnNumber or 1, -- Try to keep turn number if available
+		playerName = "Unknown", -- Will likely be updated by TurnDetails event
+		turnNumber = (turnDetailsData and turnDetailsData.turnNumber or 0) + 1, -- Estimate next turn number
 		playerClass = "Unknown",
 		playerLevel = 1
 	}
 	local foundPlayer = Players:GetPlayerByUserId(currentPlayerId)
-	if foundPlayer then
-		turnDetails.playerName = foundPlayer.Name
-		-- Potentially fetch class/level from attributes if available immediately
-	end
-	updateTurnIndicator(turnDetails)
+	if foundPlayer then details.playerName = foundPlayer.Name end
+	updateTurnIndicator(details) -- Update with basic info, expecting full details soon
 end)
 
-if updateExpEvent then
-	updateExpEvent.OnClientEvent:Connect(function(expData)
-		-- ตรวจสอบว่ามี ExpBar หรือไม่
-		if not myStatusBar then return end
-
-		-- ทำให้ ExpBar มองเห็นได้ (อาจซ่อนอยู่ใน UI ใหม่)
-		if myStatusBar:FindFirstChild("ExpBar") then
-			myStatusBar.ExpBar.Visible = true
-
-			if myStatusBar.ExpBar:FindFirstChild("ExpFill") then
-				playerClassInfo.exp = expData.exp
-				playerClassInfo.nextLevelExp = expData.nextLevelExp
-				playerClassInfo.classExp = expData.classExp
-				playerClassInfo.nextClassLevelExp = expData.nextClassLevelExp
-
-				local expRatio = math.clamp(expData.exp / expData.nextLevelExp, 0, 1)
-				createTween(myStatusBar.ExpBar.ExpFill, {Size = UDim2.new(expRatio, 0, 1, 0)}, 0.5):Play()
-
-				if myStatusBar.ExpBar:FindFirstChild("ExpText") then
-					myStatusBar.ExpBar.ExpText.Text = "EXP: " .. math.floor(expData.exp) .. "/" .. math.floor(expData.nextLevelExp)
-				end
-				end
-				end
-				end)
-				end
-
-				levelUpEvent.OnClientEvent:Connect(function(newLevel, statIncreases)
-	playerClassInfo.level = newLevel
-	showLevelUpNotification(newLevel, statIncreases)
-
-	-- อัปเดตค่าเลเวลใน UI
-	if myStatusBar and myStatusBar:FindFirstChild("PlayerLevel") then
-		if myStatusBar.PlayerLevel:FindFirstChild("LevelLabel") then
-			myStatusBar.PlayerLevel.LevelLabel.Text = "Lv." .. newLevel
-		else
-			myStatusBar.PlayerLevel.Text = "Lv." .. newLevel
-		end
-	end
-
-	-- Server should send UpdatePlayerStats after level up
-	end)
-
-	classLevelUpEvent.OnClientEvent:Connect(function(newClassLevel, statIncreases, nextClass)
-	playerClassInfo.classLevel = newClassLevel
-
-	-- แสดงการแจ้งเตือนคลาสเลเวลอัพ
-	local message = "CLASS LEVEL UP! " .. (playerClassInfo.class or "Class") .. " reached level " .. newClassLevel
-	if nextClass then
-		message = message .. "\nUpgrade to " .. nextClass .. " is now available!"
-	end
-
-	createNotification(message, CLASS_COLORS[playerClassInfo.class] or Color3.fromRGB(80, 120, 200), 5)
-	end)
-
-	if updateTurnDetailsEvent then
-	updateTurnDetailsEvent.OnClientEvent:Connect(updateTurnIndicator)
+if updateTurnDetailsEvent then
+	updateTurnDetailsEvent.OnClientEvent:Connect(updateTurnIndicator) -- Receives full details table
 end
 
 if updateTurnTimerEvent then
 	updateTurnTimerEvent.OnClientEvent:Connect(updateTurnTimer)
 end
 
-endGameEvent.OnClientEvent:Connect(function(reason)
-	local GameOverScreen = PlayerGui:WaitForChild("GameOverScreen")
-	if GameOverScreen then
-		GameOverScreen.Enabled = true
-		MainGameUI.Enabled = false
-		if PopupUI then PopupUI.Enabled = false end
+if updateExpEvent then
+	updateExpEvent.OnClientEvent:Connect(function(expData)
+		-- Update internal state first
+        playerClassInfo.exp = expData.exp
+        playerClassInfo.nextLevelExp = expData.nextLevelExp
+        playerClassInfo.classExp = expData.classExp
+        playerClassInfo.nextClassLevelExp = expData.nextClassLevelExp
+        -- Update UI (pass relevant parts to updateMyStatusBar)
+        updateMyStatusBar({exp = expData.exp, nextLevelExp = expData.nextLevelExp})
+	end)
+end
 
-		local Background = GameOverScreen:FindFirstChild("Background")
-		if Background then
-			local WinnerAnnouncement = Background:FindFirstChild("WinnerAnnouncement")
-			if WinnerAnnouncement then
-				WinnerAnnouncement.Text = reason
-			end
-		end
+levelUpEvent.OnClientEvent:Connect(function(newLevel, statIncreases)
+	-- Update internal state
+    playerClassInfo.level = newLevel
+    -- Update UI Level display
+    updateMyStatusBar({level = newLevel})
+    -- Show notification
+	showLevelUpNotification(newLevel, statIncreases)
+	-- Note: Server should follow up with UpdatePlayerStats for actual stat changes
+end)
+
+classLevelUpEvent.OnClientEvent:Connect(function(newClassLevel, statIncreases, nextClass)
+    -- Update internal state
+	playerClassInfo.classLevel = newClassLevel
+    -- Show notification
+	showClassLevelUpNotification(newClassLevel, statIncreases, nextClass)
+    -- Note: Server might follow up with UpdatePlayerStats if base stats change
+end)
+
+endGameEvent.OnClientEvent:Connect(function(reason)
+	local gameOverScreen = PlayerGui:FindFirstChild("GameOverScreen")
+	if gameOverScreen then
+		gameOverScreen.Enabled = true
+		MainGameUI.Enabled = false
+		if PopupUI then PopupUI.Enabled = false end -- Disable popup container too
+		local background = gameOverScreen:FindFirstChild("Background")
+		local announcement = background and background:FindFirstChild("WinnerAnnouncement")
+		if announcement then announcement.Text = reason end
 	end
 end)
 
--- Initialize UI
-MainGameUI.Enabled = false -- Start disabled, enabled by server or ClassSelection
+--[ Initialization ]--
+
+-- Set initial UI states
+MainGameUI.Enabled = false -- Start disabled, enabled by game state manager
 if PopupUI then
-	PopupUI.Enabled = true -- Container is always enabled
+	PopupUI.Enabled = true -- Popup container itself is always enabled
 	if InventoryUI then InventoryUI.Visible = false end
 	if QuestUI then QuestUI.Visible = false end
 end
 
--- Setup initial UI elements
-myStatusBar = StatusBarContainer:FindFirstChild("MyPlayerStatusBar")
+-- Setup initial references and connect handlers
+setupPlayerStatusBar() -- Find the status bar initially
 setupButtonHandlers()
 setupEndTurnButton()
 
--- Ensure status bar exists when UI becomes enabled
+-- Ensure status bar reference is updated if MainGameUI is enabled later
 MainGameUI:GetPropertyChangedSignal("Enabled"):Connect(function()
-	if MainGameUI.Enabled and not myStatusBar then
-		myStatusBar = StatusBarContainer:FindFirstChild("MyPlayerStatusBar")
+	if MainGameUI.Enabled then
+		setupPlayerStatusBar() -- Re-check or find status bar if it wasn't found initially
+        -- Optionally refresh status bar if needed:
+        -- if myStatusBar then updateMyStatusBar(currentPlayerStats) end
 	end
 end)
 
-print("[MainGameUIHandler] Initialized.")
+print("[MainGameUIHandler] Initialized (v" .. script.Version.Value .. ").") -- Assuming you add a StringValue named "Version" to the script
