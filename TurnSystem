@@ -1,6 +1,6 @@
 -- TurnSystem.lua
 -- Module for managing turn system and player order
--- Version: 3.0.6 (Refined EndPlayerTurn check for race conditions)
+-- Version: 3.1.0 (Added Death & Respawn Handling)
 
 local TurnSystem = {}
 TurnSystem.__index = TurnSystem
@@ -28,6 +28,7 @@ function TurnSystem.new()
 	self.turnStates = {} -- Stores additional state per player if needed
 	self.skipTurnPlayers = {} -- Stores UserId -> turns to skip
 	self.pendingEndTurn = {} -- Stores UserId -> {reason, timestamp}
+	self.deadPlayers = {} -- Stores UserId -> dead state (true/false)
 
 	-- Callbacks (can be set by other systems like GameManager)
 	self.onTurnStart = nil
@@ -207,6 +208,12 @@ function TurnSystem:StartPlayerTurn(playerID, attemptCount)
 		return self:NextTurn(attemptCount + 1) -- Try the next player
 	end
 
+	-- Check if the player is dead
+	if self.deadPlayers[playerID] then
+		print("[TurnSystem] Player", player.Name, "is dead. Skipping turn.")
+		return self:NextTurn(attemptCount + 1) -- Skip dead players
+	end
+
 	-- Check if the player needs to skip this turn
 	if self.skipTurnPlayers[playerID] then
 		print("[TurnSystem] Player", player.Name, "is skipping turn.") -- Debug Print
@@ -337,12 +344,10 @@ function TurnSystem:StartTurnTimer()
 end
 
 -- End the current player's turn
--- *** REFINED CHECK FOR RACE CONDITION ***
 function TurnSystem:EndPlayerTurn(playerID, reason)
 	reason = reason or "normal"
 	print(string.format("[TurnSystem DEBUG] EndPlayerTurn called for ID: %s, Reason: %s", tostring(playerID), reason)) -- DEBUG
 
-	-- *** REFINED CHECK ***
 	-- Check if the turn is actually active AND if the playerID matches the current turn
 	-- This prevents errors if EndPlayerTurn is called multiple times during turn transition
 	if not self.isTurnActive or playerID ~= self.currentPlayerTurn then
@@ -360,7 +365,6 @@ function TurnSystem:EndPlayerTurn(playerID, reason)
 		end
 		return false -- Stop execution if the state is invalid
 	end
-	-- *** END OF REFINED CHECK ***
 
 	-- Check for pending end turn to avoid multiple calls, unless it's a timeout
 	if self.pendingEndTurn[playerID] and reason ~= "timeout" then
@@ -495,7 +499,13 @@ end
 
 -- Check if it is currently the specified player's turn
 function TurnSystem:IsPlayerTurn(playerID)
-	return playerID == self.currentPlayerTurn and self.isTurnActive
+	-- First check if the player is in the dead state
+	if self.deadPlayers[playerID] then
+		return false
+		end
+
+		-- Check if it's the player's active turn
+return playerID == self.currentPlayerTurn and self.isTurnActive
 end
 
 -- Handle actions received from the client during their turn
@@ -556,6 +566,7 @@ function TurnSystem:HandlePlayerLeaving(playerID)
 	self.skipTurnPlayers[playerID] = nil
 	self.turnStates[playerID] = nil
 	self.pendingEndTurn[playerID] = nil
+	self.deadPlayers[playerID] = nil
 
 	-- If the leaving player was the one whose turn it was
 	if wasCurrentTurn then
@@ -578,6 +589,54 @@ function TurnSystem:HandlePlayerLeaving(playerID)
 	return true
 end
 
+-- NEW: Handle player death
+function TurnSystem:OnPlayerDeath(playerID)
+	print("[TurnSystem] Player", playerID, "has died. Adjusting turn system...")
+
+	-- Mark the player as dead
+	self.deadPlayers[playerID] = true
+
+	-- If it's currently the dead player's turn, end it immediately
+	if self.currentPlayerTurn == playerID and self.isTurnActive then
+		print("[TurnSystem] Ending turn of dead player", playerID)
+		self:EndPlayerTurn(playerID, "player_death")
+		return true
+		end
+
+		-- Player was not the current turn, so just mark them dead
+print("[TurnSystem] Marked player", playerID, "as dead. They will be skipped in turn rotation.")
+return true
+end
+
+-- NEW: Handle player respawn
+function TurnSystem:OnPlayerRespawn(playerID)
+	print("[TurnSystem] Player", playerID, "has respawned. Adjusting turn system...")
+
+	-- Remove dead state
+	self.deadPlayers[playerID] = nil
+
+	-- Check if player exists in turn order
+	local isInTurnOrder = false
+	for _, id in ipairs(self.turnOrder) do
+		if id == playerID then
+			isInTurnOrder = true
+			break
+		end
+	end
+
+	-- If player was removed from turn order, add them back
+	if not isInTurnOrder then
+		table.insert(self.turnOrder, playerID)
+		print("[TurnSystem] Added respawned player", playerID, "back to turn order.")
+		end
+
+		-- Set player to skip one turn after respawn
+self.skipTurnPlayers[playerID] = 1
+print("[TurnSystem] Player", playerID, "will skip next turn after respawn.")
+
+return true
+end
+
 -- Reset the turn system to its initial state
 function TurnSystem:Reset()
 	print("[TurnSystem] Resetting Turn System...") -- Debug
@@ -585,18 +644,19 @@ function TurnSystem:Reset()
 	if self.turnTimer then
 		self.turnTimer:Disconnect()
 		self.turnTimer = nil
-	end
-	-- Clear all state variables
-	self.turnOrder = {}
-	self.currentTurnIndex = 0
-	self.currentPlayerTurn = nil
-	self.isTurnActive = false
-	self.turnTimeRemaining = 0
-	self.turnStates = {}
-	self.skipTurnPlayers = {}
-	self.pendingEndTurn = {}
-	print("[TurnSystem] Reset complete.") -- Debug
-	return true
+		end
+		-- Clear all state variables
+self.turnOrder = {}
+self.currentTurnIndex = 0
+self.currentPlayerTurn = nil
+self.isTurnActive = false
+self.turnTimeRemaining = 0
+self.turnStates = {}
+self.skipTurnPlayers = {}
+self.pendingEndTurn = {}
+self.deadPlayers = {}
+print("[TurnSystem] Reset complete.") -- Debug
+return true
 end
 
 return TurnSystem
