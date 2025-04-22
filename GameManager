@@ -1,6 +1,6 @@
 -- GameManager.lua
 -- Main module that controls all game logic
--- Version: 3.0.0 (Optimized)
+-- Version: 3.0.1 (Fixed initial player spawn position)
 
 local GameManager = {}
 GameManager.__index = GameManager
@@ -9,6 +9,7 @@ GameManager.__index = GameManager
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace") -- เพิ่ม Workspace
 
 -- Constants
 local MIN_PLAYERS = 2
@@ -57,21 +58,38 @@ function GameManager:GetRemoteEvents()
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
 	local gameRemotes = remotes:WaitForChild("GameRemotes")
 	local uiRemotes = remotes:WaitForChild("UIRemotes")
+	local boardRemotes = remotes:WaitForChild("BoardRemotes") -- เพิ่ม BoardRemotes
+
+	-- ตรวจสอบ Event ที่จำเป็น
+	local function ensureEvent(parent, name)
+		local event = parent:FindFirstChild(name)
+		if not event then
+			warn("Creating missing RemoteEvent:", name, "in", parent.Name)
+			event = Instance.new("RemoteEvent", parent)
+			event.Name = name
+		end
+		return event
+	end
 
 	return {
 		game = {
-			startGame = gameRemotes:WaitForChild("StartGame"),
-			endGame = gameRemotes:WaitForChild("EndGame"),
-			updateTurn = gameRemotes:WaitForChild("UpdateTurn")
+			startGame = ensureEvent(gameRemotes, "StartGame"),
+			endGame = ensureEvent(gameRemotes, "EndGame"),
+			updateTurn = ensureEvent(gameRemotes, "UpdateTurn"),
+			gameStats = ensureEvent(gameRemotes, "GameStats") -- เพิ่ม GameStats
 		},
 		ui = {
-			updateLoading = uiRemotes:WaitForChild("UpdateLoading"),
-			updatePlayersReady = uiRemotes:WaitForChild("UpdatePlayersReady"),
-			showClassSelection = uiRemotes:WaitForChild("ShowClassSelection"),
-			updateClassSelection = uiRemotes:WaitForChild("UpdateClassSelection"),
-			updateClassSelectionTimer = uiRemotes:WaitForChild("UpdateClassSelectionTimer"),
-			notifyRandomClass = uiRemotes:WaitForChild("NotifyRandomClass"),
-			showMainGameUI = uiRemotes:WaitForChild("ShowMainGameUI")
+			updateLoading = ensureEvent(uiRemotes, "UpdateLoading"),
+			updatePlayersReady = ensureEvent(uiRemotes, "UpdatePlayersReady"),
+			showClassSelection = ensureEvent(uiRemotes, "ShowClassSelection"),
+			updateClassSelection = ensureEvent(uiRemotes, "UpdateClassSelection"),
+			updateClassSelectionTimer = ensureEvent(uiRemotes, "UpdateClassSelectionTimer"),
+			notifyRandomClass = ensureEvent(uiRemotes, "NotifyRandomClass"),
+			showMainGameUI = ensureEvent(uiRemotes, "ShowMainGameUI")
+		},
+		board = { -- เพิ่ม section สำหรับ Board Remotes
+			startPlayerMovementPath = ensureEvent(boardRemotes, "StartPlayerMovementPath"),
+			updatePlayerPosition = ensureEvent(boardRemotes, "UpdatePlayerPosition") -- ยังคงเก็บไว้เผื่อใช้
 		}
 	}
 end
@@ -157,11 +175,16 @@ function GameManager:CountReadyPlayers()
 end
 
 function GameManager:AreAllPlayersReady()
-	for _, isReady in pairs(self.playersReady) do
-		if not isReady then return false end
+	local playerCount = self.playerManager:GetPlayerCount()
+	if playerCount == 0 then return false end -- เพิ่มเช็คกรณีไม่มีผู้เล่นเลย
+	for _, player in pairs(Players:GetPlayers()) do
+		if not self.playersReady[player.UserId] then
+			return false
+		end
 	end
 	return true
 end
+
 
 function GameManager:HaveAllPlayersSelectedClass()
 	for _, player in pairs(Players:GetPlayers()) do
@@ -197,7 +220,10 @@ function GameManager:OnPlayerReady(player)
 	local playerCount = self.playerManager:GetPlayerCount()
 
 	-- Update loading UI
-	local progress = readyCount / playerCount
+	local progress = 0
+	if playerCount > 0 then -- ป้องกันการหารด้วยศูนย์
+		progress = readyCount / playerCount
+	end
 	self.remotes.ui.updateLoading:FireAllClients(progress)
 	self.remotes.ui.updatePlayersReady:FireAllClients(readyCount, playerCount)
 
@@ -245,8 +271,14 @@ function GameManager:StartClassSelectionTimeout()
 		-- Update timestamp
 		self.timers.classSelectionTimestamp = currentTime
 
-		-- Skip if not in class selection
-		if not self.gameState.isClassSelection then return end
+		-- Skip if not in class selection or game ended
+		if not self.gameState.isClassSelection or self.gameState.isGameEnded then
+			if self.timers.classSelection then
+				self.timers.classSelection:Disconnect()
+				self.timers.classSelection = nil
+			end
+			return
+		end
 
 		-- Decrease timer
 		self.gameState.selectionTimeLeft = self.gameState.selectionTimeLeft - 1
@@ -258,17 +290,23 @@ function GameManager:StartClassSelectionTimeout()
 
 		-- Check if all players selected
 		if self:HaveAllPlayersSelectedClass() then
-			self.timers.classSelection:Disconnect()
-			self.timers.classSelection = nil
-			wait(1.5)
-			self:StartGame()
+			if self.timers.classSelection then
+				self.timers.classSelection:Disconnect()
+				self.timers.classSelection = nil
+			end
+			task.wait(1.5) -- ใช้ task.wait แทน wait
+			if not self.gameState.isGameStarted then -- ตรวจสอบอีกครั้งก่อนเริ่มเกม
+				self:StartGame()
+			end
 			return
 		end
 
 		-- Time's up
 		if timeLeft <= 0 then
-			self.timers.classSelection:Disconnect()
-			self.timers.classSelection = nil
+			if self.timers.classSelection then
+				self.timers.classSelection:Disconnect()
+				self.timers.classSelection = nil
+			end
 
 			-- Randomly assign class to remaining players
 			for _, player in pairs(Players:GetPlayers()) do
@@ -279,8 +317,10 @@ function GameManager:StartClassSelectionTimeout()
 				end
 			end
 
-			wait(3)
-			self:StartGame()
+			task.wait(3) -- ใช้ task.wait แทน wait
+			if not self.gameState.isGameStarted then -- ตรวจสอบอีกครั้งก่อนเริ่มเกม
+				self:StartGame()
+			end
 		end
 	end)
 end
@@ -295,33 +335,47 @@ function GameManager:OnPlayerSelectedClass(player, selectedClass)
 	-- Update UI
 	self.remotes.ui.updateClassSelection:FireAllClients(player.UserId, selectedClass)
 
-	-- Check if all selected
-	if self:HaveAllPlayersSelectedClass() and self.gameState.isClassSelection then
+	-- Check if all selected and still in class selection phase
+	if self.gameState.isClassSelection and self:HaveAllPlayersSelectedClass() then
 		if self.timers.classSelection then
 			self.timers.classSelection:Disconnect()
 			self.timers.classSelection = nil
 		end
 
-		wait(2)
-		self:StartGame()
+		task.wait(2) -- ใช้ task.wait แทน wait
+		if not self.gameState.isGameStarted then -- ตรวจสอบอีกครั้งก่อนเริ่มเกม
+			self:StartGame()
+		end
 	end
 end
 
 function GameManager:StartGame()
+	-- ป้องกันการเริ่มเกมซ้ำซ้อน
+	if self.gameState.isGameStarted then
+		print("Game already started, skipping StartGame call.")
+		return
+	end
+
 	local playerCount = self.playerManager:GetPlayerCount()
 
 	-- Check player count
-	if playerCount < MIN_PLAYERS then return end
+	if playerCount < MIN_PLAYERS then
+		warn("Cannot start game, not enough players:", playerCount, "Minimum:", MIN_PLAYERS)
+		-- อาจจะต้อง Reset กลับไปหน้า Loading หรือรอผู้เล่นเพิ่ม
+		return
+	end
 
+	print("Starting game...")
 	-- Update game state
 	self.gameState.isClassSelection = false
 	self.gameState.isGameStarted = true
+	self.gameState.isLoading = false -- Ensure loading is false
 
 	-- Show main game UI
 	self.remotes.ui.showMainGameUI:FireAllClients()
 	self.remotes.game.startGame:FireAllClients()
 
-	-- Initialize player positions
+	-- Initialize player positions and visuals
 	self:InitializePlayerPositions()
 
 	-- Start turn system
@@ -329,31 +383,57 @@ function GameManager:StartGame()
 		self.turnSystem:CreateTurnOrderFromActivePlayers(self.playerManager)
 		self.turnSystem:StartTurnSystem()
 		self.gameState.currentTurn = 1
+		print("Turn system started. Current turn:", self.gameState.currentTurn)
+	else
+		warn("TurnSystem not available!")
 	end
 
 	-- Start game timer
 	self:StartGameTimer()
+	print("Game started successfully.")
 end
 
+-- *** แก้ไขฟังก์ชันนี้ ***
 function GameManager:InitializePlayerPositions()
-	if not self.boardSystem then return false end
-
-	-- Set initial positions
-	for _, player in pairs(Players:GetPlayers()) do
-		self.boardSystem:SetPlayerPosition(player.UserId, 1, 1)
-
-		-- Notify all clients
-		local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
-		boardRemotes:WaitForChild("UpdatePlayerPosition"):FireAllClients(player.UserId, 1)
+	if not self.boardSystem then
+		warn("BoardSystem not found in InitializePlayerPositions")
+		return false
 	end
 
+	print("Initializing player positions...")
+	local startTileId = 1 -- Tile เริ่มต้นคือ 1
+
+	for _, player in pairs(Players:GetPlayers()) do
+		local playerId = player.UserId
+
+		-- 1. ตั้งค่าตำแหน่งตรรกะใน BoardSystem
+		self.boardSystem:SetPlayerPosition(playerId, startTileId, nil) -- ตั้งค่า lastTile เป็น nil หรือ startTileId ก็ได้
+		print("Set logical position for player", playerId, "to tile", startTileId)
+
+		-- 2. (สำคัญ) ส่ง Event ให้ Client เพื่อ *แสดงผล* ตัวละครที่ตำแหน่งเริ่มต้น
+		-- เราจะใช้ StartPlayerMovementPath เพื่อให้ Client ใช้ logic เดิมในการวาร์ปตัวละครไปที่ Tile แรก
+		local initialMovementData = {
+			path = {startTileId}, -- Path ที่มีแค่ Tile เริ่มต้น
+			directions = nil, -- ไม่มีทางเลือก
+			requiresConfirmation = false -- ไม่ต้องรอการยืนยันจาก Client เพราะเป็นการตั้งค่าเริ่มต้น
+		}
+		print("Firing StartPlayerMovementPath for player", playerId, "with path:", table.concat(initialMovementData.path, ", "))
+		self.remotes.board.startPlayerMovementPath:FireClient(player, playerId, initialMovementData)
+
+		-- 3. (ทางเลือก) ส่ง Event UpdatePlayerPosition เดิมเผื่อมีระบบอื่นใช้
+		-- self.remotes.board.updatePlayerPosition:FireAllClients(playerId, startTileId)
+	end
+
+	print("Player positions initialized.")
 	return true
 end
+
 
 function GameManager:StartGameTimer()
 	local lastUpdateTime = tick()
 
-	spawn(function()
+	-- ใช้ task.spawn เพื่อไม่ให้ block thread หลัก
+	task.spawn(function()
 		while self.gameState.isGameStarted and not self.gameState.isGameEnded do
 			local currentTime = tick()
 			local elapsed = currentTime - lastUpdateTime
@@ -361,17 +441,19 @@ function GameManager:StartGameTimer()
 			if elapsed >= 1 then
 				lastUpdateTime = currentTime
 				self.gameState.gameTime = self.gameState.gameTime + 1
+				-- print("Game Time:", self.gameState.gameTime) -- Optional: พิมพ์เวลาเกม
 			end
 
-			wait(0.2)
+			task.wait(0.2) -- ใช้ task.wait
 		end
+		print("Game timer stopped.")
 	end)
 end
 
 function GameManager:CheckWinCondition()
 	-- Check player count
 	local activePlayers = self.playerManager:GetPlayerCount()
-	if activePlayers <= 1 then
+	if activePlayers <= 1 and self.gameState.isGameStarted then -- เพิ่มเช็ค isGameStarted
 		-- Find last player
 		local lastPlayer = nil
 		for _, player in pairs(Players:GetPlayers()) do
@@ -382,13 +464,16 @@ function GameManager:CheckWinCondition()
 		if lastPlayer then
 			self:EndGame(lastPlayer.Name .. " wins! (Last player remaining)")
 			return true
+		else -- กรณีไม่มีผู้เล่นเหลือเลย
+			self:EndGame("Game ended. No players remaining.")
+			return true
 		end
 	end
 
 	-- Check turn count
-	if self.gameState.currentTurn >= 30 then
+	if self.gameState.currentTurn >= 30 and self.gameState.isGameStarted then -- เพิ่มเช็ค isGameStarted
 		local richestPlayer = nil
-		local highestMoney = 0
+		local highestMoney = -1 -- เริ่มต้นที่ -1 เพื่อให้ผู้เล่นคนแรกที่มีเงิน > -1 เป็นผู้ชนะได้
 
 		for _, player in pairs(Players:GetPlayers()) do
 			local playerData = self.playerManager:GetPlayerData(player)
@@ -399,7 +484,10 @@ function GameManager:CheckWinCondition()
 		end
 
 		if richestPlayer then
-			self:EndGame(richestPlayer.Name .. " wins with " .. highestMoney .. " coins!")
+			self:EndGame(richestPlayer.Name .. " wins with " .. highestMoney .. " coins! (Turn limit reached)")
+			return true
+		else -- กรณีไม่มีใครมีเงินเลย
+			self:EndGame("Game ended. Turn limit reached, but no winner found based on money.")
 			return true
 		end
 	end
@@ -408,53 +496,82 @@ function GameManager:CheckWinCondition()
 end
 
 function GameManager:OnPlayerRemoving(player)
+	local playerId = player.UserId
+	print("Player removing:", player.Name, "(ID:", playerId, ")")
+
 	-- Remove player data
 	self.playerManager:UnregisterPlayer(player)
-	self.playersReady[player.UserId] = nil
-	self.playersSelectedClass[player.UserId] = nil
+	self.playersReady[playerId] = nil
+	self.playersSelectedClass[playerId] = nil
 
-	-- Update player count
+	-- ถ้าเกมเริ่มแล้ว ให้ TurnSystem จัดการผู้เล่นที่ออก
+	if self.gameState.isGameStarted and self.turnSystem then
+		self.turnSystem:HandlePlayerLeave(playerId)
+	end
+
+	-- Update player count UI
 	local playerCount = self.playerManager:GetPlayerCount()
 	local readyCount = self:CountReadyPlayers()
 	self.remotes.ui.updatePlayersReady:FireAllClients(readyCount, playerCount)
 
-	-- Check remaining players
-	if self.gameState.isGameStarted and playerCount < MIN_PLAYERS then
-		self:EndGame("Not enough players remaining (only " .. playerCount .. " left)")
+	-- Check end game conditions only if the game has started
+	if self.gameState.isGameStarted then
+		-- Check if enough players remain immediately after removal
+		if playerCount < MIN_PLAYERS then
+			self:EndGame("Not enough players remaining (only " .. playerCount .. " left)")
+		else
+			-- Check win condition (e.g., if the leaving player was the only opponent)
+			self:CheckWinCondition()
+		end
 	end
-
-	-- Check win condition
-	self:CheckWinCondition()
 end
 
+
 function GameManager:EndGame(reason)
+	-- ป้องกันการจบเกมซ้ำซ้อน
+	if self.gameState.isGameEnded then
+		print("Game already ended, skipping EndGame call. Reason:", reason)
+		return
+	end
+
+	print("Ending game. Reason:", reason)
 	-- Update game state
 	self.gameState.isGameEnded = true
+	self.gameState.isGameStarted = false -- หยุดสถานะเกมกำลังเล่น
+	self.gameState.isClassSelection = false
+	self.gameState.isLoading = false
 
 	-- Cancel timers
 	if self.timers.playerCheck then
 		self.timers.playerCheck:Disconnect()
 		self.timers.playerCheck = nil
+		print("Player check timer stopped.")
 	end
 
 	if self.timers.classSelection then
 		self.timers.classSelection:Disconnect()
 		self.timers.classSelection = nil
+		print("Class selection timer stopped.")
 	end
 
 	-- Reset turn system
 	if self.turnSystem then
 		self.turnSystem:Reset()
+		print("Turn system reset.")
 	end
 
 	-- Notify all clients
 	self.remotes.game.endGame:FireAllClients(reason)
+	print("EndGame event fired to clients.")
 
-	-- Show stats
-	self:ShowGameStats(reason)
+	-- Show stats after a short delay
+	task.delay(2, function() -- ใช้ task.delay
+		self:ShowGameStats(reason)
+	end)
 end
 
 function GameManager:ShowGameStats(reason)
+	print("Showing game stats...")
 	-- Create stats data
 	local gameStats = {
 		reason = reason,
@@ -463,17 +580,21 @@ function GameManager:ShowGameStats(reason)
 		playerStats = {}
 	}
 
-	-- Collect player stats
-	for _, player in pairs(Players:GetPlayers()) do
-		local playerData = self.playerManager:GetPlayerData(player)
-		if playerData then
+	-- Collect player stats from PlayerManager (safer)
+	local allPlayerData = self.playerManager:GetAllPlayerData()
+	for playerId, playerData in pairs(allPlayerData) do
+		local player = Players:GetPlayerByUserId(playerId)
+		if player then -- ตรวจสอบว่าผู้เล่นยังอยู่ในเกมหรือไม่
 			table.insert(gameStats.playerStats, {
 				playerName = player.Name,
-				playerId = player.UserId,
+				playerId = playerId,
 				level = playerData.stats and playerData.stats.level or 1,
 				money = playerData.stats and playerData.stats.money or 0,
 				class = playerData.class or "Unknown"
 			})
+		else
+			-- อาจจะเพิ่มข้อมูลผู้เล่นที่ออกไปแล้วถ้าต้องการ
+			-- table.insert(gameStats.playerStats, { playerName = "Player Left ("..playerId..")", ... })
 		end
 	end
 
@@ -483,17 +604,13 @@ function GameManager:ShowGameStats(reason)
 	end)
 
 	-- Send stats
-	local statsEvent = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("GameRemotes"):FindFirstChild("GameStats")
-	if not statsEvent then
-		statsEvent = Instance.new("RemoteEvent")
-		statsEvent.Name = "GameStats"
-		statsEvent.Parent = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("GameRemotes")
-	end
-
-	statsEvent:FireAllClients(gameStats)
+	self.remotes.game.gameStats:FireAllClients(gameStats)
+	print("GameStats event fired to clients.")
 end
 
+
 function GameManager:ResetGame()
+	print("Resetting game...")
 	-- Reset game state
 	self.gameState = {
 		isLoading = true,
@@ -509,26 +626,40 @@ function GameManager:ResetGame()
 	self.playersReady = {}
 	self.playersSelectedClass = {}
 
-	-- Cancel timers
+	-- Cancel timers if they are still running
 	if self.timers.playerCheck then
 		self.timers.playerCheck:Disconnect()
 		self.timers.playerCheck = nil
 	end
-
 	if self.timers.classSelection then
 		self.timers.classSelection:Disconnect()
 		self.timers.classSelection = nil
 	end
 
-	-- Reset players
-	for _, player in pairs(Players:GetPlayers()) do
-		self.playerManager:RegisterPlayer(player)
-		self.playersReady[player.UserId] = false
-		self.remotes.ui.updateLoading:FireClient(player, 0)
+	-- Reset systems that need resetting
+	if self.turnSystem then self.turnSystem:Reset() end
+	if self.boardSystem then
+		-- อาจจะต้องเคลียร์ playerPositions ใน boardSystem ด้วย
+		-- self.boardSystem:ClearAllPlayerPositions() -- สมมติว่ามีฟังก์ชันนี้
+	end
+	if self.playerManager then
+		-- self.playerManager:ResetAllPlayerData() -- สมมติว่ามีฟังก์ชันนี้
 	end
 
-	-- Start player check
+	-- Reset players currently in the server
+	for _, player in pairs(Players:GetPlayers()) do
+		-- Re-register player (อาจจะไม่จำเป็นถ้า PlayerManager ไม่ได้ลบข้อมูลตอน Reset)
+		-- self.playerManager:RegisterPlayer(player)
+		self.playersReady[player.UserId] = false
+		-- Send loading screen again
+		self.remotes.ui.updateLoading:FireClient(player, 0)
+		-- อาจจะต้อง Kick ผู้เล่น หรือส่งไปหน้า Lobby UI แทน
+	end
+
+	-- Restart the initial player check loop
 	self:StartPlayerCheck()
+	print("Game reset complete. Waiting for players...")
 end
+
 
 return GameManager
