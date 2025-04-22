@@ -1,7 +1,7 @@
 -- PlayerManager.lua
 -- Module for managing all player data in the game
 -- Location: ServerStorage/Modules/PlayerManager.lua
--- Version: 1.0.8 (Fixed money reset issue on level up)
+-- Version: 1.1.0 (Added Checkpoint Support)
 
 local PlayerManager = {}
 PlayerManager.__index = PlayerManager
@@ -112,7 +112,8 @@ function PlayerManager:GetDefaultStatsForClass(className)
 		}
 		if className == "Thief" then stats.money = 150 end
 		print(string.format("[PlayerManager DEBUG] GetDefaultStatsForClass: Created stats for %s using ClassData: MaxHP=%d, HP=%d, MaxMP=%d, MP=%d, ATK=%d, DEF=%d, MAGIC=%d",
-			className, stats.maxHp, stats.hp, stats.maxMp, stats.mp, stats.attack, stats.defense, stats.magic))
+			className, stats.maxHp, stats.hp, stats.maxMp, stats.mp, stats.attack,
+			stats.defense, stats.magic))
 		return stats
 	else
 		-- Hardcoded fallback stats
@@ -407,7 +408,6 @@ function PlayerManager:SetPlayerClass(player, className)
 end
 
 -- Apply equipment stats on top of base stats
--- *** FIXED: Now preserves money value during stat calculations ***
 function PlayerManager:ApplyEquipmentStatsToPlayer(player)
 	local playerData = self:GetPlayerData(player)
 	if not playerData then return false end
@@ -449,7 +449,7 @@ function PlayerManager:ApplyEquipmentStatsToPlayer(player)
 	local oldMaxHp = playerData.stats.maxHp
 	local oldMaxMp = playerData.stats.maxMp
 
-	-- *** IMPORTANT: Save current money before stats calculation ***
+	-- IMPORTANT: Save current money before stats calculation
 	local currentMoney = playerData.stats.money or 100
 	print("[PlayerManager DEBUG] Saving current money value before stat calculation:", currentMoney)
 
@@ -463,7 +463,7 @@ function PlayerManager:ApplyEquipmentStatsToPlayer(player)
 		end
 	end
 
-	-- *** IMPORTANT: Restore saved money after stats calculation ***
+	-- IMPORTANT: Restore saved money after stats calculation
 	playerData.stats.money = currentMoney
 	print("[PlayerManager DEBUG] Restored money value after stat calculation:", playerData.stats.money)
 
@@ -616,16 +616,54 @@ function PlayerManager:HandlePlayerDeath(player)
 	local playerData = self:GetPlayerData(player)
 	if not playerData then return false end
 	print("[PlayerManager DEBUG] HandlePlayerDeath called for:", player.Name)
+
 	task.delay(5, function()
 		if not self.players[player.UserId] or not player:IsDescendantOf(Players) then return end
 		print("[PlayerManager DEBUG] Respawning player:", player.Name)
 		playerData.stats.hp = playerData.stats.maxHp
 		playerData.stats.mp = playerData.stats.maxMp
 		playerData.isAlive = true
+
+		-- Get checkpoint system if available
+		local checkpointSystem = self.gameManager and self.gameManager.checkpointSystem or _G.CheckpointSystem
+		local respawnTileId = 1 -- Default to start tile
+
+		-- Respawn the player
 		player:LoadCharacter()
-		task.wait(0.5)
+
+		-- If we have a checkpoint system, use it to get respawn tile
+		if checkpointSystem then
+			respawnTileId = checkpointSystem:GetPlayerRespawnTileId(player)
+			local respawnPosition = checkpointSystem:GetPlayerRespawnPosition(player)
+
+			-- Wait for character to load
+			task.wait(0.5)
+
+			-- Move player to respawn position
+			local character = player.Character
+			if character and respawnPosition then
+				local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+				if humanoidRootPart then
+					humanoidRootPart.CFrame = CFrame.new(respawnPosition + Vector3.new(0, 3, 0))
+					print("[PlayerManager DEBUG] Teleported player", player.Name, "to respawn position at tile", respawnTileId)
+				end
+			end
+
+			-- Update board system with player's position if available
+			local boardSystem = self.gameManager and self.gameManager.boardSystem or _G.BoardSystem
+			if boardSystem then
+				boardSystem:SetPlayerPosition(player.UserId, respawnTileId, nil)
+				print("[PlayerManager DEBUG] Updated player", player.Name, "position in BoardSystem to tile", respawnTileId)
+			end
+		else
+			print("[PlayerManager DEBUG] CheckpointSystem not found, using default respawn logic.")
+			task.wait(0.5)
+		end
+
+		-- Reconnect health systems
 		self:ConnectPlayerHealth(player)
 	end)
+
 	return true
 end
 
@@ -685,7 +723,7 @@ function PlayerManager:HealPlayer(player, healAmount, source)
 	return true
 end
 
--- Set Auto Heal Settings (Example function, not fully implemented w/ timer)
+-- Set Auto Heal Settings
 function PlayerManager:SetAutoHealSettings(enabled, interval, amount, maxPercent)
 	AUTO_HEAL_ENABLED = enabled or false
 	if interval then AUTO_HEAL_INTERVAL = math.max(1, interval) end
@@ -694,14 +732,13 @@ function PlayerManager:SetAutoHealSettings(enabled, interval, amount, maxPercent
 	print("[PlayerManager DEBUG] SetAutoHealSettings:", AUTO_HEAL_ENABLED, AUTO_HEAL_INTERVAL, AUTO_HEAL_AMOUNT, MAX_AUTO_HEAL_PERCENT)
 end
 
-
+-- Reset Player Stats
 function PlayerManager:ResetPlayerStats(player)
 	local playerData = self:GetPlayerData(player)
 	if not playerData then return false end
 	local className = playerData.class
 	if not className then warn("[PlayerManager] Cannot reset stats, player has no class:", player.Name); return false end
 	print("[PlayerManager DEBUG] Resetting player stats for", player.Name, "to class defaults:", className)
-
 
 	local currentMoney = playerData.stats.money or 100
 
@@ -713,7 +750,6 @@ function PlayerManager:ResetPlayerStats(player)
 	playerData.stats.hp = math.floor(playerData.stats.maxHp * hpPercent)
 	playerData.stats.mp = math.floor(playerData.stats.maxMp * mpPercent)
 
-	
 	playerData.stats.money = currentMoney
 
 	print("[PlayerManager DEBUG] Stats after reset to defaults:", playerData.stats)
