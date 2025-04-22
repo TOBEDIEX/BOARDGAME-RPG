@@ -1,7 +1,7 @@
 -- PlayerManager.lua
 -- Module for managing all player data in the game
 -- Location: ServerStorage/Modules/PlayerManager.lua
--- Version: 1.0.7 (Revert calculation logic, rely on correct ItemData)
+-- Version: 1.0.8 (Fixed money reset issue on level up)
 
 local PlayerManager = {}
 PlayerManager.__index = PlayerManager
@@ -348,6 +348,11 @@ function PlayerManager:GetAllPlayers()
 	return result
 end
 
+-- Get all player data (for GameManager)
+function PlayerManager:GetAllPlayerData()
+	return self.players
+end
+
 -- Get player data table by player instance or UserId
 function PlayerManager:GetPlayerData(player)
 	local userId
@@ -383,10 +388,18 @@ function PlayerManager:SetPlayerClass(player, className)
 		local newBaseStats = self:GetDefaultStatsForClass(className)
 		local hpPercent = 1; if playerData.stats.maxHp > 0 then hpPercent = playerData.stats.hp / playerData.stats.maxHp end
 		local mpPercent = 1; if playerData.stats.maxMp > 0 then mpPercent = playerData.stats.mp / playerData.stats.maxMp end
+
+		-- Save money before reset
+		local currentMoney = playerData.stats.money
+
 		playerData.stats = newBaseStats
 		playerData.baseStats = table.clone(newBaseStats)
 		playerData.stats.hp = math.floor(playerData.stats.maxHp * hpPercent)
 		playerData.stats.mp = math.floor(playerData.stats.maxMp * mpPercent)
+
+		-- Restore money after reset
+		playerData.stats.money = currentMoney
+
 		print("[PlayerManager DEBUG] SetPlayerClass (Fallback): Applying equipment stats.")
 		self:ApplyEquipmentStatsToPlayer(player)
 		return true
@@ -394,7 +407,7 @@ function PlayerManager:SetPlayerClass(player, className)
 end
 
 -- Apply equipment stats on top of base stats
--- *** REVERTED CALCULATION LOGIC ***
+-- *** FIXED: Now preserves money value during stat calculations ***
 function PlayerManager:ApplyEquipmentStatsToPlayer(player)
 	local playerData = self:GetPlayerData(player)
 	if not playerData then return false end
@@ -436,7 +449,10 @@ function PlayerManager:ApplyEquipmentStatsToPlayer(player)
 	local oldMaxHp = playerData.stats.maxHp
 	local oldMaxMp = playerData.stats.maxMp
 
-	-- *** REVERTED STAT CALCULATION ***
+	-- *** IMPORTANT: Save current money before stats calculation ***
+	local currentMoney = playerData.stats.money or 100
+	print("[PlayerManager DEBUG] Saving current money value before stat calculation:", currentMoney)
+
 	-- Calculate final stats = base + equipment (Directly using stat names)
 	-- Assumes equipmentStats now contains correct stat names (e.g., maxHp)
 	for statName, baseValue in pairs(playerData.baseStats) do
@@ -446,7 +462,10 @@ function PlayerManager:ApplyEquipmentStatsToPlayer(player)
 			playerData.stats[statName] = baseValue + equipmentBonus
 		end
 	end
-	-- *** END OF REVERTED STAT CALCULATION ***
+
+	-- *** IMPORTANT: Restore saved money after stats calculation ***
+	playerData.stats.money = currentMoney
+	print("[PlayerManager DEBUG] Restored money value after stat calculation:", playerData.stats.money)
 
 	-- Adjust current HP/MP based on percentage if MaxHP/MaxMP changed
 	if playerData.stats.maxHp ~= oldMaxHp then
@@ -522,7 +541,8 @@ function PlayerManager:SyncPlayerStats(player)
 	local statsToSync = {
 		hp = playerData.stats.hp, maxHp = playerData.stats.maxHp, mp = playerData.stats.mp, maxMp = playerData.stats.maxMp,
 		attack = playerData.stats.attack, defense = playerData.stats.defense, magic = playerData.stats.magic,
-		level = playerData.stats.level or 1, class = playerData.class, money = playerData.stats.money or 0
+		level = playerData.stats.level or 1, class = playerData.class, money = playerData.stats.money or 0,
+		exp = playerData.stats.exp, nextLevelExp = playerData.stats.nextLevelExp -- Include EXP data for UI updates
 	}
 	print(string.format("[PlayerManager DEBUG] Syncing stats for %s: HP=%d/%d, MP=%d/%d, ATK=%d, DEF=%d, MAGIC=%d, LVL=%d, CLASS=%s, MONEY=%d",
 		playerInstance.Name, statsToSync.hp, statsToSync.maxHp, statsToSync.mp, statsToSync.maxMp, statsToSync.attack,
@@ -674,13 +694,17 @@ function PlayerManager:SetAutoHealSettings(enabled, interval, amount, maxPercent
 	print("[PlayerManager DEBUG] SetAutoHealSettings:", AUTO_HEAL_ENABLED, AUTO_HEAL_INTERVAL, AUTO_HEAL_AMOUNT, MAX_AUTO_HEAL_PERCENT)
 end
 
--- Reset Player Stats to Class Defaults (e.g., for debugging or specific events)
+
 function PlayerManager:ResetPlayerStats(player)
 	local playerData = self:GetPlayerData(player)
 	if not playerData then return false end
 	local className = playerData.class
 	if not className then warn("[PlayerManager] Cannot reset stats, player has no class:", player.Name); return false end
 	print("[PlayerManager DEBUG] Resetting player stats for", player.Name, "to class defaults:", className)
+
+
+	local currentMoney = playerData.stats.money or 100
+
 	local newBaseStats = self:GetDefaultStatsForClass(className)
 	local hpPercent = 1; if playerData.stats.maxHp > 0 then hpPercent = playerData.stats.hp / playerData.stats.maxHp end
 	local mpPercent = 1; if playerData.stats.maxMp > 0 then mpPercent = playerData.stats.mp / playerData.stats.maxMp end
@@ -688,6 +712,10 @@ function PlayerManager:ResetPlayerStats(player)
 	playerData.baseStats = table.clone(newBaseStats)
 	playerData.stats.hp = math.floor(playerData.stats.maxHp * hpPercent)
 	playerData.stats.mp = math.floor(playerData.stats.maxMp * mpPercent)
+
+	
+	playerData.stats.money = currentMoney
+
 	print("[PlayerManager DEBUG] Stats after reset to defaults:", playerData.stats)
 	print("[PlayerManager DEBUG] Base stats after reset:", playerData.baseStats)
 	self:ApplyEquipmentStatsToPlayer(player)
