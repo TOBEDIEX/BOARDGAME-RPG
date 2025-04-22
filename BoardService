@@ -1,6 +1,6 @@
 -- BoardService.server.lua
 -- Server-side service for board system management
--- Version: 3.6.0 (Added Fixed Movement Crystal Support)
+-- Version: 3.7.0 (Added Checkpoint System Support)
 
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -178,7 +178,7 @@ local function initializeBoardService()
 	-- Set up bidirectional RollDice remote event to handle both normal rolls and fixed movement
 	local boardRemotes = remotes:WaitForChild("BoardRemotes")
 	local rollDiceRemote = boardRemotes:WaitForChild("RollDice")
-	
+
 	-- Listen for normal dice rolls from clients
 	rollDiceRemote.OnServerEvent:Connect(function(player, diceResult, isFixedMovement)
 		local playerId = player.UserId
@@ -191,10 +191,10 @@ local function initializeBoardService()
 			end
 			return
 		end
-		
+
 		-- Handle crystal fixed movement differently
 		local isFixed = isFixedMovement == true
-		
+
 		if isFixed then
 			print("[BoardService] Player " .. player.Name .. " is using a Crystal for fixed movement: " .. diceResult)
 			-- Fixed movement enforces the exact steps with no validation needed
@@ -309,8 +309,8 @@ local function initializeBoardService()
 			gameManager.inventoryService.ResetDiceBonusUse(playerId)
 		end
 	end)
-	
-	-- NEW: Server can now send to client for crystal fixed movement
+
+	-- Server can now send to client for crystal fixed movement
 	-- This lets the server tell the client about a fixed move (from crystal items)
 	_G.SendFixedMovement = function(player, fixedValue)
 		if player and fixedValue and typeof(fixedValue) == "number" then
@@ -403,11 +403,19 @@ local function initializeBoardService()
 		-- Trigger Tile Effect Here
 		local tileInfo = boardSystem:GetTileInfo(finalTileId)
 		if tileInfo then
+			local tileType = tileInfo.type
 			local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
-			boardRemotes:WaitForChild("TileTriggerEvent"):FireAllClients(playerId, finalTileId, tileInfo.type)
+			boardRemotes:WaitForChild("TileTriggerEvent"):FireAllClients(playerId, finalTileId, tileType)
+
+			-- Check if this is a checkpoint tile
+			local checkpointSystem = gameManager and gameManager.checkpointSystem or _G.CheckpointSystem
+			if checkpointSystem then
+				checkpointSystem:OnPlayerLandedOnTile(player, finalTileId, tileType)
+			end
+
 			if DEBUG_MOVEMENT then
 				print("[BoardService] Tile effect triggered for player " .. playerId ..
-					" at tile " .. finalTileId .. " (type: " .. tileInfo.type .. ")")
+					" at tile " .. finalTileId .. " (type: " .. tileType .. ")")
 			end
 		end
 
