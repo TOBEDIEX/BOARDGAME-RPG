@@ -1,6 +1,6 @@
 -- GameManager.lua
 -- Main module that controls all game logic
--- Version: 3.0.1 (Fixed initial player spawn position)
+-- Version: 3.0.2 (Fixed initial player spawn position)
 
 local GameManager = {}
 GameManager.__index = GameManager
@@ -393,7 +393,6 @@ function GameManager:StartGame()
 	print("Game started successfully.")
 end
 
--- *** แก้ไขฟังก์ชันนี้ ***
 function GameManager:InitializePlayerPositions()
 	if not self.boardSystem then
 		warn("BoardSystem not found in InitializePlayerPositions")
@@ -403,31 +402,84 @@ function GameManager:InitializePlayerPositions()
 	print("Initializing player positions...")
 	local startTileId = 1 -- Tile เริ่มต้นคือ 1
 
+	-- จัดการเตรียมตำแหน่งในโลกเกม
+	local tilePosition = nil
+	local tilesFolder = Workspace:FindFirstChild("BoardTiles")
+	if tilesFolder then
+		local tilePart = tilesFolder:FindFirstChild("Tile" .. startTileId) or tilesFolder:FindFirstChild(tostring(startTileId))
+		if tilePart and tilePart:IsA("BasePart") then
+			tilePosition = tilePart.Position
+			print("Found start tile position:", tilePosition)
+		else
+			warn("Could not find tile part for tile ID:", startTileId)
+		end
+	else
+		warn("BoardTiles folder not found in workspace!")
+	end
+
+	-- ถ้ายังไม่มีตำแหน่ง ใช้ตำแหน่งเริ่มต้นจาก MapData โดยตรง
+	if not tilePosition then
+		-- ลองหาจาก MapData
+		local MapData = require(game:GetService("ServerStorage").GameData.MapData)
+		if MapData and MapData.tiles and MapData.tiles[startTileId] and MapData.tiles[startTileId].position then
+			tilePosition = MapData.tiles[startTileId].position
+			print("Using MapData position for tile ID:", startTileId, tilePosition)
+		else
+			-- กำหนดตำแหน่งเริ่มต้นเอง ในกรณีที่ไม่พบข้อมูลใดๆ
+			tilePosition = Vector3.new(35.778, 0.6, -15.24) -- ตำแหน่งเริ่มต้นที่กำหนดใน MapData
+			print("Using hardcoded position for tile ID:", startTileId, tilePosition)
+		end
+	end
+
 	for _, player in pairs(Players:GetPlayers()) do
 		local playerId = player.UserId
 
 		-- 1. ตั้งค่าตำแหน่งตรรกะใน BoardSystem
-		self.boardSystem:SetPlayerPosition(playerId, startTileId, nil) -- ตั้งค่า lastTile เป็น nil หรือ startTileId ก็ได้
+		self.boardSystem:SetPlayerPosition(playerId, startTileId, nil)
 		print("Set logical position for player", playerId, "to tile", startTileId)
 
-		-- 2. (สำคัญ) ส่ง Event ให้ Client เพื่อ *แสดงผล* ตัวละครที่ตำแหน่งเริ่มต้น
-		-- เราจะใช้ StartPlayerMovementPath เพื่อให้ Client ใช้ logic เดิมในการวาร์ปตัวละครไปที่ Tile แรก
-		local initialMovementData = {
-			path = {startTileId}, -- Path ที่มีแค่ Tile เริ่มต้น
-			directions = nil, -- ไม่มีทางเลือก
-			requiresConfirmation = false -- ไม่ต้องรอการยืนยันจาก Client เพราะเป็นการตั้งค่าเริ่มต้น
-		}
-		print("Firing StartPlayerMovementPath for player", playerId, "with path:", table.concat(initialMovementData.path, ", "))
-		self.remotes.board.startPlayerMovementPath:FireClient(player, playerId, initialMovementData)
+		-- 2. วาร์ปตัวละครไปที่ตำแหน่งเริ่มต้นโดยตรง
+		local character = player.Character
+		if character then
+			local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+			if humanoidRootPart and tilePosition then
+				-- วาร์ปตัวละครไปที่ตำแหน่งเริ่มต้นโดยตรง
+				humanoidRootPart.CFrame = CFrame.new(tilePosition + Vector3.new(0, 3, 0))
+				print("Directly teleported player", playerId, "to start position")
+			else
+				warn("Could not teleport player", playerId, "- missing HumanoidRootPart or tile position")
+			end
+		else
+			warn("Player character not found for player:", playerId)
+			-- รอให้ตัวละครเกิด (ถ้ายังไม่เกิด)
+			player.CharacterAdded:Connect(function(newCharacter)
+				local humanoidRootPart = newCharacter:WaitForChild("HumanoidRootPart", 5)
+				if humanoidRootPart and tilePosition then
+					humanoidRootPart.CFrame = CFrame.new(tilePosition + Vector3.new(0, 3, 0))
+					print("Teleported newly spawned character for player", playerId, "to start position")
+				end
+			end)
+		end
 
-		-- 3. (ทางเลือก) ส่ง Event UpdatePlayerPosition เดิมเผื่อมีระบบอื่นใช้
-		-- self.remotes.board.updatePlayerPosition:FireAllClients(playerId, startTileId)
+		-- 3. ส่ง Event เพื่อให้ Client รู้ว่าผู้เล่นอยู่ที่ไหน (UI updates)
+		local initialMovementData = {
+			path = {startTileId},
+			directions = nil,
+			requiresConfirmation = false
+		}
+
+		-- ส่ง Event ไปยังทุกคนเพื่อปรับปรุง UI
+		self.remotes.board.updatePlayerPosition:FireAllClients(playerId, startTileId)
+		print("Fired UpdatePlayerPosition for player", playerId)
+
+		-- ส่ง Event ไปยังเฉพาะผู้เล่นเพื่อให้ UI อัพเดต
+		self.remotes.board.startPlayerMovementPath:FireClient(player, playerId, initialMovementData)
+		print("Fired StartPlayerMovementPath for player", playerId)
 	end
 
 	print("Player positions initialized.")
 	return true
 end
-
 
 function GameManager:StartGameTimer()
 	local lastUpdateTime = tick()
