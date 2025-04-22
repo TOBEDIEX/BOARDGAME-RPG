@@ -1,10 +1,11 @@
 -- DiceRollHandler.lua
 -- Manages dice roll interface and path selection
--- Version: 2.6.0 (Added Fixed Movement Crystal Support)
+-- Version: 2.7.0 (Added Death & Respawn Handling)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
+local Debris = game:GetService("Debris") -- Added Debris service
 
 -- Get local player
 local player = Players.LocalPlayer
@@ -31,7 +32,7 @@ local LeftButton = PathSelectionContainer and PathSelectionContainer:FindFirstCh
 local RightButton = PathSelectionContainer and PathSelectionContainer:FindFirstChild("RightButton")
 
 -- Validate required components
-if not DiceWheel or not DiceResult or not RollButton or not PathSelectionContainer 
+if not DiceWheel or not DiceResult or not RollButton or not PathSelectionContainer
 	or not RemainingStepsText or not ForwardButton or not LeftButton or not RightButton then
 	warn("Some required UI elements for DiceRollUI are missing")
 	return
@@ -41,6 +42,7 @@ end
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
 local boardRemotes = remotes:WaitForChild("BoardRemotes")
 local gameRemotes = remotes:WaitForChild("GameRemotes")
+local uiRemotes = remotes:WaitForChild("UIRemotes")
 
 -- Get remote events
 local rollDiceEvent = boardRemotes:WaitForChild("RollDice")
@@ -63,6 +65,14 @@ if not diceBonusEvent then
 	diceBonusEvent.Parent = inventoryRemotes
 end
 
+-- Ensure PlayerRespawned event exists
+local playerRespawnedEvent = uiRemotes:FindFirstChild("PlayerRespawned")
+if not playerRespawnedEvent then
+	playerRespawnedEvent = Instance.new("RemoteEvent")
+	playerRespawnedEvent.Name = "PlayerRespawned"
+	playerRespawnedEvent.Parent = uiRemotes
+end
+
 -- Constants
 local DICE_ANIMATION_DURATION = 2
 local DICE_VALUES = {1, 2, 3, 4, 5, 6}
@@ -80,9 +90,10 @@ local currentPathChoices = nil
 local remainingSteps = 0
 local activeDiceBonus = 0
 local bonusDiceResults = {}
-local isFixedMovement = false -- NEW: Flag for fixed movement crystals
+local isFixedMovement = false -- Flag for fixed movement crystals
+local isPlayerDead = false -- NEW: Track player death state
 
--- Create bonus dice function (updated layout as in example 2)
+-- Create bonus dice function
 local function createBonusDice(numBonusDice)
 	-- Remove old dice first
 	for _, dice in pairs(DiceWheel:GetChildren()) do
@@ -305,7 +316,7 @@ local function createBonusNotification(bonusAmount)
 	return notification
 end
 
--- Create fixed movement notification (NEW)
+-- Create fixed movement notification
 local function createFixedMovementNotification(moveAmount)
 	-- Remove any existing notification
 	local oldNotification = PlayerGui:FindFirstChild("FixedMovementNotification")
@@ -367,8 +378,88 @@ local function createFixedMovementNotification(moveAmount)
 	return notification
 end
 
+-- Create notification for when player is dead
+local function createDeathNotification()
+	-- Remove any existing notification
+	local oldNotification = PlayerGui:FindFirstChild("DeathNotification")
+	if oldNotification then
+		oldNotification:Destroy()
+	end
+
+	-- Create new notification
+	local notification = Instance.new("Frame")
+	notification.Name = "DeathNotification"
+	notification.Size = UDim2.new(0, 240, 0, 50)
+	notification.Position = UDim2.new(0.5, 0, 0.3, 0) -- Center top
+	notification.AnchorPoint = Vector2.new(0.5, 0.5)
+	notification.BackgroundColor3 = Color3.fromRGB(200, 30, 30) -- Red for death
+	notification.BackgroundTransparency = 0.2
+	notification.BorderSizePixel = 0
+	notification.ZIndex = 10
+	notification.Parent = PlayerGui
+
+	-- Add rounded corners
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = notification
+
+	-- Notification text
+	local text = Instance.new("TextLabel")
+	text.Name = "NotificationText"
+	text.Size = UDim2.new(1, -10, 1, 0)
+	text.Position = UDim2.new(0.5, 0, 0.5, 0)
+	text.AnchorPoint = Vector2.new(0.5, 0.5)
+	text.BackgroundTransparency = 1
+	text.Font = Enum.Font.GothamBold
+	text.TextSize = 18
+	text.TextColor3 = Color3.fromRGB(255, 255, 255)
+	text.Text = "You are dead! Respawning soon..."
+	text.ZIndex = 11
+	text.Parent = notification
+
+	-- Animation
+	notification.Size = UDim2.new(0, 0, 0, 50)
+	local sizeTween = TweenService:Create(
+		notification,
+		TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+		{Size = UDim2.new(0, 240, 0, 50)}
+	)
+	sizeTween:Play()
+
+	-- Add pulsing effect to make it stand out
+	task.spawn(function()
+		while notification and notification.Parent do
+			local pulseTween = TweenService:Create(
+				notification,
+				TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+				{BackgroundTransparency = 0.5}
+			)
+			pulseTween:Play()
+			task.wait(1) -- Use task.wait instead of wait
+
+			if not notification or not notification.Parent then break end
+
+			local reverseTween = TweenService:Create(
+				notification,
+				TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+				{BackgroundTransparency = 0.2}
+			)
+			reverseTween:Play()
+			task.wait(1) -- Use task.wait instead of wait
+		end
+	end)
+
+	return notification
+end
+
 -- Show dice roll UI
 local function showDiceRollUI()
+	-- Don't show if player is dead
+	if isPlayerDead then
+		createDeathNotification()
+		return
+	end -- *** FIXED: Changed } to end ***
+
 	DiceRollUI.Visible = true
 	RollButton.Visible = true
 	PathSelectionContainer.Visible = false
@@ -406,10 +497,16 @@ local function hideDiceRollUI()
 	isRolling = false
 	canRoll = false
 	isFixedMovement = false -- Reset fixed movement flag
-end
+end -- *** FIXED: Changed } to end ***
 
--- Animate dice roll (updated to handle fixed movement)
+-- Animate dice roll
 local function animateDiceRoll(finalResult, skipAnimation)
+	-- Don't roll if player is dead
+	if isPlayerDead then
+		createDeathNotification()
+		return
+	end -- *** FIXED: Changed } to end ***
+
 	if isRolling then return end
 
 	isRolling = true
@@ -419,21 +516,21 @@ local function animateDiceRoll(finalResult, skipAnimation)
 	if skipAnimation then
 		-- Update result without animation
 		DiceResult.Text = tostring(finalResult)
-		
+
 		-- Skip animation and use the fixed result
 		isRolling = false
 		currentDiceResult = finalResult
 		remainingSteps = finalResult
-		
+
 		-- Show fixed movement notification instead of total
 		createFixedMovementNotification(finalResult)
-		
+
 		-- Fire the dice roll event to server
 		rollDiceEvent:FireServer(finalResult)
-		
+
 		-- Flag that we're using fixed movement
 		isFixedMovement = true
-		
+
 		return finalResult
 	end
 
@@ -492,8 +589,9 @@ local function animateDiceRoll(finalResult, skipAnimation)
 				frameRate = 0.2
 			end
 
-			wait(frameRate)
+			task.wait(frameRate) -- Use task.wait
 		end
+		task.wait() -- Yield to prevent freezing
 	end
 
 	-- Get real dice results
@@ -608,7 +706,7 @@ local function animateDiceRoll(finalResult, skipAnimation)
 		end
 	end
 
-	wait(0.5)
+	task.wait(0.5) -- Use task.wait
 
 	-- Return to normal size
 	local resetTween = TweenService:Create(
@@ -676,7 +774,7 @@ local function animateDiceRoll(finalResult, skipAnimation)
 	print("Total result: " .. totalResult)
 	print("======================")
 
-	wait(0.3)
+	task.wait(0.3) -- Use task.wait
 
 	-- Send result to server
 	rollDiceEvent:FireServer(totalResult)
@@ -703,9 +801,15 @@ end
 
 -- Show path choices
 local function showPathChoices(choices)
+	-- Don't show if player is dead
+	if isPlayerDead then
+		createDeathNotification()
+		return
+	end -- *** FIXED: Changed } to end ***
+
 	PathSelectionContainer.Visible = true
 	RemainingStepsText.Text = "Steps: " .. remainingSteps
-	wait(0.5) -- Small delay for UI updates
+	task.wait(0.5) -- Small delay for UI updates
 
 	-- Reset buttons
 	ForwardButton.Visible = false
@@ -728,6 +832,12 @@ end
 
 -- Choose path direction
 local function choosePath(direction)
+	-- Don't process if player is dead
+	if isPlayerDead then
+		createDeathNotification()
+		return
+	end -- *** FIXED: Changed } to end ***
+
 	if not currentPathChoices then return end
 
 	-- Hide buttons during movement
@@ -747,8 +857,48 @@ local function choosePath(direction)
 	end
 end
 
+-- Function to handle player death
+local function onPlayerDeath()
+	print("[DiceRollHandler] Player has died")
+	isPlayerDead = true
+
+	-- Hide all dice UI elements
+	hideDiceRollUI()
+
+	-- Show death notification
+	createDeathNotification()
+end -- *** FIXED: Changed } to end ***
+
+-- Function to handle player respawn
+local function onPlayerRespawn(respawnData)
+	print("[DiceRollHandler] Player has respawned")
+	isPlayerDead = false
+
+	-- Remove death notification
+	local deathNotification = PlayerGui:FindFirstChild("DeathNotification")
+	if deathNotification then
+		deathNotification:Destroy()
+	end -- *** FIXED: Changed } to end ***
+
+	-- Reset UI state
+	isRolling = false
+	canRoll = false
+	currentDiceResult = nil
+	currentPathChoices = nil
+	remainingSteps = 0
+	isFixedMovement = false
+	activeDiceBonus = 0
+
+	print("[DiceRollHandler] Dice system reset after respawn")
+end -- *** FIXED: Changed } to end ***
+
 -- Button event handlers
 RollButton.Activated:Connect(function()
+	if isPlayerDead then
+		createDeathNotification()
+		return
+	end -- *** FIXED: Changed } to end ***
+
 	if not isRolling and canRoll then
 		local diceResult = math.random(1, 6)
 		animateDiceRoll(diceResult)
@@ -756,15 +906,27 @@ RollButton.Activated:Connect(function()
 end)
 
 ForwardButton.Activated:Connect(function()
-	choosePath(DIRECTIONS.FRONT)
+	if not isPlayerDead then
+		choosePath(DIRECTIONS.FRONT)
+	else -- *** FIXED: Changed { to else ***
+		createDeathNotification()
+	end -- *** FIXED: Changed } to end ***
 end)
 
 LeftButton.Activated:Connect(function()
-	choosePath(DIRECTIONS.LEFT)
+	if not isPlayerDead then
+		choosePath(DIRECTIONS.LEFT)
+	else -- *** FIXED: Changed { to else ***
+		createDeathNotification()
+	end -- *** FIXED: Changed } to end ***
 end)
 
 RightButton.Activated:Connect(function()
-	choosePath(DIRECTIONS.RIGHT)
+	if not isPlayerDead then
+		choosePath(DIRECTIONS.RIGHT)
+	else -- *** FIXED: Changed { to else ***
+		createDeathNotification()
+	end -- *** FIXED: Changed } to end ***
 end)
 
 -- Remote event handlers
@@ -773,13 +935,13 @@ showPathSelectionEvent.OnClientEvent:Connect(showPathChoices)
 updateTurnEvent.OnClientEvent:Connect(function(currentPlayerId)
 	local isMyTurn = currentPlayerId == player.UserId
 
-	if isMyTurn then
+	if isMyTurn and not isPlayerDead then
 		showDiceRollUI()
 		canRoll = true
 	else
 		hideDiceRollUI()
 		canRoll = false
-	end
+	end -- *** FIXED: Changed } to end ***
 end)
 
 -- Receive dice bonus
@@ -793,7 +955,7 @@ diceBonusEvent.OnClientEvent:Connect(function(bonusAmount)
 	notificationSound.Volume = 0.5
 	notificationSound.Parent = DiceRollUI
 	notificationSound:Play()
-	game:GetService("Debris"):AddItem(notificationSound, 2)
+	Debris:AddItem(notificationSound, 2) -- Use Debris service
 
 	-- Create notification in top right
 	createBonusNotification(bonusAmount)
@@ -804,21 +966,43 @@ diceBonusEvent.OnClientEvent:Connect(function(bonusAmount)
 	end
 end)
 
--- NEW: Handle fixed movement from crystal items
--- This is added to the client-side to handle the movement crystals
+-- Handle fixed movement from crystal items
 rollDiceEvent.OnClientEvent:Connect(function(fixedValue, isFixed)
-    if isFixed then
-        print("[DiceRollHandler] Received fixed movement: " .. fixedValue)
-        isFixedMovement = true
-        
-        -- If it's our turn and we're allowed to roll
-        if canRoll then
-            -- Use the fixed value (skip animation for crystals)
-            animateDiceRoll(fixedValue, true)
-        end
-    end
-    -- Normal dice rolls are handled by the button click
+	if isFixed then
+		print("[DiceRollHandler] Received fixed movement: " .. fixedValue)
+		isFixedMovement = true
+
+		-- If it's our turn and we're allowed to roll
+		if canRoll and not isPlayerDead then
+			-- Use the fixed value (skip animation for crystals)
+			animateDiceRoll(fixedValue, true)
+		end -- *** FIXED: Changed } to end ***
+	end -- *** FIXED: Changed } to end ***
+	-- Normal dice rolls are handled by the button click
 end)
+
+-- Connect to the player respawn event
+playerRespawnedEvent.OnClientEvent:Connect(onPlayerRespawn)
+
+-- Listen for character death
+player.CharacterAdded:Connect(function(character)
+	local humanoid = character:WaitForChild("Humanoid")
+
+	-- Connect to the Humanoid.Died event
+	humanoid.Died:Connect(function()
+		onPlayerDeath()
+	end)
+end)
+
+-- Check if character already exists and connect
+if player.Character then
+	local humanoid = player.Character:FindFirstChild("Humanoid")
+	if humanoid then
+		humanoid.Died:Connect(function()
+			onPlayerDeath()
+		end)
+	end -- *** FIXED: Changed } to end ***
+end -- *** FIXED: Changed } to end ***
 
 -- Initial setup
 DiceRollUI.Visible = false
@@ -827,6 +1011,13 @@ DiceRollUI.Visible = false
 local DiceRollHandler = {}
 DiceRollHandler.ShowUI = showDiceRollUI
 DiceRollHandler.HideUI = hideDiceRollUI
+DiceRollHandler.SetDeathState = function(isDead)
+	isPlayerDead = isDead
+	if isDead then
+		hideDiceRollUI()
+		createDeathNotification()
+	end -- *** FIXED: Changed } to end ***
+end
 
 -- Make accessible from other scripts
 _G.DiceRollHandler = DiceRollHandler
