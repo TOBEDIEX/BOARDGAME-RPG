@@ -1,7 +1,7 @@
 -- PlayerManager.lua
 -- Module for managing all player data in the game
 -- Location: ServerStorage/Modules/PlayerManager.lua
--- Version: 1.1.0 (Added Checkpoint Support)
+-- Version: 1.2.0 (Improved Death & Respawn Handling)
 
 local PlayerManager = {}
 PlayerManager.__index = PlayerManager
@@ -74,6 +74,7 @@ function PlayerManager:InitializeRemotes()
 	self.statChangedEvent = ensureRemoteEvent(uiRemotes, "StatChanged")
 	self.playerDamagedEvent = ensureRemoteEvent(uiRemotes, "PlayerDamaged")
 	self.playerHealedEvent = ensureRemoteEvent(uiRemotes, "PlayerHealed")
+	self.playerRespawnedEvent = ensureRemoteEvent(uiRemotes, "PlayerRespawned") -- New for respawn notification
 	print("[PlayerManager] Remote events initialized")
 end
 
@@ -299,7 +300,6 @@ function PlayerManager:OnHealthChanged(player, humanoid, newHealth)
 
 			if newStatsHP <= 0 and currentPlayerData.isAlive then
 				print("  > Player died due to health change.")
-				currentPlayerData.isAlive = false
 				self:HandlePlayerDeath(player)
 			end
 		else
@@ -526,7 +526,7 @@ function PlayerManager:UpdatePlayerStats(player, statUpdates)
 	print("[PlayerManager DEBUG] UpdatePlayerStats - Final Stats:", playerData.stats)
 	self:SyncPlayerStats(player)
 	if next(changedStats) ~= nil and self.statChangedEvent then print("[PlayerManager DEBUG] Firing StatChangedEvent:", changedStats); self.statChangedEvent:FireClient(player, changedStats) end
-	if hpChanged and playerData.stats.hp <= 0 and playerData.isAlive then print("[PlayerManager DEBUG] Player died due to UpdatePlayerStats."); playerData.isAlive = false; self:HandlePlayerDeath(player) end
+	if hpChanged and playerData.stats.hp <= 0 and playerData.isAlive then print("[PlayerManager DEBUG] Player died due to UpdatePlayerStats."); self:HandlePlayerDeath(player) end
 	return true
 end
 
@@ -594,7 +594,7 @@ function PlayerManager:UpdatePlayerHP(player, newHP)
 			humanoid.Health = playerData.stats.hp
 		end
 	else print("[PlayerManager DEBUG] UpdatePlayerHP: Cannot update Humanoid HP - Character/Humanoid not found") end
-	if playerData.stats.hp <= 0 and playerData.isAlive then print("[PlayerManager DEBUG] Player died due to UpdatePlayerHP."); playerData.isAlive = false; self:HandlePlayerDeath(player) end
+	if playerData.stats.hp <= 0 and playerData.isAlive then print("[PlayerManager DEBUG] Player died due to UpdatePlayerHP."); self:HandlePlayerDeath(player) end
 	return true
 end
 
@@ -611,33 +611,75 @@ function PlayerManager:UpdatePlayerMP(player, newMP)
 	return true
 end
 
--- Handle Player Death (Respawn logic)
+-- Handle Player Death (Improved Respawn logic)
+-- *** CORRECTED SYNTAX BELOW ***
 function PlayerManager:HandlePlayerDeath(player)
 	local playerData = self:GetPlayerData(player)
 	if not playerData then return false end
 	print("[PlayerManager DEBUG] HandlePlayerDeath called for:", player.Name)
 
+	-- If the player is already in dead state, don't process again
+	if not playerData.isAlive then
+		print("[PlayerManager DEBUG] Player", player.Name, "is already in dead state.")
+		return false
+	end -- *** FIXED: Changed } to end ***
+
+	-- Set player as dead
+	playerData.isAlive = false
+
+	-- Store additional death state information for respawn
+	playerData.deathState = {
+		timeOfDeath = os.time(),
+		deathPosition = player.Character and player.Character:FindFirstChild("HumanoidRootPart") and
+			player.Character:FindFirstChild("HumanoidRootPart").Position or nil
+	}
+
+	-- Notify other systems about player death
+	local gameManager = self.gameManager or _G.GameManager
+	if gameManager then
+		if gameManager.turnSystem then
+			-- Notify turn system about player death (skip turn, not remove)
+			gameManager.turnSystem:OnPlayerDeath(player.UserId)
+		end
+	end
+
+	-- Schedule respawn after delay
 	task.delay(5, function()
-		if not self.players[player.UserId] or not player:IsDescendantOf(Players) then return end
+		if not self.players[player.UserId] or not player:IsDescendantOf(Players) then
+			print("[PlayerManager DEBUG] Player", player.Name, "left the game before respawn.")
+			return
+		end -- *** FIXED: Changed } to end ***
+
 		print("[PlayerManager DEBUG] Respawning player:", player.Name)
+
+		-- Store current turn data before reset
+		local turnData = nil
+		if gameManager and gameManager.turnSystem then
+			turnData = {
+				isPlayerTurn = gameManager.turnSystem:IsPlayerTurn(player.UserId),
+				currentTurnIndex = gameManager.turnSystem.currentTurnIndex
+			}
+		end -- *** FIXED: Changed } to end ***
+
+		-- Reset HP/MP stats
 		playerData.stats.hp = playerData.stats.maxHp
 		playerData.stats.mp = playerData.stats.maxMp
 		playerData.isAlive = true
 
-		-- Get checkpoint system if available
-		local checkpointSystem = self.gameManager and self.gameManager.checkpointSystem or _G.CheckpointSystem
-		local respawnTileId = 1 -- Default to start tile
-
-		-- Respawn the player
+		-- Force character reload to clear any stuck events
 		player:LoadCharacter()
 
-		-- If we have a checkpoint system, use it to get respawn tile
+		-- Wait for character to load
+		task.wait(0.5)
+
+		-- Find checkpoint system for respawn
+		local checkpointSystem = gameManager and gameManager.checkpointSystem or _G.CheckpointSystem
+		local respawnTileId = 1 -- Default to start tile
+
+		-- Use checkpoint system if available
 		if checkpointSystem then
 			respawnTileId = checkpointSystem:GetPlayerRespawnTileId(player)
 			local respawnPosition = checkpointSystem:GetPlayerRespawnPosition(player)
-
-			-- Wait for character to load
-			task.wait(0.5)
 
 			-- Move player to respawn position
 			local character = player.Character
@@ -646,26 +688,62 @@ function PlayerManager:HandlePlayerDeath(player)
 				if humanoidRootPart then
 					humanoidRootPart.CFrame = CFrame.new(respawnPosition + Vector3.new(0, 3, 0))
 					print("[PlayerManager DEBUG] Teleported player", player.Name, "to respawn position at tile", respawnTileId)
-				end
-			end
+				end -- *** FIXED: Changed } to end ***
+			end -- *** FIXED: Changed } to end ***
 
-			-- Update board system with player's position if available
-			local boardSystem = self.gameManager and self.gameManager.boardSystem or _G.BoardSystem
+			-- Update board system with player's position
+			local boardSystem = gameManager and gameManager.boardSystem or _G.BoardSystem
 			if boardSystem then
 				boardSystem:SetPlayerPosition(player.UserId, respawnTileId, nil)
 				print("[PlayerManager DEBUG] Updated player", player.Name, "position in BoardSystem to tile", respawnTileId)
-			end
-		else
-			print("[PlayerManager DEBUG] CheckpointSystem not found, using default respawn logic.")
-			task.wait(0.5)
-		end
 
-		-- Reconnect health systems
+				-- Notify all clients to update player position in UI
+				local remotes = ReplicatedStorage:WaitForChild("Remotes")
+				local boardRemotes = remotes:WaitForChild("BoardRemotes")
+				if boardRemotes:FindFirstChild("UpdatePlayerPosition") then
+					boardRemotes.UpdatePlayerPosition:FireAllClients(player.UserId, respawnTileId)
+				end -- *** FIXED: Changed } to end ***
+			end -- *** FIXED: Changed } to end ***
+		else -- *** FIXED: Removed { ***
+			print("[PlayerManager DEBUG] CheckpointSystem not found, using default respawn logic.")
+		end -- *** FIXED: Changed } to end, completing the if/else structure ***
+
+		-- Reconnect health system
 		self:ConnectPlayerHealth(player)
-	end)
+
+		-- Update player stats to client
+		self:SyncPlayerStats(player)
+
+		-- Reset camera system if necessary
+		local cameraScript = player:FindFirstChild("PlayerScripts") and
+			player.PlayerScripts:FindFirstChild("CameraSystem")
+		if cameraScript and cameraScript.Disabled then
+			cameraScript.Disabled = false -- Re-enable camera system
+		end -- *** FIXED: Changed } to end ***
+
+		-- Notify client about respawn with necessary data
+		if self.playerRespawnedEvent then
+			self.playerRespawnedEvent:FireClient(player, {
+				respawnTileId = respawnTileId,
+				stats = {
+					hp = playerData.stats.hp,
+					maxHp = playerData.stats.maxHp,
+					mp = playerData.stats.mp,
+					maxMp = playerData.stats.maxMp
+				}
+			})
+		end -- *** FIXED: Changed } to end ***
+
+		-- Notify turn system about player respawn
+		if gameManager and gameManager.turnSystem then
+			gameManager.turnSystem:OnPlayerRespawn(player.UserId)
+		end -- *** FIXED: Changed } to end ***
+
+		print("[PlayerManager DEBUG] Player", player.Name, "successfully respawned.")
+	end) -- Closes the task.delay function
 
 	return true
-end
+end -- *** FIXED: Changed } to end, closing the HandlePlayerDeath function ***
 
 -- Get Players Sorted By Join Time
 function PlayerManager:GetPlayersSortedByJoinTime()
