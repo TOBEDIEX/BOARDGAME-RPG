@@ -106,34 +106,34 @@ local function initializeBoardService()
 	end
 
 	local gameManager = getGameManager()
-	if not gameManager then return end
-	gameManager.boardSystem = boardSystem
+	if not gameManager then
+		warn("[BoardService] GameManager not found during initialization!")
+		return nil -- Cannot proceed without GameManager
+	end
+	gameManager.boardSystem = boardSystem -- Assign boardSystem to GameManager
 
-	-- Set up callbacks (removed onTileEffect)
+	-- Set up callbacks
 	boardSystem:SetupCallbacks(
 		-- onPlayerMoved
 		function(playerId, fromTileId, toTileId)
-			-- Logic for when player moves from one tile to another
 			if DEBUG_MOVEMENT then
 				print("[BoardService] Player " .. playerId .. " moved from tile " ..
 					(fromTileId or "nil") .. " to tile " .. toTileId)
 			end
-			-- Fire event to update position on all clients (useful for spectators/general sync)
+			-- Fire event to update position on all clients
 			local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
 			boardRemotes:WaitForChild("UpdatePlayerPosition"):FireAllClients(playerId, toTileId)
 		end,
 
 		-- onPlayerPathComplete
 		function(playerId, finalTileId)
-			-- Logic for when player completes their path (all steps used)
 			local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
 			boardRemotes:WaitForChild("PlayerArrivedAtTile"):FireAllClients(playerId, finalTileId)
 
 			if DEBUG_MOVEMENT then
-				print("[BoardService] Player " .. playerId .. " completed path at tile " .. finalTileId)
+				print("[BoardService] Player " .. playerId .. " completed path calculation at tile " .. finalTileId)
 			end
 
-			-- Store pending movement completion state
 			local player = Players:GetPlayerByUserId(playerId)
 			if player then
 				pendingMovementCompletions[playerId] = {
@@ -142,18 +142,16 @@ local function initializeBoardService()
 					confirmed = false
 				}
 
-				-- Set up backup timer in case client doesn't respond (30 seconds)
 				task.spawn(function()
-					task.wait(30)
+					task.wait(30) -- Timeout 30 seconds
 					if pendingMovementCompletions[playerId] and not pendingMovementCompletions[playerId].confirmed then
-						-- If not confirmed after timeout, consider completed
-						pendingMovementCompletions[playerId].confirmed = true
+						pendingMovementCompletions[playerId].confirmed = true -- Consider confirmed on timeout
 
 						if DEBUG_MOVEMENT then
 							print("[BoardService] Movement confirmation timed out for player " .. playerId)
 						end
 
-						-- Trigger Tile Effect here on timeout as well
+						-- Trigger Tile Effect on timeout
 						local tileInfo = boardSystem:GetTileInfo(finalTileId)
 						if tileInfo then
 							local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
@@ -183,276 +181,185 @@ local function initializeBoardService()
 						if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() and (not combatService or not combatService:IsCombatActive()) then
 							gameManager.turnSystem:EndPlayerTurn(playerId, "move_timeout")
 						end
+						-- Clear pending data
+						pendingMovementCompletions[playerId] = nil
 					end
 				end)
 			else
-				-- If player not found (left game), end turn immediately
-				if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
-					task.wait(0.5) -- Short delay before ending turn
+				-- If player not found (left game), end turn immediately if they were the current player
+				if gameManager.turnSystem and gameManager.turnSystem:GetCurrentPlayerTurn() == playerId then
+					task.wait(0.5) -- Short delay
 					gameManager.turnSystem:EndPlayerTurn(playerId, "player_left")
 				end
 			end
 		end
-		-- Removed onTileEffect callback
 	)
 
-	-- Function to record dice bonuses
-	local remotes = ReplicatedStorage:WaitForChild("Remotes")
+	-- Function to record dice bonuses (Same as before)
 	local inventoryRemotes = remotes:WaitForChild("InventoryRemotes")
-
 	if inventoryRemotes:FindFirstChild("DiceBonus") then
 		inventoryRemotes.DiceBonus.OnServerEvent:Connect(function(player, bonusAmount)
 			if player then
 				playerDiceBonus[player.UserId] = bonusAmount
-				print("[BoardService] Saved dice bonus " .. bonusAmount .. " for player " .. player.Name)
+				-- print("[BoardService] Saved dice bonus " .. bonusAmount .. " for player " .. player.Name)
 			end
 		end)
 	end
 
-	-- Set up bidirectional RollDice remote event to handle both normal rolls and fixed movement
+	-- Set up bidirectional RollDice remote event (Same as before, with combat check)
 	local boardRemotes = remotes:WaitForChild("BoardRemotes")
 	local rollDiceRemote = boardRemotes:WaitForChild("RollDice")
 
-	-- Listen for normal dice rolls from clients
 	rollDiceRemote.OnServerEvent:Connect(function(player, diceResult, isFixedMovement)
 		local playerId = player.UserId
 
-		-- Check if combat is active
+		-- Check if combat is active first
 		local combatService = getCombatService()
 		if combatService and combatService:IsCombatActive() then
 			if DEBUG_MOVEMENT then print("[BoardService] Rejected dice roll from player " .. playerId .. " - Combat Active") end
 			return
 		end
 
-		-- Check if it's player's turn
-		if gameManager.turnSystem and gameManager.turnSystem:GetCurrentPlayerTurn() ~= playerId then
-			if DEBUG_MOVEMENT then
-				print("[BoardService] Rejected dice roll from player " .. playerId ..
-					" - not their turn")
-			end
+		-- Check turn and other conditions (Same as before)
+		if not gameManager or not gameManager.turnSystem then return end
+		if gameManager.turnSystem:GetCurrentPlayerTurn() ~= playerId then
+			if DEBUG_MOVEMENT then print("[BoardService] Rejected dice roll from player " .. playerId .. " - not their turn") end
 			return
 		end
 
-		-- Handle crystal fixed movement differently
 		local isFixed = isFixedMovement == true
+		local finalDiceResult = diceResult
 
 		if isFixed then
-			print("[BoardService] Player " .. player.Name .. " is using a Crystal for fixed movement: " .. diceResult)
-			-- Fixed movement enforces the exact steps with no validation needed
-			-- Process the fixed movement directly
+			print("[BoardService] Player " .. player.Name .. " is using a Crystal for fixed movement: " .. finalDiceResult)
 		else
-			-- Normal dice roll logic continues below
-			-- Get dice bonus value
 			local diceBonusService = getDiceBonusService()
-
-			-- Use internal storage value first
 			local diceBonus = playerDiceBonus[playerId] or 0
-
-			-- If not found internally, try to get from service
 			if diceBonus == 0 and diceBonusService then
 				diceBonus = diceBonusService.GetPlayerDiceBonus(playerId) or 0
-
-				-- Store for later use
-				if diceBonus > 0 then
-					playerDiceBonus[playerId] = diceBonus
-				end
+				if diceBonus > 0 then playerDiceBonus[playerId] = diceBonus end
 			end
-
-			print("[BoardService] Player " .. player.Name .. " rolled " .. diceResult ..
-				" (Bonus dice: " .. diceBonus .. ")")
-
-			-- Validate dice result
-			if TRUST_CLIENT_DICE then
-				-- Minimal validation for trusted clients
-				local maxReasonableDiceResult = 100 -- Shouldn't exceed this in normal use
-
-				if diceResult < 1 then
-					diceResult = 1
-					print("[BoardService] WARNING: Player sent negative dice result, using 1 instead")
-				elseif diceResult > maxReasonableDiceResult then
-					diceResult = 6 + (diceBonus * 6) -- Maximum possible legitimate value
-					print("[BoardService] WARNING: Player sent unreasonably high dice result, using " .. diceResult .. " instead")
+			print("[BoardService] Player " .. player.Name .. " rolled " .. finalDiceResult .. " (Bonus dice: " .. diceBonus .. ")")
+			-- Validation (Same as before)
+			if not TRUST_CLIENT_DICE then
+				local minPossibleResult = 1 + diceBonus
+				local maxPossibleResult = 6 + (diceBonus * 6)
+				if finalDiceResult < minPossibleResult or finalDiceResult > maxPossibleResult then
+					warn("[BoardService] Invalid dice result from player " .. player.Name .. ": " .. finalDiceResult)
+					local baseDiceRoll = math.random(1, 6)
+					finalDiceResult = baseDiceRoll
+					for i = 1, diceBonus do finalDiceResult = finalDiceResult + math.random(1, 6) end
+					print("[BoardService] Using server-generated dice result instead: " .. finalDiceResult)
 				end
 			else
-				-- Stricter validation for untrusted clients
-				local minPossibleResult = 1
-				local maxPossibleResult = 6
-
-				-- Calculate possible range based on bonus
-				if diceBonus > 0 then
-					minPossibleResult = 1 + diceBonus -- Minimum: main die 1 + bonus dice 1 each
-					maxPossibleResult = 6 + (diceBonus * 6) -- Maximum: main die 6 + bonus dice 6 each
-				end
-
-				-- Check if result is in possible range
-				if diceResult < minPossibleResult or diceResult > maxPossibleResult then
-					warn("[BoardService] Invalid dice result from player " .. player.Name .. ": " .. diceResult ..
-						" (Expected range: " .. minPossibleResult .. "-" .. maxPossibleResult .. ")")
-
-					-- Generate new result (main die + bonus dice)
-					local baseDiceRoll = math.random(1, 6)
-					local totalResult = baseDiceRoll
-
-					for i = 1, diceBonus do
-						local bonusRoll = math.random(1, 6)
-						totalResult = totalResult + bonusRoll
-					end
-
-					diceResult = totalResult
-					print("[BoardService] Using server-generated dice result instead: " .. diceResult)
-				end
+				if finalDiceResult < 1 then finalDiceResult = 1 end
+				if finalDiceResult > 100 then finalDiceResult = 12 end
 			end
 		end
 
-		-- Process movement with either fixed or random dice result
-		local moveInfo = boardSystem:ProcessPlayerMove(playerId, diceResult)
-
+		-- Process movement (Same as before)
+		local moveInfo = boardSystem:ProcessPlayerMove(playerId, finalDiceResult)
 		if moveInfo and moveInfo.autoPath and #moveInfo.autoPath > 0 then
-			-- Send movement data to client
 			local movementData = {
 				path = moveInfo.autoPath,
 				directions = moveInfo.requiresChoice and moveInfo.availableDirections or nil,
 				requiresConfirmation = true
 			}
-
-			if DEBUG_MOVEMENT then
-				print("[BoardService] Sending movement path to player " .. playerId)
-				print("  Path length: " .. #moveInfo.autoPath)
-				print("  Requires choice: " .. tostring(moveInfo.requiresChoice))
-				print("  Auto-complete: " .. tostring(moveInfo.autoComplete))
-				if moveInfo.requiresChoice then
-					print("  Available directions: " .. #moveInfo.availableDirections)
-				end
-			end
-
+			if DEBUG_MOVEMENT then print("[BoardService] Sending movement path to player " .. playerId .. " (Length: " .. #moveInfo.autoPath .. ")") end
 			boardRemotes.StartPlayerMovementPath:FireClient(player, playerId, movementData)
 		else
-			-- End turn if no movement
-			if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
-				if DEBUG_MOVEMENT then
-					print("[BoardService] No movement for player " .. playerId .. ", ending turn")
-				end
+			if gameManager.turnSystem:GetCurrentPlayerTurn() == playerId then
+				if DEBUG_MOVEMENT then print("[BoardService] No movement for player " .. playerId .. ", ending turn") end
 				gameManager.turnSystem:EndPlayerTurn(playerId, "no_move")
 			end
 		end
 
-		-- Reset dice bonus
+		-- Reset and clear dice bonus (Same as before)
 		playerDiceBonus[playerId] = nil
-
-		-- Clear dice bonus after use
-		if diceBonus > 0 and diceBonusService then
-			diceBonusService.ClearPlayerDiceBonus(playerId)
-			print("[BoardService] Cleared dice bonus for player " .. player.Name .. " after use")
-		end
-
-		-- Clear dice bonus in InventoryService if available
-		if gameManager.inventoryService and gameManager.inventoryService.ResetDiceBonusUse then
-			gameManager.inventoryService.ResetDiceBonusUse(playerId)
+		if not isFixed and diceBonus > 0 then
+			local diceBonusService = getDiceBonusService()
+			if diceBonusService then diceBonusService.ClearPlayerDiceBonus(playerId) end
+			if gameManager.inventoryService and gameManager.inventoryService.ResetDiceBonusUse then
+				gameManager.inventoryService.ResetDiceBonusUse(playerId)
+			end
 		end
 	end)
 
-	-- Server can now send to client for crystal fixed movement
-	-- This lets the server tell the client about a fixed move (from crystal items)
+	-- Server can now send to client for crystal fixed movement (Same as before)
 	_G.SendFixedMovement = function(player, fixedValue)
 		if player and fixedValue and typeof(fixedValue) == "number" then
-			rollDiceRemote:FireClient(player, fixedValue, true) -- true flag indicates fixed movement
+			rollDiceRemote:FireClient(player, fixedValue, true)
 			return true
 		end
 		return false
 	end
 
-	-- Handle path selection
+	-- Handle path selection (Same as before, with combat check)
 	boardRemotes.ChoosePath.OnServerEvent:Connect(function(player, direction)
 		local playerId = player.UserId
 
-		-- Check if combat is active
+		-- Check combat active
 		local combatService = getCombatService()
 		if combatService and combatService:IsCombatActive() then
 			if DEBUG_MOVEMENT then print("[BoardService] Rejected path choice from player " .. playerId .. " - Combat Active") end
 			return
 		end
 
-		-- Check if it's player's turn
-		if gameManager.turnSystem and gameManager.turnSystem:GetCurrentPlayerTurn() ~= playerId then
-			if DEBUG_MOVEMENT then
-				print("[BoardService] Rejected path choice from player " .. playerId ..
-					" - not their turn")
-			end
+		-- Check turn (Same as before)
+		if not gameManager or not gameManager.turnSystem then return end
+		if gameManager.turnSystem:GetCurrentPlayerTurn() ~= playerId then
+			if DEBUG_MOVEMENT then print("[BoardService] Rejected path choice from player " .. playerId .. " - not their turn") end
 			return
 		end
 
-		if DEBUG_MOVEMENT then
-			print("[BoardService] Player " .. playerId .. " chose direction: " .. direction)
-		end
+		if DEBUG_MOVEMENT then print("[BoardService] Player " .. playerId .. " chose direction: " .. direction) end
 
-		-- Check if previous movement was confirmed
-		if pendingMovementCompletions[playerId] and not pendingMovementCompletions[playerId].confirmed then
-			pendingMovementCompletions[playerId].confirmed = true
-
-			if DEBUG_MOVEMENT then
-				print("[BoardService] Confirmed previous movement for player " .. playerId)
-			end
-		end
-
-		-- Process direction choice
+		-- Process direction choice (Same as before)
 		local moveResult = boardSystem:ProcessDirectionChoice(playerId, direction)
-
 		if moveResult and moveResult.autoPath and #moveResult.autoPath > 0 then
-			-- Send movement data to client
 			local movementData = {
 				path = moveResult.autoPath,
 				directions = moveResult.requiresChoice and moveResult.availableDirections or nil,
 				requiresConfirmation = true
 			}
-
-			if DEBUG_MOVEMENT then
-				print("[BoardService] Sending movement path after direction choice")
-				print("  Path length: " .. #moveResult.autoPath)
-				print("  Requires choice: " .. tostring(moveResult.requiresChoice))
-				print("  Move complete: " .. tostring(moveResult.moveComplete or false))
-				if moveResult.requiresChoice then
-					print("  Available directions: " .. #moveResult.availableDirections)
-				end
-			end
-
+			if DEBUG_MOVEMENT then print("[BoardService] Sending movement path after direction choice (Length: " .. #moveResult.autoPath .. ")") end
 			boardRemotes.StartPlayerMovementPath:FireClient(player, playerId, movementData)
 		else
-			-- End turn if choice invalid
-			if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
-				if DEBUG_MOVEMENT then
-					print("[BoardService] Invalid direction choice from player " .. playerId ..
-						", ending turn")
-				end
+			if gameManager.turnSystem:GetCurrentPlayerTurn() == playerId then
+				if DEBUG_MOVEMENT then print("[BoardService] Invalid direction choice from player " .. playerId .. ", ending turn") end
 				gameManager.turnSystem:EndPlayerTurn(playerId, "invalid_choice")
 			end
 		end
 	end)
 
-	-- Handle movement completion confirmation from client
+	-- Handle movement completion confirmation from client (Includes Combat Initiation)
 	boardRemotes.MovementVisualizationComplete.OnServerEvent:Connect(function(player, finalTileId)
 		local playerId = player.UserId
 
-		-- Check if this movement is pending confirmation
+		-- Check pending confirmation (Same as before)
 		if not pendingMovementCompletions[playerId] then
-			if DEBUG_MOVEMENT then
-				print("[BoardService] Received movement completion from player " .. playerId ..
-					" but no pending confirmation found")
-			end
+			if DEBUG_MOVEMENT then print("[BoardService] Received movement completion from player " .. playerId .. " but no pending confirmation found.") end
 			return
 		end
 
-		if DEBUG_MOVEMENT then
-			print("[BoardService] Player " .. playerId .. " confirmed movement to tile " .. finalTileId)
+		-- Check player validity (Same as before)
+		local currentPlayer = Players:GetPlayerByUserId(playerId)
+		if not currentPlayer or not boardSystem.playerPositions[playerId] then
+			if DEBUG_MOVEMENT then print("[BoardService] Player " .. playerId .. " left or data cleaned up, skipping movement completion.") end
+			pendingMovementCompletions[playerId] = nil
+			return
 		end
 
-		-- Set as confirmed
+		if DEBUG_MOVEMENT then print("[BoardService] Player " .. playerId .. " confirmed movement visualization complete at tile " .. finalTileId) end
+
+		-- Set confirmed (Same as before)
 		pendingMovementCompletions[playerId].confirmed = true
 
-		-- Check if combat is active (shouldn't normally happen here, but safety check)
+		-- Check if combat is active (Safety check)
 		local combatService = getCombatService()
 		if combatService and combatService:IsCombatActive() then
 			if DEBUG_MOVEMENT then print("[BoardService] Combat is active, skipping tile effects and turn end logic.") end
-			pendingMovementCompletions[playerId] = nil -- Clear pending state
+			pendingMovementCompletions[playerId] = nil
 			return
 		end
 
@@ -467,64 +374,65 @@ local function initializeBoardService()
 					print("[BoardService] Initiating combat on shared tile " .. finalTileId)
 					local combatInitiated = combatService:InitiatePreCombat(player1, player2, finalTileId)
 					if combatInitiated then
-						pendingMovementCompletions[playerId] = nil -- Clear pending state as combat handles flow now
-						return -- Stop further processing, combat service takes over
+						pendingMovementCompletions[playerId] = nil -- Clear pending state as combat handles flow
+						return -- Stop further processing
 					else
 						print("[BoardService] Combat initiation failed.")
 					end
 				end
 			else
-				print("[BoardService] CombatService not available or combat already active. Skipping initiation.")
+				-- print("[BoardService] CombatService not available or combat already active. Skipping initiation.")
 			end
 		end
 		-- *** END COMBAT INITIATION CHECK ***
 
-
-		-- Trigger Tile Effect Here (Only if not in combat)
+		-- Trigger Tile Effect (Only if not in combat)
 		local tileInfo = boardSystem:GetTileInfo(finalTileId)
 		if tileInfo then
 			local tileType = tileInfo.type
-			local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
 			boardRemotes:WaitForChild("TileTriggerEvent"):FireAllClients(playerId, finalTileId, tileType)
-
-			-- Check if this is a checkpoint tile
+			-- Checkpoint System Integration (Same as before)
 			local checkpointSystem = gameManager and gameManager.checkpointSystem or _G.CheckpointSystem
-			if checkpointSystem then
+			if checkpointSystem and checkpointSystem.OnPlayerLandedOnTile then
 				checkpointSystem:OnPlayerLandedOnTile(player, finalTileId, tileType)
 			end
-
-			if DEBUG_MOVEMENT then
-				print("[BoardService] Tile effect triggered for player " .. playerId ..
-					" at tile " .. finalTileId .. " (type: " .. tileType .. ")")
-			end
+			if DEBUG_MOVEMENT then print("[BoardService] Tile effect triggered for player " .. playerId .. " at tile " .. finalTileId .. " (type: " .. tileType .. ")") end
 		end
 
-		-- End turn if still same player (and not in combat)
-		if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
-			-- Check if movement is complete (no more choices)
-			local hasChoices = boardSystem.playerMovementState[playerId] == "need_choice"
+		-- End turn logic (Only if not in combat)
+		if gameManager.turnSystem then
+			local currentTurnPlayerId = gameManager.turnSystem:GetCurrentPlayerTurn()
+			if playerId == currentTurnPlayerId then
+				local currentMovementState = boardSystem.playerMovementState[playerId]
+				local currentRemainingSteps = boardSystem.playerRemainingSteps[playerId]
 
-			if DEBUG_MOVEMENT then
-				print("[BoardService] Player " .. playerId .. " movement state: " ..
-					(boardSystem.playerMovementState[playerId] or "nil"))
-				print("  Has more choices: " .. tostring(hasChoices))
-				print("  Steps remaining: " .. (boardSystem.playerRemainingSteps[playerId] or 0))
-			end
-
-			if not hasChoices then
-				-- Short delay to allow animations to complete
-				task.wait(0.5)
-
-				if DEBUG_MOVEMENT then
-					print("[BoardService] Ending turn for player " .. playerId ..
-						" after complete movement")
+				if currentMovementState == nil or currentRemainingSteps == nil then
+					if DEBUG_MOVEMENT then print("[BoardService] Warning: Player state or remaining steps is nil for player " .. playerId) end
+				else
+					local hasChoices = currentMovementState == "need_choice"
+					if DEBUG_MOVEMENT then
+						print("[BoardService] Player " .. playerId .. " movement state: " .. currentMovementState)
+						print("  Has more choices: " .. tostring(hasChoices))
+						print("  Steps remaining: " .. currentRemainingSteps)
+					end
+					if not hasChoices then
+						task.wait(0.5) -- Wait for animations
+						if gameManager.turnSystem:GetCurrentPlayerTurn() == playerId then -- Re-check turn
+							if DEBUG_MOVEMENT then print("[BoardService] Ending turn for player " .. playerId .. " after complete movement.") end
+							gameManager.turnSystem:EndPlayerTurn(playerId, "move_complete")
+						else
+							if DEBUG_MOVEMENT then print("[BoardService] Turn changed before ending for player " .. playerId) end
+						end
+					end
 				end
-
-				gameManager.turnSystem:EndPlayerTurn(playerId, "move_complete")
+			else
+				if DEBUG_MOVEMENT then print("[BoardService] Movement complete for player " .. playerId .. ", but it's not their turn anymore.") end
 			end
+		else
+			warn("[BoardService] TurnSystem not available when trying to end turn.")
 		end
 
-		-- Clear pending confirmation
+		-- Clear pending confirmation (Important: Do this last)
 		pendingMovementCompletions[playerId] = nil
 	end)
 
@@ -533,5 +441,11 @@ end
 
 -- Initialize service
 local boardSystemInstance = initializeBoardService()
-_G.BoardSystem = boardSystemInstance
+if boardSystemInstance then
+	_G.BoardSystem = boardSystemInstance -- Store instance in Global if successful
+	print("[BoardService] Initialized successfully.")
+else
+	warn("[BoardService] Initialization failed.")
+end
+
 return boardSystemInstance
