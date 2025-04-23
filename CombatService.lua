@@ -1,7 +1,7 @@
 -- CombatService.server.lua
 -- Manages the initiation and resolution of the pre-combat phase.
 -- Location: ServerScriptService/Services/CombatService.server.lua
--- Version: 1.0.0
+-- Version: 1.1.0 (Added PlayerControls toggling during combat)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -136,14 +136,18 @@ function CombatService:InitiatePreCombat(player1, player2, tileId)
 	setSystemEnabledEvent:FireClient(player1, "DiceRollHandler", false)
 	setSystemEnabledEvent:FireClient(player2, "CameraSystem", false)
 	setSystemEnabledEvent:FireClient(player2, "DiceRollHandler", false)
-	-- Add more systems to disable if needed
+	
+	-- 3. Enable Player Controls for combat
+	log("Enabling PlayerControls for combat participants.")
+	setSystemEnabledEvent:FireClient(player1, "PlayerControls", true)
+	setSystemEnabledEvent:FireClient(player2, "PlayerControls", true)
 
-	-- 3. Warp Players to Combat Area
+	-- 4. Warp Players to Combat Area
 	log("Warping players to combat area: " .. tostring(COMBAT_AREA_POSITION))
 	teleportPlayer(player1, COMBAT_AREA_POSITION + Vector3.new(-1214.4, 45.032, -233.3)) -- Offset players slightly
 	teleportPlayer(player2, COMBAT_AREA_POSITION + Vector3.new(-1473.9, 45.032, -233.3))
 
-	-- 4. Start Combat Timer on Clients
+	-- 5. Start Combat Timer on Clients
 	log("Starting combat timer (" .. PRE_COMBAT_DURATION .. "s) on clients.")
 	setCombatStateEvent:FireClient(player1, true, PRE_COMBAT_DURATION)
 	setCombatStateEvent:FireClient(player2, true, PRE_COMBAT_DURATION)
@@ -154,7 +158,7 @@ function CombatService:InitiatePreCombat(player1, player2, tileId)
 		end
 	end
 
-	-- 5. Start Server-Side Timer for Resolution
+	-- 6. Start Server-Side Timer for Resolution
 	task.delay(PRE_COMBAT_DURATION, function()
 		-- Check if the same combat session is still active
 		if isCombatActive and activeCombatSession and
@@ -202,12 +206,15 @@ function CombatService:ResolvePreCombat()
 	if player1 then
 		setSystemEnabledEvent:FireClient(player1, "CameraSystem", true)
 		setSystemEnabledEvent:FireClient(player1, "DiceRollHandler", true)
+		-- Disable Player Controls (lock movement) when returning to the board game
+		setSystemEnabledEvent:FireClient(player1, "PlayerControls", false)
 	end
 	if player2 then
 		setSystemEnabledEvent:FireClient(player2, "CameraSystem", true)
 		setSystemEnabledEvent:FireClient(player2, "DiceRollHandler", true)
+		-- Disable Player Controls (lock movement) when returning to the board game
+		setSystemEnabledEvent:FireClient(player2, "PlayerControls", false)
 	end
-	-- Add more systems to enable if needed
 
 	-- 4. End Combat State on Clients
 	log("Ending combat state on clients.")
