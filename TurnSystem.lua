@@ -1,6 +1,6 @@
 -- TurnSystem.lua
 -- Module for managing turn system and player order
--- Version: 3.1.0 (Added Death & Respawn Handling)
+-- Version: 3.2.0 (Added Pause/Resume and Combat Handling)
 
 local TurnSystem = {}
 TurnSystem.__index = TurnSystem
@@ -29,6 +29,8 @@ function TurnSystem.new()
 	self.skipTurnPlayers = {} -- Stores UserId -> turns to skip
 	self.pendingEndTurn = {} -- Stores UserId -> {reason, timestamp}
 	self.deadPlayers = {} -- Stores UserId -> dead state (true/false)
+	self.isPaused = false -- NEW: Flag to pause turn progression
+	self.pausedTurnState = nil -- NEW: Store state if paused mid-turn {playerId, timeRemaining}
 
 	-- Callbacks (can be set by other systems like GameManager)
 	self.onTurnStart = nil
@@ -164,6 +166,7 @@ function TurnSystem:StartTurnSystem()
 	end
 	print("[TurnSystem] Starting Turn System...") -- Debug
 	self.currentTurnIndex = 0 -- Reset index before starting
+	self.isPaused = false -- Ensure not paused on start
 	self:NextTurn() -- Start the first turn
 	return true
 end
@@ -172,6 +175,14 @@ end
 function TurnSystem:StartPlayerTurn(playerID, attemptCount)
 	attemptCount = attemptCount or 0
 	print(string.format("[TurnSystem DEBUG] StartPlayerTurn called for ID: %s (Attempt: %d)", tostring(playerID), attemptCount)) -- DEBUG
+
+	-- Check if paused
+	if self.isPaused then
+		print("[TurnSystem DEBUG] Turn system is paused. Aborting StartPlayerTurn.")
+		-- Store the intended player if needed, but don't start the turn
+		-- self.pausedTurnState = { playerId = playerID, timeRemaining = TURN_TIME_LIMIT }
+		return false
+	end
 
 	-- Safety break to prevent infinite loops if no valid player can be found
 	if attemptCount > (#self.turnOrder * 2) + 1 then
@@ -295,11 +306,16 @@ function TurnSystem:StartTurnTimer()
 
 	-- Use Heartbeat for smooth timer updates
 	self.turnTimer = RunService.Heartbeat:Connect(function()
-		-- Stop the timer if the turn is no longer active
-		if not self.isTurnActive then
+		-- Stop the timer if the turn is no longer active OR if the system is paused
+		if not self.isTurnActive or self.isPaused then
 			if self.turnTimer then
 				self.turnTimer:Disconnect()
 				self.turnTimer = nil
+				if self.isPaused then
+					print("[TurnSystem DEBUG] Turn timer paused.")
+					-- Store remaining time if paused mid-turn
+					self.pausedTurnState = { playerId = self.currentPlayerTurn, timeRemaining = self.turnTimeRemaining }
+				end
 			end
 			return
 		end
@@ -456,6 +472,12 @@ end
 
 -- Move to the next player in the turn order
 function TurnSystem:NextTurn(attemptCount)
+	-- Check if paused
+	if self.isPaused then
+		print("[TurnSystem DEBUG] Turn system is paused. Cannot move to next turn.")
+		return false
+	end
+
 	-- Check if there are any players left
 	if #self.turnOrder == 0 then
 		warn("[TurnSystem] No players left in turn order. Stopping turns.")
@@ -502,15 +524,21 @@ function TurnSystem:IsPlayerTurn(playerID)
 	-- First check if the player is in the dead state
 	if self.deadPlayers[playerID] then
 		return false
-		end
+	end
 
-		-- Check if it's the player's active turn
-return playerID == self.currentPlayerTurn and self.isTurnActive
+	-- Check if it's the player's active turn and system is not paused
+	return playerID == self.currentPlayerTurn and self.isTurnActive and not self.isPaused
 end
 
 -- Handle actions received from the client during their turn
 function TurnSystem:HandleTurnAction(player, actionType, actionData)
 	local playerID = player.UserId
+
+	-- Check if paused
+	if self.isPaused then
+		warn("[TurnSystem] Received action", actionType, "from player", player.Name, "but the turn system is paused.")
+		return false
+	end
 
 	-- Verify it's the correct player's turn
 	if not self:IsPlayerTurn(playerID) then
@@ -575,8 +603,12 @@ function TurnSystem:HandlePlayerLeaving(playerID)
 		if self.turnTimer then self.turnTimer:Disconnect(); self.turnTimer = nil end
 		self.isTurnActive = false
 		self.currentPlayerTurn = nil
-		-- Move to the next player
-		self:NextTurn()
+		-- Move to the next player only if not paused
+		if not self.isPaused then
+			self:NextTurn()
+		else
+			print("  > Turn system is paused, not moving to next turn.")
+		end
 		-- Adjust index if the removal made the current index out of bounds
 	elseif #self.turnOrder > 0 and self.currentTurnIndex >= #self.turnOrder then
 		self.currentTurnIndex = 0 -- Wrap around or reset (resetting to 0 to prepare for NextTurn increment)
@@ -601,11 +633,11 @@ function TurnSystem:OnPlayerDeath(playerID)
 		print("[TurnSystem] Ending turn of dead player", playerID)
 		self:EndPlayerTurn(playerID, "player_death")
 		return true
-		end
+	end
 
-		-- Player was not the current turn, so just mark them dead
-print("[TurnSystem] Marked player", playerID, "as dead. They will be skipped in turn rotation.")
-return true
+	-- Player was not the current turn, so just mark them dead
+	print("[TurnSystem] Marked player", playerID, "as dead. They will be skipped in turn rotation.")
+	return true
 end
 
 -- NEW: Handle player respawn
@@ -628,13 +660,13 @@ function TurnSystem:OnPlayerRespawn(playerID)
 	if not isInTurnOrder then
 		table.insert(self.turnOrder, playerID)
 		print("[TurnSystem] Added respawned player", playerID, "back to turn order.")
-		end
+	end
 
-		-- Set player to skip one turn after respawn
-self.skipTurnPlayers[playerID] = 1
-print("[TurnSystem] Player", playerID, "will skip next turn after respawn.")
+	-- Set player to skip one turn after respawn
+	self.skipTurnPlayers[playerID] = 1
+	print("[TurnSystem] Player", playerID, "will skip next turn after respawn.")
 
-return true
+	return true
 end
 
 -- Reset the turn system to its initial state
@@ -644,19 +676,89 @@ function TurnSystem:Reset()
 	if self.turnTimer then
 		self.turnTimer:Disconnect()
 		self.turnTimer = nil
-		end
-		-- Clear all state variables
-self.turnOrder = {}
-self.currentTurnIndex = 0
-self.currentPlayerTurn = nil
-self.isTurnActive = false
-self.turnTimeRemaining = 0
-self.turnStates = {}
-self.skipTurnPlayers = {}
-self.pendingEndTurn = {}
-self.deadPlayers = {}
-print("[TurnSystem] Reset complete.") -- Debug
-return true
+	end
+	-- Clear all state variables
+	self.turnOrder = {}
+	self.currentTurnIndex = 0
+	self.currentPlayerTurn = nil
+	self.isTurnActive = false
+	self.turnTimeRemaining = 0
+	self.turnStates = {}
+	self.skipTurnPlayers = {}
+	self.pendingEndTurn = {}
+	self.deadPlayers = {}
+	self.isPaused = false -- Reset pause state
+	self.pausedTurnState = nil
+	print("[TurnSystem] Reset complete.") -- Debug
+	return true
 end
+
+-- NEW: Pause the turn system
+function TurnSystem:PauseTurns()
+	if self.isPaused then
+		print("[TurnSystem] Already paused.")
+		return
+	end
+	print("[TurnSystem] Pausing turns.")
+	self.isPaused = true
+	-- If a turn is active, stop its timer and store state
+	if self.isTurnActive and self.turnTimer then
+		self.turnTimer:Disconnect() -- Disconnect stops the Heartbeat connection
+		self.turnTimer = nil
+		self.pausedTurnState = { playerId = self.currentPlayerTurn, timeRemaining = self.turnTimeRemaining }
+		print("  > Stored paused turn state for player", self.pausedTurnState.playerId, "with", self.pausedTurnState.timeRemaining, "s remaining.")
+		-- Optionally notify clients that the turn is paused
+		if self.remotes and self.remotes.updateTurnTimer then
+			self.remotes.updateTurnTimer:FireAllClients("Paused") -- Send a specific state
+		end
+	end
+end
+
+-- NEW: Resume the turn system
+function TurnSystem:ResumeTurns()
+	if not self.isPaused then
+		print("[TurnSystem] Not paused.")
+		return
+	end
+	print("[TurnSystem] Resuming turns.")
+	self.isPaused = false
+	local pausedState = self.pausedTurnState
+	self.pausedTurnState = nil -- Clear paused state
+
+	-- If a turn was active when paused, resume it
+	if pausedState and pausedState.playerId then
+		local player = Players:GetPlayerByUserId(pausedState.playerId)
+		-- Check if the player is still valid and not dead
+		if player and not self.deadPlayers[pausedState.playerId] then
+			print("  > Resuming turn for player", pausedState.playerId, "with", pausedState.timeRemaining, "s remaining.")
+			self.currentPlayerTurn = pausedState.playerId
+			self.isTurnActive = true
+			self.turnTimeRemaining = pausedState.timeRemaining
+			-- Find the correct index for the resumed player
+			for i, id in ipairs(self.turnOrder) do
+				if id == pausedState.playerId then
+					self.currentTurnIndex = i
+					break
+				end
+			end
+			self:StartTurnTimer() -- Restart the timer
+			-- Notify clients
+			if self.remotes and self.remotes.updateTurn then
+				self.remotes.updateTurn:FireAllClients(pausedState.playerId)
+			end
+			if self.remotes and self.remotes.updateTurnTimer then
+				self.remotes.updateTurnTimer:FireAllClients(math.floor(pausedState.timeRemaining))
+			end
+		else
+			print("  > Paused player", pausedState.playerId, "is no longer valid or is dead. Moving to next turn.")
+			self:NextTurn() -- Move to the next player if the paused one is invalid
+		end
+	else
+		-- If no turn was active, just start the next turn
+		print("  > No paused turn state found. Moving to next turn.")
+		self:NextTurn()
+	end
+end
+
 
 return TurnSystem
