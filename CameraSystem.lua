@@ -1,6 +1,6 @@
 -- CameraSystem.lua
 -- Simple camera system: locks on player and can switch to FreeCam
--- Modified to handle respawning gracefully
+-- Version: 1.2.2 (Revert to Default Roblox Camera during Combat)
 
 local CameraSystem = {}
 
@@ -27,6 +27,11 @@ local freeCamDirection = Vector3.new(0, -0.8, -1).Unit -- MOBA-style angled view
 local cameraAngle = math.rad(45) -- 45 degree camera angle (MOBA-style)
 local cameraDistance = 30 -- Distance of camera from target position
 local isSystemActive = true -- Flag to track if the camera system is active
+local isResetting = false -- Flag to prevent race conditions during reset
+local renderSteppedConnection = nil -- Explicitly store RenderStepped connection
+
+-- Define Combat Area Position (Same as CombatService) - Still useful for potential future logic
+local COMBAT_AREA_POSITION = Vector3.new(0, 100, 0)
 
 -- Debug function
 local function debug(message)
@@ -36,9 +41,12 @@ end
 -- Forward declare initCameraSystem and cleanup
 local initCameraSystem
 local cleanup
+local startRenderStepped -- Declare startRenderStepped
 
 -- Function to completely reset and reinitialize the camera system
 local function resetCameraSystem()
+	if isResetting then return end -- Prevent recursive resets
+	isResetting = true
 	debug("Resetting camera system...")
 
 	-- Clean up existing connections
@@ -49,17 +57,20 @@ local function resetCameraSystem()
 	freeCamPosition = Vector3.new(0, 0, 0)
 	freeCamHeight = 40
 	cameraDistance = 30
-	isSystemActive = true
+	isSystemActive = true -- Ensure it's active after reset
 
 	-- Reactivate the system (make sure initCameraSystem is defined before calling)
 	if initCameraSystem then
-		initCameraSystem()
+		-- Use task.defer to avoid potential issues with immediate re-initialization
+		task.defer(initCameraSystem)
 	else
 		warn("[CameraSystem] initCameraSystem not yet defined during reset!")
 	end
 
-
 	debug("Camera system reset complete")
+	-- Reset the flag after a short delay to allow init to start
+	task.wait(0.1)
+	isResetting = false
 end
 
 -- Find current turn player
@@ -83,7 +94,6 @@ local function findBoardCenter()
 	for _, tile in ipairs(tilesFolder:GetChildren()) do
 		if tile:IsA("BasePart") then totalPos = totalPos + tile.Position; count = count + 1 end
 	end
-	-- *** FIXED: Changed return syntax ***
 	if count > 0 then
 		return totalPos / count
 	else
@@ -93,29 +103,46 @@ end
 
 -- Update in lock player mode
 local function updateLockPlayerCamera()
-	if not isSystemActive then return end
+	-- Removed the isSystemActive check here, RenderStepped handles it
+	if currentMode ~= "LockPlayer" then return end
 
 	local playerInfo = findCurrentTurnPlayer()
 	local targetCFrame
 	if playerInfo then
 		local targetPos = playerInfo.position
 		local lookVector = playerInfo.lookVector
-		local cameraPos = targetPos - (lookVector * cameraOffset.Z) + Vector3.new(0, cameraOffset.Y, 0)
+		-- Ensure lookVector is not zero
+		if lookVector.Magnitude < 0.1 then lookVector = Vector3.new(0, 0, -1) end
+
+		local cameraPos = targetPos - (lookVector.Unit * cameraOffset.Z) + Vector3.new(0, cameraOffset.Y, 0)
 		local lookAtPos = targetPos + Vector3.new(0, 2, 0)
 		targetCFrame = CFrame.lookAt(cameraPos, lookAtPos)
 	else
+		-- Fallback if player not found (e.g., between turns)
 		local boardCenter = findBoardCenter()
 		local cameraPos = boardCenter + Vector3.new(0, freeCamHeight, 20)
 		targetCFrame = CFrame.lookAt(cameraPos, boardCenter)
 	end
-	local tweenInfo = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-	local tween = TweenService:Create(camera, tweenInfo, {CFrame = targetCFrame})
-	tween:Play()
+
+	-- Only tween if the target CFrame is significantly different
+	if targetCFrame and (camera.CFrame.Position - targetCFrame.Position).Magnitude > 0.1 then
+		local tweenInfo = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		-- Check if camera is still valid before tweening
+		if camera and camera.Parent then
+			local tween = TweenService:Create(camera, tweenInfo, {CFrame = targetCFrame})
+			tween:Play()
+		end
+	elseif targetCFrame and camera and camera.Parent then
+		-- If very close, just set it directly to avoid jitter
+		camera.CFrame = targetCFrame
+	end
 end
+
 
 -- Update free cam
 local function updateFreeCam(deltaTime)
-	if not isSystemActive then return end
+	-- Removed the isSystemActive check here, RenderStepped handles it
+	if currentMode ~= "FreeCam" then return end
 
 	-- Get mouse input for camera rotation
 	local mouseMovement = UserInputService:GetMouseDelta()
@@ -201,32 +228,39 @@ local function updateFreeCam(deltaTime)
 		if moveDirection.Magnitude > 0.01 then
 			moveDirection = moveDirection.Unit
 
-			-- Update camera position
+			-- Update camera position based on freeCamPosition (which is the center point)
 			freeCamPosition = freeCamPosition + moveDirection * currentMoveSpeed
 		end
 	end
 
-	-- Calculate target position (where the camera is looking at)
+	-- Calculate target position (where the camera is looking at - the center point)
 	local targetPosition = Vector3.new(freeCamPosition.X, 0, freeCamPosition.Z)
 
 	-- Calculate horizontal direction vector (XZ plane)
 	local horizontalDirection = Vector3.new(freeCamDirection.X, 0, freeCamDirection.Z).Unit
 
-	-- Calculate camera position using distance and tilt angle
+	-- Calculate camera position using distance and tilt angle relative to targetPosition
 	local offsetX = -horizontalDirection.X * cameraDistance * math.cos(cameraAngle)
-	local offsetY = cameraDistance * math.sin(cameraAngle)
+	local offsetY = cameraDistance * math.sin(cameraAngle) -- Height based on distance and angle
 	local offsetZ = -horizontalDirection.Z * cameraDistance * math.cos(cameraAngle)
 
-	local finalCameraOffset = Vector3.new(offsetX, offsetY, offsetZ) -- Renamed variable to avoid conflict
-	local cameraPosition = targetPosition + finalCameraOffset
+	local finalCameraOffset = Vector3.new(offsetX, offsetY, offsetZ)
+	-- Use freeCamHeight for the Y component of the camera's position directly
+	local cameraPosition = targetPosition + Vector3.new(finalCameraOffset.X, freeCamHeight, finalCameraOffset.Z)
 
-	-- Update camera
-	camera.CFrame = CFrame.lookAt(cameraPosition, targetPosition)
+	-- Update camera lookAt
+	local lookAtTarget = targetPosition -- Look at the ground position (center point)
+
+	-- Check if camera is valid before setting CFrame
+	if camera and camera.Parent then
+		camera.CFrame = CFrame.lookAt(cameraPosition, lookAtTarget)
+	end
 end
+
 
 -- Toggle camera mode
 local function toggleCameraMode()
-	if not isSystemActive then return end
+	if not isSystemActive then return end -- Check if system is active
 
 	if currentMode == "LockPlayer" then
 		currentMode = "FreeCam"
@@ -237,6 +271,7 @@ local function toggleCameraMode()
 
 			-- Get initial camera direction from player's look direction
 			local horizontalDir = Vector3.new(playerInfo.lookVector.X, 0, playerInfo.lookVector.Z).Unit
+			if horizontalDir.Magnitude < 0.1 then horizontalDir = Vector3.new(0,0,-1) end -- Default if zero
 			freeCamDirection = Vector3.new(horizontalDir.X, -math.sin(cameraAngle), horizontalDir.Z).Unit
 		else
 			freeCamPosition = findBoardCenter()
@@ -251,10 +286,12 @@ local function toggleCameraMode()
 
 		camera.CameraType = Enum.CameraType.Scriptable
 		camera.CameraSubject = nil
+		debug("Switched to FreeCam mode.")
 	else
 		currentMode = "LockPlayer"
 		camera.CameraType = Enum.CameraType.Scriptable
-		updateLockPlayerCamera()
+		updateLockPlayerCamera() -- Update immediately to lock onto player
+		debug("Switched to LockPlayer mode.")
 	end
 end
 
@@ -266,13 +303,16 @@ local function connectToTurnSystem()
 	if not gameRemotes then return end
 	local updateTurnEvent = gameRemotes:FindFirstChild("UpdateTurn")
 	if not updateTurnEvent then return end
+
+	-- Disconnect previous connection if exists
+	if connections.turnUpdate then connections.turnUpdate:Disconnect(); connections.turnUpdate = nil end
+
 	connections.turnUpdate = updateTurnEvent.OnClientEvent:Connect(function(playerId)
 		currentTurnPlayerId = playerId
-		if currentMode == "LockPlayer" then
-			updateLockPlayerCamera()
-		end
+		-- RenderStepped will handle the update if active and in LockPlayer mode
 	end)
-end -- *** FIXED: Changed } to end ***
+	debug("Connected to UpdateTurn event.")
+end
 
 -- Connect to player respawn system
 local function connectToRespawnSystem()
@@ -288,8 +328,10 @@ local function connectToRespawnSystem()
 		playerRespawnedEvent.Name = "PlayerRespawned"
 		playerRespawnedEvent.Parent = uiRemotes
 		debug("Created PlayerRespawned remote event")
-		-- *** FIXED: Removed stray } ***
 	end
+
+	-- Disconnect previous connection if exists
+	if connections.playerRespawn then connections.playerRespawn:Disconnect(); connections.playerRespawn = nil end
 
 	-- Connect to the respawn event
 	connections.playerRespawn = playerRespawnedEvent.OnClientEvent:Connect(function(respawnData)
@@ -297,7 +339,7 @@ local function connectToRespawnSystem()
 
 		-- Reset camera system on respawn
 		task.defer(function()
-			resetCameraSystem()
+			resetCameraSystem() -- This now includes setting isSystemActive = true
 
 			-- Focus camera on respawn position if available
 			if respawnData and respawnData.respawnTileId then
@@ -312,100 +354,187 @@ local function connectToRespawnSystem()
 						currentMode = "LockPlayer"
 						updateLockPlayerCamera()
 						debug("Camera focused on respawn tile: " .. respawnData.respawnTileId)
-					end -- *** FIXED: Removed stray } ***
-				end -- *** FIXED: Removed stray } ***
+					end
+				end
 			end
 		end) -- Close task.defer function
 	end) -- Close OnClientEvent connection
 
 	debug("Connected to player respawn system")
-end -- *** FIXED: Changed } to end ***
+end
+
+-- NEW: Connect to system enable/disable event
+local function connectToSystemEnableEvent()
+	local remotes = ReplicatedStorage:WaitForChild("Remotes")
+	local combatRemotes = remotes:FindFirstChild("CombatRemotes")
+	if not combatRemotes then warn("[CameraSystem] CombatRemotes folder not found!"); return end
+
+	local setSystemEnabledEvent = combatRemotes:FindFirstChild("SetSystemEnabled")
+	if not setSystemEnabledEvent then warn("[CameraSystem] SetSystemEnabled event not found!"); return end
+
+	-- Disconnect previous connection if exists
+	if connections.systemEnable then connections.systemEnable:Disconnect(); connections.systemEnable = nil end
+
+	connections.systemEnable = setSystemEnabledEvent.OnClientEvent:Connect(function(systemName, enabled)
+		if systemName == "CameraSystem" then
+			debug("Received SetSystemEnabled for CameraSystem:", enabled)
+			if enabled then
+				CameraSystem.Enable()
+			else
+				CameraSystem.Disable()
+			end
+		end
+	end)
+	debug("Connected to SetSystemEnabled event for CameraSystem")
+end
+
 
 -- Clean up connections
 cleanup = function() -- Assign to the forward-declared variable
+	debug("Cleaning up camera connections...")
 	for name, connection in pairs(connections) do
-		if connection then connection:Disconnect(); connections[name] = nil end
+		if connection then
+			debug("  Disconnecting:", name)
+			connection:Disconnect()
+			connections[name] = nil
+		end
+	end
+	-- Also stop the render stepped loop if it's running
+	if renderSteppedConnection then
+		debug("  Disconnecting: renderStepped")
+		renderSteppedConnection:Disconnect()
+		renderSteppedConnection = nil
 	end
 	debug("All camera connections cleaned up")
-end -- *** FIXED: Changed } to end ***
+end
 
--- Initialize camera system
-initCameraSystem = function() -- Assign to the forward-declared variable
-	debug("Checking for character...")
-	if not player.Character then
-		debug("Character not found, waiting...")
-		player.CharacterAdded:Wait()
-		debug("Character added.")
-	end
-	debug("Waiting for HumanoidRootPart...")
-	player.Character:WaitForChild("HumanoidRootPart")
-	debug("HumanoidRootPart found.")
+-- Start the RenderStepped loop
+startRenderStepped = function()
+	if renderSteppedConnection then return end -- Don't start if already running
 
-
-	debug("Initializing camera system")
-	isSystemActive = true
-
-	-- Connect to the turn system
-	connectToTurnSystem()
-
-	-- Connect to the respawn system
-	connectToRespawnSystem()
-
-	-- Set camera to scriptable mode
-	camera.CameraType = Enum.CameraType.Scriptable
-
-	-- Connect input for camera toggle
-	connections.inputBegan = UserInputService.InputBegan:Connect(function(input, gameProcessed)
-		if gameProcessed then return end
-		if input.KeyCode == Enum.KeyCode.V then toggleCameraMode() end
-	end)
-
-	-- Connect render stepped for camera updates
-	connections.renderStepped = RunService.RenderStepped:Connect(function(deltaTime)
+	debug("Starting RenderStepped loop.")
+	renderSteppedConnection = RunService.RenderStepped:Connect(function(deltaTime)
+		-- Basic safety check
 		if not camera or not camera.Parent then
 			debug("Camera not found or destroyed, stopping RenderStepped.")
-			if connections.renderStepped then connections.renderStepped:Disconnect(); connections.renderStepped = nil end
+			cleanup() -- Clean up all connections if camera is gone
 			return
 		end
 
-		if not isSystemActive then return end -- 
+		-- Skip updates if disabled
+		if not isSystemActive then return end
 
+		-- Update based on mode
 		if currentMode == "LockPlayer" then
 			updateLockPlayerCamera()
 		elseif currentMode == "FreeCam" then
 			updateFreeCam(deltaTime)
 		end
 	end)
-
-	-- Safety cleanup on character removal or script destruction
-	connections.characterRemoving = player.CharacterRemoving:Connect(function() -- Store connection
-		debug("Character removing - preparing for potential reset")
-	end) -- *** FIXED: Removed stray } ***
-
-	connections.scriptDestroying = script.Destroying:Connect(cleanup) -- Store connection
-
-	debug("Camera system initialized")
 end
 
--- Function to pause/disable camera system (used when player dies)
-function CameraSystem.Disable()
-	debug("Disabling camera system")
-	isSystemActive = false
-end 
+-- Initialize camera system
+initCameraSystem = function() -- Assign to the forward-declared variable
+	debug("Initializing camera system...")
 
--- Function to resume/enable camera system (used when player respawns)
-function CameraSystem.Enable()
-	debug("Enabling camera system")
-	if not isSystemActive then
-		isSystemActive = true
-		-- Re-initialize or reset to ensure everything is set up correctly
-		resetCameraSystem() -- Use reset to handle re-connections and state
-	else
-		debug("Camera system already enabled.")
+	-- Ensure cleanup runs first if re-initializing
+	cleanup()
+
+	-- Wait for character and essential parts
+	local char = player.Character or player.CharacterAdded:Wait()
+	char:WaitForChild("HumanoidRootPart", 10)
+	debug("Character and HumanoidRootPart ready.")
+
+	isSystemActive = true -- Ensure active on init
+
+	-- Connect events
+	connectToTurnSystem()
+	connectToRespawnSystem()
+	connectToSystemEnableEvent()
+
+	-- Set camera to scriptable mode
+	camera.CameraType = Enum.CameraType.Scriptable
+
+	-- Connect input for camera toggle
+	connections.inputBegan = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+		if not isSystemActive then return end -- Ignore input if disabled
+		if gameProcessed then return end
+		if input.KeyCode == Enum.KeyCode.V then toggleCameraMode() end
+	end)
+	debug("Connected InputBegan.")
+
+	-- Start the RenderStepped loop
+	startRenderStepped()
+
+	-- Safety cleanup on character removal or script destruction
+	connections.characterRemoving = player.CharacterRemoving:Connect(function(character)
+		debug("Character removing - cleaning up connections.")
+		cleanup() -- Clean up when character is removed
+	end)
+	debug("Connected CharacterRemoving.")
+
+	-- This connection might be redundant if cleanup handles script destruction, but keep for safety
+	if script then
+		connections.scriptDestroying = script.Destroying:Connect(cleanup)
+		debug("Connected Script Destroying.")
 	end
-end -- *** FIXED: Changed } to end ***
 
--- Start
-initCameraSystem()
+	debug("Camera system initialization complete.")
+end
+
+-- Function to pause/disable camera system (used when player dies or combat starts)
+function CameraSystem.Disable()
+	if not isSystemActive then return end -- Prevent multiple calls
+	debug("Disabling camera system (Reverting to Default Roblox Camera)")
+	isSystemActive = false
+
+	-- Stop the RenderStepped loop explicitly
+	if renderSteppedConnection then
+		renderSteppedConnection:Disconnect()
+		renderSteppedConnection = nil
+		debug("RenderStepped loop stopped.")
+	end
+
+	-- Revert to default camera controls
+	camera.CameraType = Enum.CameraType.Custom -- Let Roblox default scripts take over
+	local char = player.Character
+	local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		camera.CameraSubject = humanoid -- Set subject for default scripts
+		debug("Camera reverted to Custom type, subject set to Humanoid.")
+	else
+		camera.CameraSubject = nil -- Clear subject if humanoid not found
+		debug("Camera reverted to Custom type, Humanoid not found, subject cleared.")
+	end
+end
+
+-- Function to resume/enable camera system (used when player respawns or combat ends)
+function CameraSystem.Enable()
+	if isSystemActive then return end -- Prevent multiple calls
+	debug("Enabling custom camera system")
+	isSystemActive = true
+
+	-- Take back control from default scripts
+	camera.CameraType = Enum.CameraType.Scriptable
+	camera.CameraSubject = nil -- Clear subject from default camera
+	debug("Camera set to Scriptable type, subject cleared.")
+
+	-- Restart the RenderStepped loop
+	startRenderStepped()
+
+	-- Force an update based on the current mode immediately
+	if currentMode == "LockPlayer" then
+		debug("Forcing immediate update for LockPlayer mode.")
+		updateLockPlayerCamera()
+	elseif currentMode == "FreeCam" then
+		debug("FreeCam mode active, RenderStepped will handle update.")
+		-- Optional: Immediately update FreeCam position if needed, though RenderStepped should handle it
+		-- updateFreeCam(0) -- Pass 0 delta time for an immediate position update
+	end
+	debug("Custom camera system re-enabled.")
+end
+
+-- Start initialization safely
+task.spawn(initCameraSystem)
 
 return CameraSystem
