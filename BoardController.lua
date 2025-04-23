@@ -10,6 +10,10 @@ local Debris = game:GetService("Debris")
 
 local player = Players.LocalPlayer
 
+-- PlayerModule references for character control
+local playerModule = nil
+local playerControls = nil
+
 local DIRECTIONS = { FRONT = "FRONT", LEFT = "LEFT", RIGHT = "RIGHT" }
 local STEP_TIMEOUT = 5.0
 local DELAY_BETWEEN_STEPS = 0.1
@@ -18,6 +22,7 @@ local MOVEMENT_COMPLETE_DELAY = 0.5
 local DiceRollUI, PathSelectionContainer, RemainingStepsText
 local ForwardButton, LeftButton, RightButton
 local CurrentTileText
+local isInCombatState = false
 
 function BoardController.new()
 	local self = setmetatable({}, BoardController)
@@ -28,11 +33,63 @@ function BoardController.new()
 	self.activeMovementCoroutines = {}
 	self.pendingMovementConfirmations = {}
 
+	-- Initialize PlayerModule reference
+	self:InitializePlayerModule()
+
 	self:InitializeUIReferences()
 	self:ConnectEvents()
 	self:UpdateCurrentTileUI(nil)
 
+	-- Lock player controls by default when board game starts
+	self:LockPlayerControls()
+
 	return self
+end
+
+function BoardController:InitializePlayerModule()
+	-- Get PlayerModule and Controls from player's PlayerScripts
+	if player and player:FindFirstChild("PlayerScripts") then
+		local playerScripts = player.PlayerScripts
+
+		-- Try to get the PlayerModule
+		local success, result = pcall(function()
+			playerModule = require(playerScripts:WaitForChild("PlayerModule"))
+			return playerModule:GetControls()
+		end)
+
+		if success and result then
+			playerControls = result
+			print("[BoardController] Successfully initialized PlayerModule controls")
+		else
+			warn("[BoardController] Failed to initialize PlayerModule controls: ", result)
+		end
+	else
+		warn("[BoardController] PlayerScripts not found, cannot initialize PlayerModule")
+	end
+end
+
+function BoardController:LockPlayerControls()
+	if playerControls then
+		print("[BoardController] Locking player controls for board game mode")
+		playerControls:Disable()
+		-- Additional specific locks if needed
+		-- playerControls:SetMovementEnabled(false)
+		-- playerControls:SetCameraEnabled(false)
+	else
+		warn("[BoardController] Cannot lock controls - PlayerControls not initialized")
+	end
+end
+
+function BoardController:UnlockPlayerControls()
+	if playerControls then
+		print("[BoardController] Unlocking player controls")
+		playerControls:Enable()
+		-- Additional specific unlocks if needed
+		-- playerControls:SetMovementEnabled(true)
+		-- playerControls:SetCameraEnabled(true)
+	else
+		warn("[BoardController] Cannot unlock controls - PlayerControls not initialized")
+	end
 end
 
 function BoardController:InitializeUIReferences()
@@ -70,6 +127,7 @@ end
 function BoardController:GetRemoteEvents()
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
 	local boardRemotes = remotes:WaitForChild("BoardRemotes")
+	local combatRemotes = remotes:WaitForChild("CombatRemotes", 10) -- Wait for combat remotes with timeout
 
 	local movementVisComplete = boardRemotes:FindFirstChild("MovementVisualizationComplete")
 	if not movementVisComplete then
@@ -78,7 +136,7 @@ function BoardController:GetRemoteEvents()
 		warn("[BoardController] Created missing RemoteEvent: MovementVisualizationComplete")
 	end
 
-	return {
+	local eventTable = {
 		playerArrivedAtTile = boardRemotes:WaitForChild("PlayerArrivedAtTile"),
 		choosePath = boardRemotes:WaitForChild("ChoosePath"),
 		startPlayerMovementPath = boardRemotes:WaitForChild("StartPlayerMovementPath"),
@@ -86,6 +144,14 @@ function BoardController:GetRemoteEvents()
 		activityComplete = boardRemotes:WaitForChild("ActivityComplete"),
 		movementVisualizationComplete = movementVisComplete
 	}
+
+	-- Add combat remotes if they exist
+	if combatRemotes then
+		eventTable.setCombatState = combatRemotes:FindFirstChild("SetCombatState")
+		eventTable.setSystemEnabled = combatRemotes:FindFirstChild("SetSystemEnabled")
+	end
+
+	return eventTable
 end
 
 function BoardController:ConnectEvents()
@@ -113,6 +179,35 @@ function BoardController:ConnectEvents()
 	self.remotes.tileTriggerEvent.OnClientEvent:Connect(function(playerId, tileId, tileType)
 		self:ShowTileEffect(playerId, tileId, tileType)
 	end)
+
+	-- Connect to combat state changes if the remote exists
+	if self.remotes.setCombatState then
+		self.remotes.setCombatState.OnClientEvent:Connect(function(isActive, duration)
+			isInCombatState = isActive
+
+			if isActive then
+				print("[BoardController] Combat state activated - Unlocking player controls")
+				self:UnlockPlayerControls()
+			else
+				print("[BoardController] Combat state deactivated - Locking player controls")
+				self:LockPlayerControls()
+			end
+		end)
+	end
+
+	-- Connect to system enabled changes if the remote exists
+	if self.remotes.setSystemEnabled then
+		self.remotes.setSystemEnabled.OnClientEvent:Connect(function(systemName, isEnabled)
+			-- If this is for another system, we'll just handle it here for simplicity
+			if systemName == "PlayerControls" then
+				if isEnabled then
+					self:UnlockPlayerControls()
+				else
+					self:LockPlayerControls()
+				end
+			end
+		end)
+	end
 end
 
 function BoardController:StartMoveAlongPath(playerId, path, availableDirections, requiresConfirmation)
