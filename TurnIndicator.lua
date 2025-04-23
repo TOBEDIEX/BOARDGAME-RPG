@@ -1,6 +1,6 @@
 -- TurnIndicatorHandler.lua
 -- จัดการ UI แสดงเทิร์นปัจจุบัน
--- Version: 1.0.0
+-- Version: 1.1.0 (เพิ่มการแสดงสถานะคูลดาวน์การต่อสู้)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -50,6 +50,32 @@ local TurnTimerFrame = CurrentTurnIndicator:FindFirstChild("TurnTimerFrame")
 local TimerFill = TurnTimerFrame and TurnTimerFrame:FindFirstChild("TimerFill")
 local TimerText = TurnTimerFrame and TurnTimerFrame:FindFirstChild("TimerText")
 
+-- เพิ่ม UI แสดงสถานะคูลดาวน์การต่อสู้
+local CombatCooldownLabel = nil
+if not CurrentTurnIndicator:FindFirstChild("CombatCooldownLabel") then
+	CombatCooldownLabel = Instance.new("TextLabel")
+	CombatCooldownLabel.Name = "CombatCooldownLabel"
+	CombatCooldownLabel.Size = UDim2.new(1, 0, 0, 20)
+	CombatCooldownLabel.Position = UDim2.new(0, 0, 1, 3)
+	CombatCooldownLabel.AnchorPoint = Vector2.new(0, 0)
+	CombatCooldownLabel.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+	CombatCooldownLabel.BackgroundTransparency = 0.2
+	CombatCooldownLabel.BorderSizePixel = 0
+	CombatCooldownLabel.Font = Enum.Font.GothamSemibold
+	CombatCooldownLabel.Text = "Combat Cooldown: 0"
+	CombatCooldownLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+	CombatCooldownLabel.TextSize = 14
+	CombatCooldownLabel.Visible = false
+	CombatCooldownLabel.Parent = CurrentTurnIndicator
+
+	-- Add UICorner
+	local uiCorner = Instance.new("UICorner")
+	uiCorner.CornerRadius = UDim.new(0, 4)
+	uiCorner.Parent = CombatCooldownLabel
+else
+	CombatCooldownLabel = CurrentTurnIndicator:FindFirstChild("CombatCooldownLabel")
+end
+
 -- Verify all required components are present
 if not TurnText or not PlayerClassLabel or not PlayerLevelLabel or 
 	not TurnTimerFrame or not TimerFill or not TimerText then
@@ -60,15 +86,19 @@ end
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
 local gameRemotes = remotes:WaitForChild("GameRemotes")
 local uiRemotes = remotes:WaitForChild("UIRemotes")
+local combatRemotes = remotes:WaitForChild("CombatRemotes", 10) -- รอไม่เกิน 10 วินาที
 
 -- Get required remotes
 local updateTurnEvent = gameRemotes:WaitForChild("UpdateTurn")
 local updateTurnTimerEvent = gameRemotes:FindFirstChild("UpdateTurnTimer")
 local updateTurnDetailsEvent = uiRemotes:FindFirstChild("UpdateTurnDetails")
+local combatCooldownEvent = gameRemotes:FindFirstChild("CombatCooldown") or 
+	(combatRemotes and combatRemotes:FindFirstChild("CombatCooldown"))
 
 -- Track timer tween
 local currentTimerTween = nil
 local isMyTurn = false
+local currentCombatCooldown = 0 -- เพิ่มตัวแปรเก็บจำนวนเทิร์นคูลดาวน์ปัจจุบัน
 
 -- ฟังก์ชันปรับปรุงการแสดงข้อมูลเทิร์น
 local function updateTurnDisplay(turnData)
@@ -203,6 +233,67 @@ local function updateTimer(timeRemaining)
 	end
 end
 
+-- เพิ่มฟังก์ชันใหม่: อัปเดตการแสดงสถานะคูลดาวน์การต่อสู้
+local function updateCombatCooldown(cooldownTurns, failedCombatReason)
+	if not CombatCooldownLabel then return end
+
+	currentCombatCooldown = cooldownTurns or 0
+
+	if currentCombatCooldown <= 0 then
+		-- ซ่อนป้ายถ้าไม่มีคูลดาวน์
+		CombatCooldownLabel.Visible = false
+		debugLog("Hiding combat cooldown label")
+		return
+	end
+
+	-- แสดงสถานะคูลดาวน์
+	CombatCooldownLabel.Visible = true
+
+	if failedCombatReason then
+		-- กรณีแสดงเมื่อไม่สามารถเข้าต่อสู้ได้
+		if failedCombatReason == true then
+			-- คูลดาวน์ของตัวเอง
+			CombatCooldownLabel.Text = "Combat Cooldown: " .. cooldownTurns .. " turns"
+			CombatCooldownLabel.BackgroundColor3 = Color3.fromRGB(255, 50, 50) -- สีแดง
+		else
+			-- คูลดาวน์ของคู่ต่อสู้
+			CombatCooldownLabel.Text = "Opponent has combat cooldown: " .. cooldownTurns .. " turns"
+			CombatCooldownLabel.BackgroundColor3 = Color3.fromRGB(150, 50, 150) -- สีม่วง
+		end
+
+		-- แสดง 3 วินาทีแล้วซ่อน
+		task.delay(3, function()
+			if not CombatCooldownLabel then return end
+			CombatCooldownLabel.Visible = false
+		end)
+	else
+		-- กรณีแสดงสถานะคูลดาวน์ปกติ
+		CombatCooldownLabel.Text = "Combat Cooldown: " .. cooldownTurns .. " turns"
+		CombatCooldownLabel.BackgroundColor3 = Color3.fromRGB(255, 50, 50) -- สีแดง
+
+		-- แอนิเมชันเมื่อได้รับคูลดาวน์ใหม่ (ถ้าเพิ่งเริ่มติดคูลดาวน์)
+		if cooldownTurns == 2 then -- สมมติว่าค่าเริ่มต้นคือ 2 เทิร์น
+			local originalTransparency = CombatCooldownLabel.BackgroundTransparency
+
+			TweenService:Create(
+				CombatCooldownLabel,
+				TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+				{BackgroundTransparency = 0}
+			):Play()
+
+			wait(0.3)
+
+			TweenService:Create(
+				CombatCooldownLabel,
+				TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+				{BackgroundTransparency = originalTransparency}
+			):Play()
+		end
+	end
+
+	debugLog("Updated combat cooldown: " .. cooldownTurns .. " turns")
+end
+
 -- เชื่อมต่อกับ Remote Events
 if updateTurnEvent then
 	updateTurnEvent.OnClientEvent:Connect(function(currentPlayerId)
@@ -239,6 +330,14 @@ if updateTurnTimerEvent then
 	updateTurnTimerEvent.OnClientEvent:Connect(function(timeRemaining)
 		-- อัปเดตเวลา
 		updateTimer(timeRemaining)
+	end)
+end
+
+-- เชื่อมต่อกับ Remote Event คูลดาวน์การต่อสู้
+if combatCooldownEvent then
+	combatCooldownEvent.OnClientEvent:Connect(function(cooldownTurns, failedCombatReason)
+		-- อัปเดตการแสดงสถานะคูลดาวน์
+		updateCombatCooldown(cooldownTurns, failedCombatReason)
 	end)
 end
 
@@ -280,7 +379,9 @@ local TurnIndicatorHandler = {
 	Hide = function() setIndicatorVisible(false) end,
 	UpdateDisplay = updateTurnDisplay,
 	UpdateTimer = updateTimer,
+	UpdateCombatCooldown = updateCombatCooldown, -- เพิ่มฟังก์ชันใหม่
 	IsMyTurn = function() return isMyTurn end,
+	GetCombatCooldown = function() return currentCombatCooldown end, -- เพิ่มฟังก์ชันใหม่
 	EnableDebug = function(enable) 
 		DEBUG_MODE = enable
 		debugLog("Debug mode " .. (enable and "enabled" or "disabled"))
