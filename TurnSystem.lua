@@ -1,6 +1,6 @@
 -- TurnSystem.lua
 -- Module for managing turn system and player order
--- Version: 3.2.0 (Added Pause/Resume and Combat Handling)
+-- Version: 3.3.0 (Added Combat Cooldown System)
 
 local TurnSystem = {}
 TurnSystem.__index = TurnSystem
@@ -14,6 +14,7 @@ local RunService = game:GetService("RunService") -- Added for Heartbeat
 local TURN_TIME_LIMIT = 60
 local INACTIVITY_WARNING_TIME = 15
 local MOVEMENT_SAFETY_DELAY = 0.8
+local COMBAT_COOLDOWN_TURNS = 2 -- จำนวนเทิร์นที่ติดคูลดาวน์หลังการต่อสู้
 
 -- Constructor
 function TurnSystem.new()
@@ -29,8 +30,11 @@ function TurnSystem.new()
 	self.skipTurnPlayers = {} -- Stores UserId -> turns to skip
 	self.pendingEndTurn = {} -- Stores UserId -> {reason, timestamp}
 	self.deadPlayers = {} -- Stores UserId -> dead state (true/false)
-	self.isPaused = false -- NEW: Flag to pause turn progression
-	self.pausedTurnState = nil -- NEW: Store state if paused mid-turn {playerId, timeRemaining}
+	self.isPaused = false -- Flag to pause turn progression
+	self.pausedTurnState = nil -- Store state if paused mid-turn {playerId, timeRemaining}
+
+	-- เพิ่มตัวแปรใหม่สำหรับติดตามคูลดาวน์การต่อสู้
+	self.combatCooldowns = {} -- Stores UserId -> remaining cooldown turns
 
 	-- Callbacks (can be set by other systems like GameManager)
 	self.onTurnStart = nil
@@ -64,7 +68,9 @@ function TurnSystem:InitializeRemotes(gameRemotes)
 		updateTurn = ensureRemoteEvent(gameRemotes, "UpdateTurn"),
 		updateTurnTimer = ensureRemoteEvent(gameRemotes, "UpdateTurnTimer"),
 		turnAction = ensureRemoteEvent(gameRemotes, "TurnAction"),
-		turnState = ensureRemoteEvent(gameRemotes, "TurnState")
+		turnState = ensureRemoteEvent(gameRemotes, "TurnState"),
+		-- เพิ่ม Remote Event ใหม่สำหรับส่งข้อมูลสถานะคูลดาวน์
+		combatCooldown = ensureRemoteEvent(gameRemotes, "CombatCooldown")
 	}
 
 	-- Connect server event for turn actions from clients
@@ -180,7 +186,6 @@ function TurnSystem:StartPlayerTurn(playerID, attemptCount)
 	if self.isPaused then
 		print("[TurnSystem DEBUG] Turn system is paused. Aborting StartPlayerTurn.")
 		-- Store the intended player if needed, but don't start the turn
-		-- self.pausedTurnState = { playerId = playerID, timeRemaining = TURN_TIME_LIMIT }
 		return false
 	end
 
@@ -253,10 +258,12 @@ function TurnSystem:StartPlayerTurn(playerID, attemptCount)
 		else
 			warn("[TurnSystem] InventoryService or ResetTurnFlagsForPlayer function not found in GameManager.")
 		end
-		-- Add calls to reset flags in other services here if needed
 	else
 		warn("[TurnSystem] GameManager not found, cannot reset turn flags in other services.")
 	end
+
+	-- ลดจำนวนเทิร์นคูลดาวน์การต่อสู้เมื่อเริ่มเทิร์นใหม่
+	self:DecrementCombatCooldown(playerID)
 
 	-- Start the actual turn
 	print("[TurnSystem] Starting turn for Player:", player.Name, "(ID:", playerID, ")") -- Debug Print
@@ -274,7 +281,19 @@ function TurnSystem:StartPlayerTurn(playerID, attemptCount)
 
 	-- Send specific state info to the current player
 	if self.remotes and self.remotes.turnState then
-		self.remotes.turnState:FireClient(player, { timeLimit = TURN_TIME_LIMIT, isYourTurn = true })
+		-- เพิ่มการส่งข้อมูลคูลดาวน์การต่อสู้ไปยังผู้เล่น
+		local hasCombatCooldown = self:GetCombatCooldown(playerID) > 0
+		self.remotes.turnState:FireClient(player, { 
+			timeLimit = TURN_TIME_LIMIT, 
+			isYourTurn = true,
+			combatCooldown = self:GetCombatCooldown(playerID) -- ส่งค่าคูลดาวน์ไปด้วย
+		})
+
+		-- แจ้งเตือนผู้เล่นถ้ามีคูลดาวน์การต่อสู้
+		if hasCombatCooldown then
+			local cooldown = self:GetCombatCooldown(playerID)
+			self.remotes.combatCooldown:FireClient(player, cooldown)
+		end
 	else
 		warn("[TurnSystem] Remotes not initialized for TurnState.")
 	end
@@ -595,6 +614,7 @@ function TurnSystem:HandlePlayerLeaving(playerID)
 	self.turnStates[playerID] = nil
 	self.pendingEndTurn[playerID] = nil
 	self.deadPlayers[playerID] = nil
+	self.combatCooldowns[playerID] = nil -- เพิ่มการล้างคูลดาวน์เมื่อผู้เล่นออกจากเกม
 
 	-- If the leaving player was the one whose turn it was
 	if wasCurrentTurn then
@@ -689,11 +709,12 @@ function TurnSystem:Reset()
 	self.deadPlayers = {}
 	self.isPaused = false -- Reset pause state
 	self.pausedTurnState = nil
+	self.combatCooldowns = {} -- รีเซ็ตคูลดาวน์การต่อสู้ด้วย
 	print("[TurnSystem] Reset complete.") -- Debug
 	return true
 end
 
--- NEW: Pause the turn system
+-- Pause the turn system
 function TurnSystem:PauseTurns()
 	if self.isPaused then
 		print("[TurnSystem] Already paused.")
@@ -714,7 +735,7 @@ function TurnSystem:PauseTurns()
 	end
 end
 
--- NEW: Resume the turn system
+-- Resume the turn system
 function TurnSystem:ResumeTurns()
 	if not self.isPaused then
 		print("[TurnSystem] Not paused.")
@@ -760,5 +781,74 @@ function TurnSystem:ResumeTurns()
 	end
 end
 
+-- เพิ่มฟังก์ชันใหม่: ตั้งค่าคูลดาวน์การต่อสู้
+function TurnSystem:SetCombatCooldown(playerID, turns)
+	if not playerID then return false end
+
+	if turns and turns > 0 then
+		self.combatCooldowns[playerID] = turns
+		print("[TurnSystem] Player", playerID, "has", turns, "turns of combat cooldown.")
+
+		-- แจ้งเตือนผู้เล่น (ถ้าออนไลน์อยู่)
+		local player = Players:GetPlayerByUserId(playerID)
+		if player and self.remotes and self.remotes.combatCooldown then
+			self.remotes.combatCooldown:FireClient(player, turns)
+		end
+	else
+		-- ล้างคูลดาวน์ถ้า turns เป็น 0 หรือ nil
+		self.combatCooldowns[playerID] = nil
+		print("[TurnSystem] Cleared combat cooldown for player", playerID)
+
+		-- แจ้งผู้เล่นว่าหมดคูลดาวน์แล้ว
+		local player = Players:GetPlayerByUserId(playerID)
+		if player and self.remotes and self.remotes.combatCooldown then
+			self.remotes.combatCooldown:FireClient(player, 0)
+		end
+	end
+
+	return true
+end
+
+-- เพิ่มฟังก์ชันใหม่: ลดค่าคูลดาวน์การต่อสู้ลง 1 เทิร์น
+function TurnSystem:DecrementCombatCooldown(playerID)
+	if not playerID or not self.combatCooldowns[playerID] then return false end
+
+	local remainingCooldown = self.combatCooldowns[playerID] - 1
+
+	if remainingCooldown <= 0 then
+		-- ล้างคูลดาวน์ถ้าหมดแล้ว
+		self.combatCooldowns[playerID] = nil
+		print("[TurnSystem] Combat cooldown ended for player", playerID)
+
+		-- แจ้งผู้เล่นว่าคูลดาวน์หมดแล้ว
+		local player = Players:GetPlayerByUserId(playerID)
+		if player and self.remotes and self.remotes.combatCooldown then
+			self.remotes.combatCooldown:FireClient(player, 0)
+		end
+	else
+		-- ลดค่าคูลดาวน์
+		self.combatCooldowns[playerID] = remainingCooldown
+		print("[TurnSystem] Combat cooldown for player", playerID, "reduced to", remainingCooldown, "turns")
+
+		-- แจ้งผู้เล่นว่าคูลดาวน์ลดลง
+		local player = Players:GetPlayerByUserId(playerID)
+		if player and self.remotes and self.remotes.combatCooldown then
+			self.remotes.combatCooldown:FireClient(player, remainingCooldown)
+		end
+	end
+
+	return true
+end
+
+-- เพิ่มฟังก์ชันใหม่: ตรวจสอบค่าคูลดาวน์การต่อสู้
+function TurnSystem:GetCombatCooldown(playerID)
+	if not playerID then return 0 end
+	return self.combatCooldowns[playerID] or 0
+end
+
+-- เพิ่มฟังก์ชันใหม่: ตรวจสอบว่าผู้เล่นอยู่ในช่วงคูลดาวน์การต่อสู้หรือไม่
+function TurnSystem:HasCombatCooldown(playerID)
+	return self:GetCombatCooldown(playerID) > 0
+end
 
 return TurnSystem
