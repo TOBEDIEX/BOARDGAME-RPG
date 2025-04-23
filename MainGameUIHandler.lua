@@ -102,7 +102,7 @@ local currentPlayerStats = { hp = 100, maxHp = 100, mp = 50, maxMp = 50, attack 
 local isCombatStateActive = false -- Track combat state
 local combatTimerEndTime = 0 -- Store end time for combat timer
 local combatTimerConnection = nil -- Connection for combat timer loop
-local isUIInteractionDisabled = false -- Flag to disable UI buttons (still used internally for logic)
+local isUIInteractionDisabled = false -- Flag used for logic checks
 
 --[ Remote Events ]--
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -118,7 +118,7 @@ local levelUpEvent = uiRemotes:WaitForChild("LevelUp")
 local classLevelUpEvent = uiRemotes:WaitForChild("ClassLevelUp")
 -- Turn Management
 local updateTurnEvent = gameRemotes:WaitForChild("UpdateTurn")
-local updateTurnDetailsEvent = uiRemotes:WaitForChild("UpdateTurnDetails")
+local updateTurnDetailsEvent = uiRemotes:FindFirstChild("UpdateTurnDetails")
 local updateTurnTimerEvent = gameRemotes:WaitForChild("UpdateTurnTimer")
 -- Game State
 local endGameEvent = gameRemotes:WaitForChild("EndGame")
@@ -422,11 +422,11 @@ setupButtonHandlers = function()
 	local function setupActionButton(button, uiElement, otherUIElement)
 		if button and not button:GetAttribute("Connected") then
 			button.MouseButton1Click:Connect(function()
-				-- NEW: Check if UI interaction is disabled (Combat Active)
+				-- Check if UI interaction is disabled (Combat Active)
 				if isUIInteractionDisabled then
-					print("[UI DEBUG] UI interaction disabled (Combat Active).")
+					print("[UI DEBUG] UI interaction disabled (Combat Active). Button:", button.Name)
 					-- Show notification instead of doing nothing
-					createNotification("ไม่สามารถเปิดได้ขณะอยู่ใน Combat!", COMBAT_NOTIFICATION_ICON, 2)
+					createNotification("อยู่ในช่วง Combat ไม่สามารถกดได้", COMBAT_NOTIFICATION_ICON, 2)
 					return -- Prevent opening the UI
 				end
 
@@ -479,8 +479,9 @@ setupButtonHandlers = function()
 		local arrowButton = arrowButtonFrame:FindFirstChild("Button")
 		if arrowButton and not arrowButton:GetAttribute("Connected") then
 			arrowButton.MouseButton1Click:Connect(function()
-				-- Check if UI interaction is disabled
-				if isUIInteractionDisabled then return end
+				-- Check if UI interaction is disabled (Combat Active)
+				-- Allow status bar interaction even during combat
+				-- if isUIInteractionDisabled then return end
 
 				local playerStatusBar = StatusBarContainer:FindFirstChild("MyPlayerStatusBar")
 				if not playerStatusBar then return end
@@ -533,9 +534,8 @@ handleCombatStateChange = function(isActive, duration)
 	isCombatStateActive = isActive
 	isUIInteractionDisabled = isActive -- Directly link UI interaction state to combat state
 
-	-- Enable/Disable Buttons INTERACTABILITY is removed, handled in setupActionButton now
-	-- if InventoryButton then InventoryButton.Interactable = not isActive end
-	-- if QuestButton then QuestButton.Interactable = not isActive end
+	-- REMOVED: Enable/Disable Buttons INTERACTABILITY is removed
+	-- Buttons will now check isUIInteractionDisabled in their click handlers
 
 	if not CurrentTurnIndicator then return end
 
