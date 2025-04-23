@@ -1,6 +1,6 @@
 -- DiceRollHandler.lua
 -- Manages dice roll interface and path selection
--- Version: 2.7.0 (Added Death & Respawn Handling)
+-- Version: 2.8.1 (Fixed UI Re-enabling after Combat)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -43,12 +43,14 @@ local remotes = ReplicatedStorage:WaitForChild("Remotes")
 local boardRemotes = remotes:WaitForChild("BoardRemotes")
 local gameRemotes = remotes:WaitForChild("GameRemotes")
 local uiRemotes = remotes:WaitForChild("UIRemotes")
+local combatRemotes = remotes:WaitForChild("CombatRemotes") -- Added CombatRemotes
 
 -- Get remote events
 local rollDiceEvent = boardRemotes:WaitForChild("RollDice")
 local showPathSelectionEvent = boardRemotes:WaitForChild("ShowPathSelection")
 local choosePathEvent = boardRemotes:WaitForChild("ChoosePath")
 local updateTurnEvent = gameRemotes:WaitForChild("UpdateTurn")
+local setSystemEnabledEvent = combatRemotes:WaitForChild("SetSystemEnabled") -- Added SetSystemEnabled
 
 -- Create Remote for DiceBonus
 local inventoryRemotes = remotes:WaitForChild("InventoryRemotes", 5)
@@ -84,17 +86,20 @@ local DIRECTIONS = {
 
 -- Variables
 local isRolling = false
-local canRoll = false
+local canRoll = false -- Tracks if the player *can* roll (is their turn, not dead, not disabled)
+local isMyTurn = false -- NEW: Track if it's currently the local player's turn
 local currentDiceResult = nil
 local currentPathChoices = nil
 local remainingSteps = 0
 local activeDiceBonus = 0
 local bonusDiceResults = {}
 local isFixedMovement = false -- Flag for fixed movement crystals
-local isPlayerDead = false -- NEW: Track player death state
+local isPlayerDead = false -- Track player death state
+local isSystemDisabled = false -- Flag to disable system during combat
 
--- Create bonus dice function
+-- Create bonus dice function (No changes needed)
 local function createBonusDice(numBonusDice)
+	-- ... (โค้ดเดิม)
 	-- Remove old dice first
 	for _, dice in pairs(DiceWheel:GetChildren()) do
 		if dice.Name:find("BonusDice") or dice.Name == "TotalResult" then
@@ -112,7 +117,7 @@ local function createBonusDice(numBonusDice)
 	-- Spacing between dice
 	local spacing = 1.5 -- Spacing as multiplier of dice width
 
-	print("Creating " .. numBonusDice .. " bonus dice")
+	--print("Creating " .. numBonusDice .. " bonus dice")
 
 	-- If 1 bonus die, place to left of main die
 	if numBonusDice == 1 then
@@ -178,8 +183,9 @@ local function createBonusDice(numBonusDice)
 	return bonusDiceResults
 end
 
--- Create total result display above main dice
+-- Create total result display above main dice (No changes needed)
 local function createTotalResult(total)
+	-- ... (โค้ดเดิม)
 	-- Remove old total
 	local oldTotal = DiceWheel:FindFirstChild("TotalResult")
 	if oldTotal then
@@ -254,8 +260,9 @@ local function createTotalResult(total)
 	return totalFrame
 end
 
--- Create dice bonus notification in top right
+-- Create dice bonus notification in top right (No changes needed)
 local function createBonusNotification(bonusAmount)
+	-- ... (โค้ดเดิม)
 	-- Remove any existing notification
 	local oldNotification = PlayerGui:FindFirstChild("DiceBonusNotification")
 	if oldNotification then
@@ -316,8 +323,9 @@ local function createBonusNotification(bonusAmount)
 	return notification
 end
 
--- Create fixed movement notification
+-- Create fixed movement notification (No changes needed)
 local function createFixedMovementNotification(moveAmount)
+	-- ... (โค้ดเดิม)
 	-- Remove any existing notification
 	local oldNotification = PlayerGui:FindFirstChild("FixedMovementNotification")
 	if oldNotification then
@@ -378,8 +386,9 @@ local function createFixedMovementNotification(moveAmount)
 	return notification
 end
 
--- Create notification for when player is dead
+-- Create notification for when player is dead (No changes needed)
 local function createDeathNotification()
+	-- ... (โค้ดเดิม)
 	-- Remove any existing notification
 	local oldNotification = PlayerGui:FindFirstChild("DeathNotification")
 	if oldNotification then
@@ -454,11 +463,16 @@ end
 
 -- Show dice roll UI
 local function showDiceRollUI()
-	-- Don't show if player is dead
+	-- Don't show if player is dead or system is disabled
 	if isPlayerDead then
 		createDeathNotification()
 		return
-	end -- *** FIXED: Changed } to end ***
+	end
+	if isSystemDisabled then -- Check if disabled by combat
+		print("[DiceRollHandler] System is disabled, cannot show UI.")
+		hideDiceRollUI() -- Ensure it's hidden if disabled
+		return
+	end
 
 	DiceRollUI.Visible = true
 	RollButton.Visible = true
@@ -495,17 +509,16 @@ end
 local function hideDiceRollUI()
 	DiceRollUI.Visible = false
 	isRolling = false
-	canRoll = false
+	-- Don't reset canRoll here, let updateTurnEvent handle it
 	isFixedMovement = false -- Reset fixed movement flag
-end -- *** FIXED: Changed } to end ***
+end
 
--- Animate dice roll
+-- Animate dice roll (No changes needed)
 local function animateDiceRoll(finalResult, skipAnimation)
-	-- Don't roll if player is dead
-	if isPlayerDead then
-		createDeathNotification()
-		return
-	end -- *** FIXED: Changed } to end ***
+	-- ... (โค้ดเดิม)
+	-- Don't roll if player is dead or system disabled
+	if isPlayerDead then createDeathNotification(); return end
+	if isSystemDisabled then print("[DiceRollHandler] System disabled, cannot roll dice."); return end
 
 	if isRolling then return end
 
@@ -526,7 +539,7 @@ local function animateDiceRoll(finalResult, skipAnimation)
 		createFixedMovementNotification(finalResult)
 
 		-- Fire the dice roll event to server
-		rollDiceEvent:FireServer(finalResult)
+		rollDiceEvent:FireServer(finalResult, true) -- Send isFixed=true for server logic
 
 		-- Flag that we're using fixed movement
 		isFixedMovement = true
@@ -768,16 +781,16 @@ local function animateDiceRoll(finalResult, skipAnimation)
 	remainingSteps = totalResult     -- Use total for movement steps
 
 	-- Debug output
-	print("=== DICE ROLL RESULT ===")
-	print("Main dice: " .. mainDiceResult)
-	print("Bonus dice: " .. table.concat(allDiceResults.bonus, ", "))
-	print("Total result: " .. totalResult)
-	print("======================")
+	--print("=== DICE ROLL RESULT ===")
+	--print("Main dice: " .. mainDiceResult)
+	--print("Bonus dice: " .. table.concat(allDiceResults.bonus, ", "))
+	--print("Total result: " .. totalResult)
+	--print("======================")
 
 	task.wait(0.3) -- Use task.wait
 
-	-- Send result to server
-	rollDiceEvent:FireServer(totalResult)
+	-- Send result to server (isFixed is false for normal rolls)
+	rollDiceEvent:FireServer(totalResult, false)
 
 	-- Reset bonus after use
 	activeDiceBonus = 0
@@ -799,13 +812,12 @@ local function animateDiceRoll(finalResult, skipAnimation)
 	return totalResult
 end
 
--- Show path choices
+-- Show path choices (No changes needed)
 local function showPathChoices(choices)
-	-- Don't show if player is dead
-	if isPlayerDead then
-		createDeathNotification()
-		return
-	end -- *** FIXED: Changed } to end ***
+	-- ... (โค้ดเดิม)
+	-- Don't show if player is dead or system disabled
+	if isPlayerDead then createDeathNotification(); return end
+	if isSystemDisabled then print("[DiceRollHandler] System disabled, cannot show path choices."); return end
 
 	PathSelectionContainer.Visible = true
 	RemainingStepsText.Text = "Steps: " .. remainingSteps
@@ -830,13 +842,12 @@ local function showPathChoices(choices)
 	currentPathChoices = choices
 end
 
--- Choose path direction
+-- Choose path direction (No changes needed)
 local function choosePath(direction)
-	-- Don't process if player is dead
-	if isPlayerDead then
-		createDeathNotification()
-		return
-	end -- *** FIXED: Changed } to end ***
+	-- ... (โค้ดเดิม)
+	-- Don't process if player is dead or system disabled
+	if isPlayerDead then createDeathNotification(); return end
+	if isSystemDisabled then print("[DiceRollHandler] System disabled, cannot choose path."); return end
 
 	if not currentPathChoices then return end
 
@@ -857,8 +868,9 @@ local function choosePath(direction)
 	end
 end
 
--- Function to handle player death
+-- Function to handle player death (No changes needed)
 local function onPlayerDeath()
+	-- ... (โค้ดเดิม)
 	print("[DiceRollHandler] Player has died")
 	isPlayerDead = true
 
@@ -867,18 +879,20 @@ local function onPlayerDeath()
 
 	-- Show death notification
 	createDeathNotification()
-end -- *** FIXED: Changed } to end ***
+end
 
--- Function to handle player respawn
+-- Function to handle player respawn (No changes needed)
 local function onPlayerRespawn(respawnData)
+	-- ... (โค้ดเดิม)
 	print("[DiceRollHandler] Player has respawned")
 	isPlayerDead = false
+	isSystemDisabled = false -- Re-enable system on respawn
 
 	-- Remove death notification
 	local deathNotification = PlayerGui:FindFirstChild("DeathNotification")
 	if deathNotification then
 		deathNotification:Destroy()
-	end -- *** FIXED: Changed } to end ***
+	end
 
 	-- Reset UI state
 	isRolling = false
@@ -890,14 +904,13 @@ local function onPlayerRespawn(respawnData)
 	activeDiceBonus = 0
 
 	print("[DiceRollHandler] Dice system reset after respawn")
-end -- *** FIXED: Changed } to end ***
+end
 
--- Button event handlers
+-- Button event handlers (No changes needed)
 RollButton.Activated:Connect(function()
-	if isPlayerDead then
-		createDeathNotification()
-		return
-	end -- *** FIXED: Changed } to end ***
+	-- ... (โค้ดเดิม)
+	if isPlayerDead then createDeathNotification(); return end
+	if isSystemDisabled then print("[DiceRollHandler] Cannot roll, system disabled."); return end
 
 	if not isRolling and canRoll then
 		local diceResult = math.random(1, 6)
@@ -906,48 +919,58 @@ RollButton.Activated:Connect(function()
 end)
 
 ForwardButton.Activated:Connect(function()
-	if not isPlayerDead then
+	-- ... (โค้ดเดิม)
+	if not isPlayerDead and not isSystemDisabled then
 		choosePath(DIRECTIONS.FRONT)
-	else -- *** FIXED: Changed { to else ***
+	elseif isPlayerDead then
 		createDeathNotification()
-	end -- *** FIXED: Changed } to end ***
+	else
+		print("[DiceRollHandler] Cannot choose path, system disabled.")
+	end
 end)
 
 LeftButton.Activated:Connect(function()
-	if not isPlayerDead then
+	-- ... (โค้ดเดิม)
+	if not isPlayerDead and not isSystemDisabled then
 		choosePath(DIRECTIONS.LEFT)
-	else -- *** FIXED: Changed { to else ***
+	elseif isPlayerDead then
 		createDeathNotification()
-	end -- *** FIXED: Changed } to end ***
+	else
+		print("[DiceRollHandler] Cannot choose path, system disabled.")
+	end
 end)
 
 RightButton.Activated:Connect(function()
-	if not isPlayerDead then
+	-- ... (โค้ดเดิม)
+	if not isPlayerDead and not isSystemDisabled then
 		choosePath(DIRECTIONS.RIGHT)
-	else -- *** FIXED: Changed { to else ***
+	elseif isPlayerDead then
 		createDeathNotification()
-	end -- *** FIXED: Changed } to end ***
+	else
+		print("[DiceRollHandler] Cannot choose path, system disabled.")
+	end
 end)
 
 -- Remote event handlers
 showPathSelectionEvent.OnClientEvent:Connect(showPathChoices)
 
 updateTurnEvent.OnClientEvent:Connect(function(currentPlayerId)
-	local isMyTurn = currentPlayerId == player.UserId
+	isMyTurn = (currentPlayerId == player.UserId) -- Update isMyTurn state
 
-	if isMyTurn and not isPlayerDead then
+	if isMyTurn and not isPlayerDead and not isSystemDisabled then -- Check disabled flag
 		showDiceRollUI()
 		canRoll = true
 	else
 		hideDiceRollUI()
 		canRoll = false
-	end -- *** FIXED: Changed } to end ***
+	end
 end)
 
--- Receive dice bonus
+-- Receive dice bonus (No changes needed)
 diceBonusEvent.OnClientEvent:Connect(function(bonusAmount)
+	-- ... (โค้ดเดิม)
 	activeDiceBonus = bonusAmount
-	print("[DiceRollHandler] Received dice bonus: +" .. bonusAmount)
+	--print("[DiceRollHandler] Received dice bonus: +" .. bonusAmount)
 
 	-- Play notification sound
 	local notificationSound = Instance.new("Sound")
@@ -966,26 +989,57 @@ diceBonusEvent.OnClientEvent:Connect(function(bonusAmount)
 	end
 end)
 
--- Handle fixed movement from crystal items
+-- Handle fixed movement from crystal items (No changes needed)
 rollDiceEvent.OnClientEvent:Connect(function(fixedValue, isFixed)
+	-- ... (โค้ดเดิม)
 	if isFixed then
 		print("[DiceRollHandler] Received fixed movement: " .. fixedValue)
 		isFixedMovement = true
 
-		-- If it's our turn and we're allowed to roll
-		if canRoll and not isPlayerDead then
+		-- If it's our turn and we're allowed to roll (and not dead/disabled)
+		if canRoll and not isPlayerDead and not isSystemDisabled then
 			-- Use the fixed value (skip animation for crystals)
 			animateDiceRoll(fixedValue, true)
-		end -- *** FIXED: Changed } to end ***
-	end -- *** FIXED: Changed } to end ***
+		end
+	end
 	-- Normal dice rolls are handled by the button click
 end)
 
--- Connect to the player respawn event
+-- Connect to the player respawn event (No changes needed)
 playerRespawnedEvent.OnClientEvent:Connect(onPlayerRespawn)
 
--- Listen for character death
+-- Connect to the system enable/disable event
+if setSystemEnabledEvent then
+	setSystemEnabledEvent.OnClientEvent:Connect(function(systemName, enabled)
+		if systemName == "DiceRollHandler" then
+			print("[DiceRollHandler] Received SetSystemEnabled:", enabled)
+			isSystemDisabled = not enabled -- Set the disabled flag
+
+			if isSystemDisabled then
+				hideDiceRollUI() -- Immediately hide UI if disabled
+				canRoll = false -- Prevent rolling
+			else
+				-- *** NEW: Re-enable UI immediately if conditions met ***
+				if isMyTurn and not isPlayerDead then
+					print("[DiceRollHandler] System re-enabled, showing UI because it's my turn.")
+					showDiceRollUI()
+					canRoll = true
+				else
+					print("[DiceRollHandler] System re-enabled, but not showing UI (not my turn or dead).")
+					canRoll = false -- Ensure canRoll is false if not showing UI
+				end
+			end
+		end
+	end)
+	print("[DiceRollHandler] Connected to SetSystemEnabled event.")
+else
+	warn("[DiceRollHandler] SetSystemEnabled RemoteEvent not found in CombatRemotes!")
+end
+
+
+-- Listen for character death (No changes needed)
 player.CharacterAdded:Connect(function(character)
+	-- ... (โค้ดเดิม)
 	local humanoid = character:WaitForChild("Humanoid")
 
 	-- Connect to the Humanoid.Died event
@@ -994,21 +1048,23 @@ player.CharacterAdded:Connect(function(character)
 	end)
 end)
 
--- Check if character already exists and connect
+-- Check if character already exists and connect (No changes needed)
 if player.Character then
+	-- ... (โค้ดเดิม)
 	local humanoid = player.Character:FindFirstChild("Humanoid")
 	if humanoid then
 		humanoid.Died:Connect(function()
 			onPlayerDeath()
 		end)
-	end -- *** FIXED: Changed } to end ***
-end -- *** FIXED: Changed } to end ***
+	end
+end
 
 -- Initial setup
 DiceRollUI.Visible = false
 
--- Export the module for other scripts to use
+-- Export the module for other scripts to use (No changes needed)
 local DiceRollHandler = {}
+-- ... (โค้ดเดิม)
 DiceRollHandler.ShowUI = showDiceRollUI
 DiceRollHandler.HideUI = hideDiceRollUI
 DiceRollHandler.SetDeathState = function(isDead)
@@ -1016,8 +1072,26 @@ DiceRollHandler.SetDeathState = function(isDead)
 	if isDead then
 		hideDiceRollUI()
 		createDeathNotification()
-	end -- *** FIXED: Changed } to end ***
+	end
 end
+-- Expose enable/disable for external control if needed (e.g., from CombatController)
+DiceRollHandler.SetEnabled = function(enabled)
+	print("[DiceRollHandler] SetEnabled called:", enabled)
+	isSystemDisabled = not enabled
+	if isSystemDisabled then
+		hideDiceRollUI()
+		canRoll = false
+	else
+		-- Re-check conditions when manually enabled
+		if isMyTurn and not isPlayerDead then
+			showDiceRollUI()
+			canRoll = true
+		else
+			canRoll = false
+		end
+	end
+end
+
 
 -- Make accessible from other scripts
 _G.DiceRollHandler = DiceRollHandler
