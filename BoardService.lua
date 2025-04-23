@@ -1,6 +1,6 @@
 -- BoardService.server.lua
 -- Server-side service for board system management
--- Version: 3.7.0 (Added Checkpoint System Support)
+-- Version: 3.8.0 (Added Combat Initiation Trigger)
 
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -11,6 +11,8 @@ local Workspace = game:GetService("Workspace")
 local Modules = ServerStorage:WaitForChild("Modules")
 local BoardSystem = require(Modules:WaitForChild("BoardSystem"))
 local MapData = require(ServerStorage.GameData.MapData)
+-- Combat Service (will be loaded/referenced later)
+local CombatService = nil
 
 -- Enable debug mode
 local DEBUG_MOVEMENT = true
@@ -28,7 +30,8 @@ local function ensureRemoteEvents()
 		"TileTriggerEvent",
 		"ActivityComplete",
 		"StartPlayerMovementPath",
-		"MovementVisualizationComplete"
+		"MovementVisualizationComplete",
+		"UpdatePlayerPosition" -- Added for respawn/teleport updates
 	}
 
 	for _, eventName in ipairs(requiredEvents) do
@@ -71,6 +74,19 @@ local function getDiceBonusService()
 	return nil
 end
 
+-- Get CombatService (Lazy Load)
+local function getCombatService()
+	if not CombatService then
+		local gameManager = getGameManager()
+		CombatService = gameManager and gameManager.combatService
+		if not CombatService then
+			warn("[BoardService] CombatService not found in GameManager!")
+		end
+	end
+	return CombatService
+end
+
+
 -- Store movement completion state
 local pendingMovementCompletions = {}
 
@@ -102,6 +118,9 @@ local function initializeBoardService()
 				print("[BoardService] Player " .. playerId .. " moved from tile " ..
 					(fromTileId or "nil") .. " to tile " .. toTileId)
 			end
+			-- Fire event to update position on all clients (useful for spectators/general sync)
+			local boardRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BoardRemotes")
+			boardRemotes:WaitForChild("UpdatePlayerPosition"):FireAllClients(playerId, toTileId)
 		end,
 
 		-- onPlayerPathComplete
@@ -145,8 +164,23 @@ local function initializeBoardService()
 							end
 						end
 
-						-- End turn if still same player
-						if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
+						-- Check for combat initiation on timeout as well
+						local playersOnTile = boardSystem:GetPlayersOnTile(finalTileId)
+						if #playersOnTile >= 2 then
+							local combatService = getCombatService()
+							if combatService and not combatService:IsCombatActive() then
+								local player1 = Players:GetPlayerByUserId(playersOnTile[1])
+								local player2 = Players:GetPlayerByUserId(playersOnTile[2])
+								if player1 and player2 then
+									print("[BoardService] Initiating combat due to timeout on shared tile " .. finalTileId)
+									combatService:InitiatePreCombat(player1, player2, finalTileId)
+								end
+							end
+						end
+
+						-- End turn if still same player and not in combat
+						local combatService = getCombatService()
+						if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() and (not combatService or not combatService:IsCombatActive()) then
 							gameManager.turnSystem:EndPlayerTurn(playerId, "move_timeout")
 						end
 					end
@@ -182,6 +216,13 @@ local function initializeBoardService()
 	-- Listen for normal dice rolls from clients
 	rollDiceRemote.OnServerEvent:Connect(function(player, diceResult, isFixedMovement)
 		local playerId = player.UserId
+
+		-- Check if combat is active
+		local combatService = getCombatService()
+		if combatService and combatService:IsCombatActive() then
+			if DEBUG_MOVEMENT then print("[BoardService] Rejected dice roll from player " .. playerId .. " - Combat Active") end
+			return
+		end
 
 		-- Check if it's player's turn
 		if gameManager.turnSystem and gameManager.turnSystem:GetCurrentPlayerTurn() ~= playerId then
@@ -324,6 +365,13 @@ local function initializeBoardService()
 	boardRemotes.ChoosePath.OnServerEvent:Connect(function(player, direction)
 		local playerId = player.UserId
 
+		-- Check if combat is active
+		local combatService = getCombatService()
+		if combatService and combatService:IsCombatActive() then
+			if DEBUG_MOVEMENT then print("[BoardService] Rejected path choice from player " .. playerId .. " - Combat Active") end
+			return
+		end
+
 		-- Check if it's player's turn
 		if gameManager.turnSystem and gameManager.turnSystem:GetCurrentPlayerTurn() ~= playerId then
 			if DEBUG_MOVEMENT then
@@ -400,7 +448,39 @@ local function initializeBoardService()
 		-- Set as confirmed
 		pendingMovementCompletions[playerId].confirmed = true
 
-		-- Trigger Tile Effect Here
+		-- Check if combat is active (shouldn't normally happen here, but safety check)
+		local combatService = getCombatService()
+		if combatService and combatService:IsCombatActive() then
+			if DEBUG_MOVEMENT then print("[BoardService] Combat is active, skipping tile effects and turn end logic.") end
+			pendingMovementCompletions[playerId] = nil -- Clear pending state
+			return
+		end
+
+		-- *** COMBAT INITIATION CHECK ***
+		local playersOnTile = boardSystem:GetPlayersOnTile(finalTileId)
+		if #playersOnTile >= 2 then
+			if combatService and not combatService:IsCombatActive() then
+				local player1 = Players:GetPlayerByUserId(playersOnTile[1])
+				local player2 = Players:GetPlayerByUserId(playersOnTile[2])
+				-- Ensure the current player is one of the players involved
+				if player1 and player2 and (player1.UserId == playerId or player2.UserId == playerId) then
+					print("[BoardService] Initiating combat on shared tile " .. finalTileId)
+					local combatInitiated = combatService:InitiatePreCombat(player1, player2, finalTileId)
+					if combatInitiated then
+						pendingMovementCompletions[playerId] = nil -- Clear pending state as combat handles flow now
+						return -- Stop further processing, combat service takes over
+					else
+						print("[BoardService] Combat initiation failed.")
+					end
+				end
+			else
+				print("[BoardService] CombatService not available or combat already active. Skipping initiation.")
+			end
+		end
+		-- *** END COMBAT INITIATION CHECK ***
+
+
+		-- Trigger Tile Effect Here (Only if not in combat)
 		local tileInfo = boardSystem:GetTileInfo(finalTileId)
 		if tileInfo then
 			local tileType = tileInfo.type
@@ -419,7 +499,7 @@ local function initializeBoardService()
 			end
 		end
 
-		-- End turn if still same player
+		-- End turn if still same player (and not in combat)
 		if gameManager.turnSystem and playerId == gameManager.turnSystem:GetCurrentPlayerTurn() then
 			-- Check if movement is complete (no more choices)
 			local hasChoices = boardSystem.playerMovementState[playerId] == "need_choice"
