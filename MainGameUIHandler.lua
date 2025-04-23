@@ -1,6 +1,6 @@
 -- MainGameUIHandler.lua
 -- Handles main game UI updates, status bars, turn indicators, and notifications.
--- Version: 6.0.3 (Refactored Function Order, Removed EndTurnButton)
+-- Version: 6.1.2 (Notify instead of disabling UI Interaction during Combat)
 
 --[ Services ]--
 local Players = game:GetService("Players")
@@ -27,8 +27,45 @@ local NotificationTemplate = nil
 local myStatusBar = nil -- Reference to the local player's status bar UI
 local InventoryButton = MainGameUI:FindFirstChild("InventoryButton")
 local QuestButton = MainGameUI:FindFirstChild("QuestButton")
--- Removed: local EndTurnButton = MainGameUI:FindFirstChild("EndTurnButton")
 local CurrentTurnIndicator = MainGameUI:FindFirstChild("CurrentTurnIndicator")
+
+-- Turn Indicator Components
+local TurnText = nil
+local PlayerClassLabel = nil
+local PlayerLevelLabel = nil
+local TurnTimerFrame = nil
+local TimerFill = nil
+local TimerText = nil
+local CombatTimerText = nil -- Text label specifically for combat countdown
+
+if CurrentTurnIndicator then
+	TurnText = CurrentTurnIndicator:FindFirstChild("TurnText")
+	PlayerClassLabel = CurrentTurnIndicator:FindFirstChild("PlayerClassLabel")
+	PlayerLevelLabel = CurrentTurnIndicator:FindFirstChild("PlayerLevelLabel")
+	TurnTimerFrame = CurrentTurnIndicator:FindFirstChild("TurnTimerFrame")
+	if TurnTimerFrame then
+		TimerFill = TurnTimerFrame:FindFirstChild("TimerFill")
+		TimerText = TurnTimerFrame:FindFirstChild("TimerText")
+	end
+	-- Try to find or create the Combat Timer Text
+	CombatTimerText = CurrentTurnIndicator:FindFirstChild("CombatTimerText")
+	if not CombatTimerText and TurnText then -- Create if missing, clone from TurnText for style
+		CombatTimerText = TurnText:Clone()
+		CombatTimerText.Name = "CombatTimerText"
+		CombatTimerText.Text = "PRE-COMBAT: 120s"
+		CombatTimerText.Visible = false -- Start hidden
+		CombatTimerText.Size = UDim2.new(1, 0, 0.5, 0) -- Adjust size/position as needed
+		CombatTimerText.Position = UDim2.new(0.5, 0, 0.5, 0) -- Center it
+		CombatTimerText.AnchorPoint = Vector2.new(0.5, 0.5)
+		CombatTimerText.Parent = CurrentTurnIndicator
+	elseif CombatTimerText then
+		CombatTimerText.Visible = false -- Ensure it's hidden initially
+	end
+
+else
+	warn("[MainGameUIHandler] CurrentTurnIndicator UI not found!")
+end
+
 
 -- Initialize Notification System
 if NotificationSystem then
@@ -51,6 +88,7 @@ local CLASS_COLORS = {
 	Default = Color3.fromRGB(150, 150, 150)
 }
 local GOLD_COLOR = Color3.fromRGB(212, 175, 55) -- Used for UI accents
+local COMBAT_NOTIFICATION_ICON = "rbxassetid://5107144714" -- Warning/Stop Icon ID (Example)
 
 --[ State Variables ]--
 local statusExpanded = true -- Tracks if the player status bar is expanded
@@ -58,26 +96,34 @@ local turnTimerActive = false
 local turnTimerConnection = nil
 local turnDetailsData = nil
 local isMyTurn = false
-local lastNotifiedTurnNumber = -1 
+local lastNotifiedTurnNumber = -1
 local playerClassInfo = { class = nil, level = 1, classLevel = 1, exp = 0, classExp = 0, nextLevelExp = 100, nextClassLevelExp = 150 }
 local currentPlayerStats = { hp = 100, maxHp = 100, mp = 50, maxMp = 50, attack = 10, defense = 10, magic = 10, magicDefense = 10, agility = 10, money = 100 }
+local isCombatStateActive = false -- Track combat state
+local combatTimerEndTime = 0 -- Store end time for combat timer
+local combatTimerConnection = nil -- Connection for combat timer loop
+local isUIInteractionDisabled = false -- Flag to disable UI buttons (still used internally for logic)
 
 --[ Remote Events ]--
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
 local uiRemotes = remotes:WaitForChild("UIRemotes")
 local gameRemotes = remotes:WaitForChild("GameRemotes")
+local combatRemotes = remotes:WaitForChild("CombatRemotes") -- Added CombatRemotes
+
 -- UI Updates
 local updatePlayerStatsEvent = uiRemotes:WaitForChild("UpdatePlayerStats")
 local statChangedEvent = uiRemotes:FindFirstChild("StatChanged")
-local updateExpEvent = uiRemotes:FindFirstChild("UpdateExperience")
+local updateExpEvent = uiRemotes:WaitForChild("UpdateExperience")
 local levelUpEvent = uiRemotes:WaitForChild("LevelUp")
 local classLevelUpEvent = uiRemotes:WaitForChild("ClassLevelUp")
 -- Turn Management
 local updateTurnEvent = gameRemotes:WaitForChild("UpdateTurn")
-local updateTurnDetailsEvent = uiRemotes:FindFirstChild("UpdateTurnDetails")
-local updateTurnTimerEvent = gameRemotes:FindFirstChild("UpdateTurnTimer")
+local updateTurnDetailsEvent = uiRemotes:WaitForChild("UpdateTurnDetails")
+local updateTurnTimerEvent = gameRemotes:WaitForChild("UpdateTurnTimer")
 -- Game State
 local endGameEvent = gameRemotes:WaitForChild("EndGame")
+-- Combat State
+local setCombatStateEvent = combatRemotes:WaitForChild("SetCombatState") -- Added SetCombatState
 
 -- Forward declare functions that might be called before full definition (optional but good practice)
 local updateMyStatusBar
@@ -88,7 +134,8 @@ local createNotification
 local showLevelUpNotification
 local showClassLevelUpNotification
 local setupButtonHandlers
--- Removed: local setupEndTurnButton
+local handleCombatStateChange -- NEW
+local updateCombatTimer -- NEW
 
 --[ Helper Functions ]--
 
@@ -178,7 +225,7 @@ updateMyStatusBar = function(stats)
 
 	-- Debug print for EXP update
 	if stats.exp or stats.nextLevelExp then
-		print("[UI DEBUG] EXP Data Updated: " .. tostring(stats.exp or playerClassInfo.exp) .. "/" .. tostring(stats.nextLevelExp or playerClassInfo.nextLevelExp))
+		--print("[UI DEBUG] EXP Data Updated: " .. tostring(stats.exp or playerClassInfo.exp) .. "/" .. tostring(stats.nextLevelExp or playerClassInfo.nextLevelExp))
 	end
 
 	-- Update UI elements
@@ -215,7 +262,7 @@ updateMyStatusBar = function(stats)
 			local diff = newMoney - currentMoney
 			local direction = diff > 0 and 1 or -1
 			--[[ Money change text animation ]]
-			createNotification((direction > 0 and "+" or "") .. diff .. " coins", direction > 0 and "rbxassetid://GAIN_ID" or "rbxassetid://LOSS_ID", 2) -- Replace with actual IDs
+			-- createNotification((direction > 0 and "+" or "") .. diff .. " coins", direction > 0 and "rbxassetid://GAIN_ID" or "rbxassetid://LOSS_ID", 2) -- Replace with actual IDs
 		end
 		moneyLabel.Text = tostring(newMoney)
 	end
@@ -254,7 +301,7 @@ updateMyStatusBar = function(stats)
 		local ratio = math.clamp(currentExp / neededExp, 0, 1)
 
 		-- Debug print
-		print("[UI DEBUG] Updating EXP Bar: " .. currentExp .. "/" .. neededExp .. " (Ratio: " .. ratio .. ")")
+		--print("[UI DEBUG] Updating EXP Bar: " .. currentExp .. "/" .. neededExp .. " (Ratio: " .. ratio .. ")")
 
 		-- Update the fill
 		createTween(expFill, {Size = UDim2.new(ratio, 0, 1, 0)}, 0.5):Play()
@@ -264,7 +311,7 @@ updateMyStatusBar = function(stats)
 			expText.Text = "EXP: " .. math.floor(currentExp) .. "/" .. math.floor(neededExp)
 		end
 	else
-		warn("[UI DEBUG] ExpBar or ExpFill not found in status bar")
+		--warn("[UI DEBUG] ExpBar or ExpFill not found in status bar")
 	end
 end
 
@@ -272,6 +319,7 @@ end
 updateTurnIndicator = function(turnDetails)
 	if not turnDetails or turnDetails.playerId == nil then return end -- Ensure valid data
 	if not CurrentTurnIndicator then return end
+	if isCombatStateActive then return end -- Don't update if combat is active
 
 	local currentPlayerName = turnDetails.playerName or "Unknown"
 	local turnNumber = turnDetails.turnNumber or 1
@@ -279,19 +327,16 @@ updateTurnIndicator = function(turnDetails)
 	local playerLevel = turnDetails.playerLevel or 1
 	local currentPlayerId = turnDetails.playerId
 
-	-- Update Text Labels
-	local turnTextLabel = CurrentTurnIndicator:FindFirstChild("TurnText")
-	local classLabel = CurrentTurnIndicator:FindFirstChild("PlayerClassLabel")
-	local levelLabel = CurrentTurnIndicator:FindFirstChild("PlayerLevelLabel")
-	if turnTextLabel then turnTextLabel.Text = currentPlayerName .. "'s Turn (Turn " .. turnNumber .. ")" end
-	if classLabel then classLabel.Text = "Class: " .. playerClass end
-	if levelLabel then levelLabel.Text = "Lv." .. playerLevel end
+	-- Update Text Labels (only if not in combat)
+	if TurnText then TurnText.Visible = true; TurnText.Text = currentPlayerName .. "'s Turn (Turn " .. turnNumber .. ")" end
+	if PlayerClassLabel then PlayerClassLabel.Visible = true; PlayerClassLabel.Text = "Class: " .. playerClass end
+	if PlayerLevelLabel then PlayerLevelLabel.Visible = true; PlayerLevelLabel.Text = "Lv." .. playerLevel end
+	if CombatTimerText then CombatTimerText.Visible = false end -- Hide combat timer text
 
 	-- Handle Timer Frame Visibility
-	local timerFrame = CurrentTurnIndicator:FindFirstChild("TurnTimerFrame")
-	if timerFrame then
+	if TurnTimerFrame then
 		if turnTimerConnection then turnTimerConnection:Disconnect(); turnTimerConnection = nil end
-		timerFrame.Visible = true -- Assuming timer starts with turn
+		TurnTimerFrame.Visible = true -- Assuming timer starts with turn
 	end
 
 	-- Check if it's the local player's turn
@@ -305,7 +350,7 @@ updateTurnIndicator = function(turnDetails)
 
 		-- Notify Player (only once per turn number)
 		if turnNumber > lastNotifiedTurnNumber then
-			createNotification("It's your turn!", "rbxassetid://YOUR_TURN_ICON_ID", 2) -- Replace with actual ID
+			-- createNotification("It's your turn!", "rbxassetid://YOUR_TURN_ICON_ID", 2) -- Replace with actual ID
 			lastNotifiedTurnNumber = turnNumber
 		end
 
@@ -313,7 +358,7 @@ updateTurnIndicator = function(turnDetails)
 		--[[ Add tweening for size/color change ]]
 	else
 		-- Reset Turn Indicator style if needed
-		CurrentTurnIndicator.BackgroundColor3 = Color3.fromRGB(80, 80, 100) -- Example reset
+		-- CurrentTurnIndicator.BackgroundColor3 = Color3.fromRGB(80, 80, 100) -- Example reset
 	end
 
 	turnDetailsData = turnDetails -- Store latest details
@@ -321,27 +366,55 @@ end
 
 -- Updates the turn timer UI.
 updateTurnTimer = function(timeRemaining)
-	if not CurrentTurnIndicator then return end
-	local timerFrame = CurrentTurnIndicator:FindFirstChild("TurnTimerFrame")
-	if not timerFrame then return end
-	local fill = timerFrame:FindFirstChild("TimerFill")
-	local textLabel = timerFrame:FindFirstChild("TimerText")
-	if not fill or not textLabel then return end
+	if not CurrentTurnIndicator or isCombatStateActive then return end -- Don't update if combat active
+	if not TurnTimerFrame then return end
+	if not TimerFill or not TimerText then return end
 
-	textLabel.Text = tostring(timeRemaining) .. "s"
-	local maxTime = 120 -- Assuming max turn time
+	-- Handle "Paused" state from TurnSystem
+	if type(timeRemaining) == "string" and timeRemaining == "Paused" then
+		TimerText.Text = "Paused"
+		-- Optionally change fill color or appearance for paused state
+		-- TimerFill.BackgroundColor3 = Color3.fromRGB(150, 150, 150)
+		return -- Stop further processing for paused state
+	elseif type(timeRemaining) ~= "number" then
+		return -- Ignore invalid time values
+	end
+
+	TimerText.Text = tostring(timeRemaining) .. "s"
+	local maxTime = 60 -- Assuming max turn time from TurnSystem constant
 	local ratio = math.clamp(timeRemaining / maxTime, 0, 1)
-	createTween(fill, {Size = UDim2.new(ratio, 0, 1, 0)}, 0.3):Play()
+	createTween(TimerFill, {Size = UDim2.new(ratio, 0, 1, 0)}, 0.3):Play()
 
 	-- Change timer color based on time left
-	if timeRemaining <= 10 then fill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-	elseif timeRemaining <= 30 then fill.BackgroundColor3 = Color3.fromRGB(255, 150, 50)
-	else fill.BackgroundColor3 = Color3.fromRGB(50, 200, 50) end
+	if timeRemaining <= 15 then TimerFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50) -- Use INACTIVITY_WARNING_TIME
+	elseif timeRemaining <= 30 then TimerFill.BackgroundColor3 = Color3.fromRGB(255, 150, 50)
+	else TimerFill.BackgroundColor3 = Color3.fromRGB(50, 200, 50) end
+end
+
+-- NEW: Updates the combat timer UI.
+updateCombatTimer = function()
+	if not isCombatStateActive or not CombatTimerText then
+		if combatTimerConnection then combatTimerConnection:Disconnect(); combatTimerConnection = nil end
+		return
+	end
+
+	local timeRemaining = math.max(0, math.floor(combatTimerEndTime - tick()))
+	CombatTimerText.Text = "COMBAT STARTING: " .. timeRemaining .. "s"
+
+	-- Optionally add visual cues like color change when time is low
+	if timeRemaining <= 10 then
+		CombatTimerText.TextColor3 = Color3.fromRGB(255, 80, 80)
+	else
+		CombatTimerText.TextColor3 = Color3.fromRGB(255, 255, 100) -- Yellowish for combat
+	end
+
+	if timeRemaining <= 0 then
+		if combatTimerConnection then combatTimerConnection:Disconnect(); combatTimerConnection = nil end
+		-- Server will handle the actual end state via SetCombatState(false)
+	end
 end
 
 --[ Button Setup Functions ]--
-
--- Removed: setupEndTurnButton function
 
 -- Sets up common button handlers for Inventory, Quest, Close buttons, etc.
 setupButtonHandlers = function()
@@ -349,6 +422,15 @@ setupButtonHandlers = function()
 	local function setupActionButton(button, uiElement, otherUIElement)
 		if button and not button:GetAttribute("Connected") then
 			button.MouseButton1Click:Connect(function()
+				-- NEW: Check if UI interaction is disabled (Combat Active)
+				if isUIInteractionDisabled then
+					print("[UI DEBUG] UI interaction disabled (Combat Active).")
+					-- Show notification instead of doing nothing
+					createNotification("ไม่สามารถเปิดได้ขณะอยู่ใน Combat!", COMBAT_NOTIFICATION_ICON, 2)
+					return -- Prevent opening the UI
+				end
+
+				-- Original logic to open UI
 				if uiElement then
 					local shouldBeVisible = not uiElement.Visible
 					uiElement.Visible = shouldBeVisible
@@ -372,8 +454,8 @@ setupButtonHandlers = function()
 		if uiElement and closeButton and not closeButton:GetAttribute("Connected") then
 			closeButton.MouseButton1Click:Connect(function()
 				uiElement.Visible = false
-				-- Show main game UI only if no other popups are visible
-				if (not InventoryUI or not InventoryUI.Visible) and (not QuestUI or not QuestUI.Visible) then
+				-- Show main game UI only if no other popups are visible AND UI interaction is not disabled
+				if (not InventoryUI or not InventoryUI.Visible) and (not QuestUI or not QuestUI.Visible) and not isUIInteractionDisabled then
 					MainGameUI.Enabled = true
 				end
 				-- Reset associated button color
@@ -397,6 +479,9 @@ setupButtonHandlers = function()
 		local arrowButton = arrowButtonFrame:FindFirstChild("Button")
 		if arrowButton and not arrowButton:GetAttribute("Connected") then
 			arrowButton.MouseButton1Click:Connect(function()
+				-- Check if UI interaction is disabled
+				if isUIInteractionDisabled then return end
+
 				local playerStatusBar = StatusBarContainer:FindFirstChild("MyPlayerStatusBar")
 				if not playerStatusBar then return end
 				statusExpanded = not statusExpanded
@@ -428,7 +513,7 @@ showLevelUpNotification = function(newLevel, statIncreases)
 			statText = statText .. statName .. " +" .. increase .. " "
 		end
 	end
-	createNotification(statText, "rbxassetid://YOUR_LEVELUP_ICON_ID", 5) -- Replace with actual ID
+	-- createNotification(statText, "rbxassetid://YOUR_LEVELUP_ICON_ID", 5) -- Replace with actual ID
 end
 
 -- Shows a class level up notification.
@@ -437,7 +522,66 @@ showClassLevelUpNotification = function(newClassLevel, statIncreases, nextClass)
 	if nextClass then
 		message = message .. "\nUpgrade to " .. nextClass .. " is now available!"
 	end
-	createNotification(message, "rbxassetid://YOUR_CLASS_UP_ICON_ID", 5) -- Replace with actual ID
+	-- createNotification(message, "rbxassetid://YOUR_CLASS_UP_ICON_ID", 5) -- Replace with actual ID
+end
+
+--[ Combat State Handling ]--
+
+-- NEW: Handles changes in combat state
+handleCombatStateChange = function(isActive, duration)
+	print("[UI DEBUG] Received SetCombatState:", isActive, duration)
+	isCombatStateActive = isActive
+	isUIInteractionDisabled = isActive -- Directly link UI interaction state to combat state
+
+	-- Enable/Disable Buttons INTERACTABILITY is removed, handled in setupActionButton now
+	-- if InventoryButton then InventoryButton.Interactable = not isActive end
+	-- if QuestButton then QuestButton.Interactable = not isActive end
+
+	if not CurrentTurnIndicator then return end
+
+	if isActive then
+		-- Enter Combat State
+		if TurnText then TurnText.Visible = false end
+		if PlayerClassLabel then PlayerClassLabel.Visible = false end
+		if PlayerLevelLabel then PlayerLevelLabel.Visible = false end
+		if TurnTimerFrame then TurnTimerFrame.Visible = false end -- Hide normal turn timer
+		if CombatTimerText then CombatTimerText.Visible = true end
+
+		combatTimerEndTime = tick() + duration
+
+		-- Start the combat timer update loop if duration > 0
+		if duration > 0 then
+			if combatTimerConnection then combatTimerConnection:Disconnect() end -- Stop previous if any
+			combatTimerConnection = RunService.Heartbeat:Connect(updateCombatTimer)
+			updateCombatTimer() -- Initial update
+		else
+			-- If duration is 0, just show "COMBAT ACTIVE" or similar
+			if CombatTimerText then CombatTimerText.Text = "COMBAT ACTIVE" end
+		end
+
+	else
+		-- Exit Combat State
+		isCombatStateActive = false
+		if combatTimerConnection then combatTimerConnection:Disconnect(); combatTimerConnection = nil end
+
+		if CombatTimerText then CombatTimerText.Visible = false end
+		-- Restore normal turn indicator elements (visibility will be handled by updateTurnIndicator)
+		if TurnText then TurnText.Visible = true end
+		if PlayerClassLabel then PlayerClassLabel.Visible = true end
+		if PlayerLevelLabel then PlayerLevelLabel.Visible = true end
+		if TurnTimerFrame then TurnTimerFrame.Visible = true end -- Show normal timer frame again
+
+		-- Refresh the turn indicator with the last known details
+		if turnDetailsData then
+			updateTurnIndicator(turnDetailsData)
+		end
+		-- Refresh the normal turn timer if it was active
+		if turnTimerActive and updateTurnTimerEvent then
+			-- We might need the server to resend the current turn time
+			-- Or estimate based on when the turn started if we stored that info
+			print("[UI DEBUG] Combat ended, normal turn timer needs refresh (requesting might be needed).")
+		end
+	end
 end
 
 
@@ -445,7 +589,7 @@ end
 
 updatePlayerStatsEvent.OnClientEvent:Connect(function(playerId, stats)
 	if playerId == player.UserId then
-		print("[UI DEBUG] Received UpdatePlayerStats event with data:", stats)
+		--print("[UI DEBUG] Received UpdatePlayerStats event with data:", stats)
 		updateMyStatusBar(stats)
 	end
 end)
@@ -462,7 +606,7 @@ if statChangedEvent then
 		if statsToUpdate.hp and not statsToUpdate.maxHp then statsToUpdate.maxHp = currentPlayerStats.maxHp end
 		if statsToUpdate.mp and not statsToUpdate.maxMp then statsToUpdate.maxMp = currentPlayerStats.maxMp end
 
-		print("[UI DEBUG] Received StatChanged event with updates:", statsToUpdate)
+		--print("[UI DEBUG] Received StatChanged event with updates:", statsToUpdate)
 		updateMyStatusBar(statsToUpdate)
 	end)
 end
@@ -492,7 +636,7 @@ end
 -- Completely reworked to properly handle EXP updates
 if updateExpEvent then
 	updateExpEvent.OnClientEvent:Connect(function(expData)
-		print("[UI DEBUG] Received UpdateExperience event with data:", expData)
+		--print("[UI DEBUG] Received UpdateExperience event with data:", expData)
 
 		-- Update internal state first
 		if expData.exp ~= nil then playerClassInfo.exp = expData.exp end
@@ -502,7 +646,7 @@ if updateExpEvent then
 		if expData.level ~= nil then playerClassInfo.level = expData.level end
 
 		-- Debug print to verify values
-		print("[UI DEBUG] Updated EXP state:", playerClassInfo.exp, "/", playerClassInfo.nextLevelExp)
+		--print("[UI DEBUG] Updated EXP state:", playerClassInfo.exp, "/", playerClassInfo.nextLevelExp)
 
 		-- Create a dedicated update for EXP bar with this specific data
 		updateMyStatusBar({
@@ -514,7 +658,7 @@ if updateExpEvent then
 end
 
 levelUpEvent.OnClientEvent:Connect(function(newLevel, statIncreases)
-	print("[UI DEBUG] Received LevelUp event: Level " .. newLevel)
+	--print("[UI DEBUG] Received LevelUp event: Level " .. newLevel)
 
 	-- Update internal state
 	playerClassInfo.level = newLevel
@@ -533,7 +677,7 @@ levelUpEvent.OnClientEvent:Connect(function(newLevel, statIncreases)
 end)
 
 classLevelUpEvent.OnClientEvent:Connect(function(newClassLevel, statIncreases, nextClass)
-	print("[UI DEBUG] Received ClassLevelUp event: Class Level " .. newClassLevel)
+	--print("[UI DEBUG] Received ClassLevelUp event: Class Level " .. newClassLevel)
 
 	-- Update internal state
 	playerClassInfo.classLevel = newClassLevel
@@ -556,6 +700,14 @@ endGameEvent.OnClientEvent:Connect(function(reason)
 	end
 end)
 
+-- NEW: Connect to Combat State Change Event
+if setCombatStateEvent then
+	setCombatStateEvent.OnClientEvent:Connect(handleCombatStateChange)
+	print("[MainGameUIHandler] Connected to SetCombatState event.")
+else
+	warn("[MainGameUIHandler] SetCombatState RemoteEvent not found in CombatRemotes!")
+end
+
 --[ Initialization ]--
 
 -- Set initial UI states
@@ -569,7 +721,6 @@ end
 -- Setup initial references and connect handlers
 setupPlayerStatusBar() -- Find the status bar initially
 setupButtonHandlers()
--- Removed: setupEndTurnButton()
 
 -- Ensure status bar reference is updated if MainGameUI is enabled later
 MainGameUI:GetPropertyChangedSignal("Enabled"):Connect(function()
@@ -577,10 +728,10 @@ MainGameUI:GetPropertyChangedSignal("Enabled"):Connect(function()
 		setupPlayerStatusBar() -- Re-check or find status bar if it wasn't found initially
 		-- Refresh status bar when UI becomes enabled to ensure latest data is shown
 		if myStatusBar then
-			print("[UI DEBUG] MainGameUI enabled - refreshing status bar with current stats")
+			--print("[UI DEBUG] MainGameUI enabled - refreshing status bar with current stats")
 			updateMyStatusBar(currentPlayerStats)
 		end
 	end
 end)
 
-print("[MainGameUIHandler] Initialized (v6.0.3) - Removed EndTurnButton.")
+print("[MainGameUIHandler] Initialized (v6.1.2) - Notify on disabled UI Interaction.")
