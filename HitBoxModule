@@ -1,593 +1,523 @@
---[[
-    HitBoxModule - ระบบ HitBox ประสิทธิภาพสูงสำหรับเกม Roblox
-    
-    คุณสมบัติ:
-    - รองรับ hitbox หลายรูปแบบ (box, sphere, capsule)
-    - ระบบตรวจจับการชนที่แม่นยำและเร็ว
-    - ระบบความปลอดภัยแบบ client-server validation
-    - การแสดงผล debug mode เพื่อการทดสอบ
-    - รองรับระบบ combat ขั้นสูง (parry, dodge, i-frames)
-]]
--- ที่อยู่ ReplicatedStorage/SharedModules
+-- Advanced Server-Authoritative Hitbox Module (v2)
+-- ปรับปรุง: รวม LoS Check, I-Frames, Debounce, MaxHits เข้าใน Module
 
-local HitBoxModule = {}
-HitBoxModule.__index = HitBoxModule
-
--- Constants
-local DEBUG_MODE = false -- ตั้งค่าเป็น true เพื่อแสดงผล hitbox
-local MAX_HITBOX_LIFETIME = 1 -- จำกัดอายุ hitbox ไม่เกิน 1 วินาที
-local IGNORE_LIST = {workspace.Effects, workspace.Projectiles} -- รายการที่ไม่สนใจการชน
-local HIT_COOLDOWN = 0.1 -- ช่วงเวลาระหว่างการโดนโจมตีจาก hitbox เดียวกัน (วินาที)
-
--- Services
-local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local CollectionService = game:GetService("CollectionService")
-local DebugVisualizationService = game:GetService("DebugVisualizationService")
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService") -- Get Service ครั้งเดียว
+local ServerScriptService = game:GetService("ServerScriptService") -- ตัวอย่าง Path
 
--- Remote Events
-local RemoteFolder = ReplicatedStorage:FindFirstChild("CombatRemotes") or Instance.new("Folder")
-RemoteFolder.Name = "CombatRemotes"
-RemoteFolder.Parent = ReplicatedStorage
+local HitboxService = {}
+HitboxService.__index = HitboxService
+-- ใช้ Weak Table เพื่อให้ Hitbox ที่ถูก Destroyed ถูก Garbage Collect อัตโนมัติ
+HitboxService.ActiveHitboxes = setmetatable({}, {__mode = "k"}) -- Store active server-side hitboxes
 
-local HitEvent = RemoteFolder:FindFirstChild("Hit") or Instance.new("RemoteEvent")
-HitEvent.Name = "Hit"
-HitEvent.Parent = RemoteFolder
+local DEFAULT_DEBOUNCE = 0.1
+local DEFAULT_IFRAME_DURATION = 0.5
+local IFRAME_ATTRIBUTE_NAME = "InvincibleUntil"
+local MAX_DISTANCE_CHECK = 150 -- ระยะห่างสูงสุดที่ยอมรับได้สำหรับการโจมตี (ปรับตามเกม)
+local LOS_CHECK_ENABLED = true -- เปิด/ปิด การตรวจสอบ Line of Sight (แนะนำให้เปิด)
 
-local VisualizeHitboxEvent = RemoteFolder:FindFirstChild("VisualizeHitbox") or Instance.new("RemoteEvent")
-VisualizeHitboxEvent.Name = "VisualizeHitbox"
-VisualizeHitboxEvent.Parent = RemoteFolder
+-- // Private Helper Functions
 
--- Cache
-local CachedHitData = {}
-local ActiveHitboxes = {}
-local HitRegistry = {} -- เก็บประวัติการโดนโจมตีเพื่อป้องกัน double hits
-
--- หากเป็น Server จะทำหน้าที่ตรวจสอบและยืนยันการโจมตี
-if RunService:IsServer() then
-	HitEvent.OnServerEvent:Connect(function(player, victimInstance, hitboxId, position, damage, knockback, hitEffects)
-		-- ตรวจสอบความถูกต้อง
-		if not ActiveHitboxes[hitboxId] then return end
-
-		local hitboxData = ActiveHitboxes[hitboxId]
-		if not hitboxData or hitboxData.Owner ~= player then return end
-
-		local victim = Players:GetPlayerFromCharacter(victimInstance)
-		if not victim then return end -- อาจเป็น NPC
-
-		-- ตรวจสอบว่าเป้าหมายสามารถถูกโจมตีได้หรือไม่
-		if not CanDamage(hitboxData.Owner, victim, hitboxData) then return end
-
-		-- ตรวจสอบ cooldown การโดนโจมตี
-		local hitKey = victim.UserId .. "_" .. hitboxId
-		if HitRegistry[hitKey] and tick() - HitRegistry[hitKey] < HIT_COOLDOWN then
-			return -- ยังอยู่ใน cooldown
-		end
-
-		-- บันทึกเวลาโดนโจมตี
-		HitRegistry[hitKey] = tick()
-
-		-- เพิ่มการตรวจสอบระยะห่างเพื่อความปลอดภัย
-		local ownerHrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-		local victimHrp = victimInstance:FindFirstChild("HumanoidRootPart")
-
-		if ownerHrp and victimHrp then
-			local distanceCheck = (ownerHrp.Position - victimHrp.Position).Magnitude
-			if distanceCheck > hitboxData.MaxRange * 1.5 then
-				-- ระยะห่างไกลเกินไป อาจมีการโกง
-				return
-			end
-		end
-
-		-- ทำความเสียหาย
-		ApplyDamage(victim, player, damage, hitboxData.WeaponType, position, knockback, hitEffects)
-	end)
+local function GetHumanoid(part: BasePart): Humanoid?
+	local character = part:FindFirstAncestorOfClass("Model")
+	if character then
+		return character:FindFirstChildOfClass("Humanoid")
+	end
+	return nil
 end
 
--- สำหรับ Client ทำการแสดงผล hitbox และส่งข้อมูลการโจมตีไปยัง server
-if RunService:IsClient() then
-	VisualizeHitboxEvent.OnClientEvent:Connect(function(hitboxId, hitboxType, cf, size, duration, color)
-		if DEBUG_MODE then
-			VisualizeHitbox(hitboxType, cf, size, duration, color)
-		end
-	end)
-end
-
--- ฟังก์ชันสำหรับตรวจสอบว่าสามารถทำความเสียหายได้หรือไม่
-function CanDamage(attacker, victim, hitboxData)
-	if not attacker or not victim then return false end
-	if attacker == victim then return false end -- ป้องกันการโจมตีตัวเอง
-
-	-- ตรวจสอบทีม/เพื่อนร่วมทีม (ถ้ามี)
-	if hitboxData.TeamCheck and attacker.Team == victim.Team then 
-		return false 
+--[[
+	IsValidTarget (Server-Side Validation - Stage 1: Initial Filter)
+	ตรวจสอบ Humanoid, Health, Server-Side I-Frames, Server-Side Debounce
+	* ลบการเช็ค MaxHits ออกจากที่นี่ จะไปเช็คหลัง LoS *
+]]
+local function IsValidTarget(hitPart: BasePart, hitboxInstance: table): (boolean, Humanoid?, Model?)
+	local humanoid = GetHumanoid(hitPart)
+	if not humanoid or humanoid.Health <= 0 then
+		return false, nil, nil
 	end
 
-	-- ตรวจสอบ combat mode (ถ้ามี)
-	local victimData = CachedHitData[victim.UserId]
-	if victimData and victimData.CombatMode == false then
-		-- ถ้าเป้าหมายไม่ได้อยู่ในโหมด combat
-		if hitboxData.RequireCombatMode then
-			return false
+	local targetCharacter = humanoid.Parent
+	local attackerCharacter = hitboxInstance.AttackerCharacter
+
+	-- ป้องกันการโจมตีตัวเอง (ถ้าไม่ได้ตั้งใจให้ทำได้)
+	if attackerCharacter and targetCharacter == attackerCharacter then
+		-- ตรวจสอบ CastParams อีกครั้ง (เผื่อกรณีที่ Filter ไม่ทำงานตามคาด)
+		if table.find(hitboxInstance.CastParams.FilterDescendantsInstances, targetCharacter) then
+			return false, nil, nil
+		end
+		-- ถ้าไม่ได้อยู่ใน Filter แต่เป็นตัวเดียวกัน ก็ไม่ควรผ่าน (ยกเว้นเกมดีไซน์อนุญาต)
+		-- return false, nil, nil
+	end
+
+	-- ตรวจสอบ I-frames (Server time)
+	if hitboxInstance.IFramesEnabled then
+		local invincibleUntil = targetCharacter:GetAttribute(IFRAME_ATTRIBUTE_NAME)
+		if invincibleUntil and typeof(invincibleUntil) == "number" and tick() < invincibleUntil then
+			-- print(targetCharacter.Name, "is invincible (I-Frame)")
+			return false, nil, nil -- ยังอยู่ในช่วง I-frames (Server)
 		end
 	end
 
-	-- ตรวจสอบสถานะ Invincibility frames
-	if victimData and victimData.Invincible and tick() - victimData.InvincibleStartTime < victimData.InvincibleDuration then
-		return false
+	-- ตรวจสอบ Debounce (Server time, ต่อ Hitbox Instance นี้)
+	local lastHitTime = hitboxInstance.HitTargetsDebounce[humanoid]
+	if lastHitTime and (tick() - lastHitTime) < hitboxInstance.Debounce then
+		-- print(targetCharacter.Name, "is invincible (Debounce)")
+		return false, nil, nil -- โดน Debounce (Server)
 	end
 
-	-- เพิ่มเงื่อนไขอื่นๆ เช่น โซนปลอดภัย, สถานะพิเศษ, ฯลฯ
-
-	return true
+	-- ผ่านการกรองเบื้องต้น
+	return true, humanoid, targetCharacter
 end
 
--- ฟังก์ชันสร้าง hitbox
-function HitBoxModule.new(owner, options)
-	options = options or {}
-
-	local self = setmetatable({}, HitBoxModule)
-	self.Owner = owner
-	self.HitboxId = owner.UserId .. "_" .. tick() -- สร้าง ID เฉพาะ
-	self.Type = options.Type or "Box" -- Box, Sphere, Capsule
-	self.Size = options.Size or Vector3.new(4, 4, 4)
-	self.Offset = options.Offset or CFrame.new(0, 0, 0)
-	self.Duration = math.min(options.Duration or 0.3, MAX_HITBOX_LIFETIME)
-	self.Damage = options.Damage or 10
-	self.Knockback = options.Knockback or 0
-	self.TeamCheck = options.TeamCheck ~= nil and options.TeamCheck or true
-	self.DebugColor = options.DebugColor or Color3.fromRGB(255, 0, 0)
-	self.WeaponType = options.WeaponType or "Sword"
-	self.HitEffects = options.HitEffects or {}
-	self.RequireCombatMode = options.RequireCombatMode ~= nil and options.RequireCombatMode or true
-	self.MaxRange = math.max(self.Size.X, self.Size.Y, self.Size.Z) * 2
-	self.Active = false
-	self.HitTargets = {} -- เก็บเป้าหมายที่โดนโจมตีแล้ว
-
-	-- Cache character parts (เพื่อลดการเรียก FindFirstChild บ่อยๆ)
-	self:CacheCharacterParts()
-
-	return self
-end
-
--- เก็บ cache ส่วนต่างๆของ character เพื่อเพิ่มประสิทธิภาพ
-function HitBoxModule:CacheCharacterParts()
-	local character = self.Owner.Character
-	if not character then return end
-
-	self.OwnerHRP = character:FindFirstChild("HumanoidRootPart")
-	self.OwnerHumanoid = character:FindFirstChild("Humanoid")
-
-	-- อัพเดทข้อมูลการเคลื่อนที่
-	self.LastPosition = self.OwnerHRP and self.OwnerHRP.Position or Vector3.new(0, 0, 0)
-	self.Velocity = Vector3.new(0, 0, 0)
-
-	if RunService:IsServer() then
-		-- สร้าง cache สำหรับข้อมูลผู้เล่น
-		CachedHitData[self.Owner.UserId] = CachedHitData[self.Owner.UserId] or {
-			CombatMode = false,
-			Invincible = false,
-			InvincibleStartTime = 0,
-			InvincibleDuration = 0
-		}
+--[[
+	ApplyIFrames (Server-Side)
+	ตั้งค่า Attribute บน Character เป้าหมาย โดยใช้ Server time (tick())
+]]
+local function ApplyIFrames(humanoid: Humanoid, duration: number)
+	local character = humanoid.Parent
+	if character then
+		character:SetAttribute(IFRAME_ATTRIBUTE_NAME, tick() + duration)
+		-- print("Applied I-Frames to", character.Name, "until", character:GetAttribute(IFRAME_ATTRIBUTE_NAME))
 	end
 end
 
--- ฟังก์ชันเริ่มการทำงานของ hitbox
-function HitBoxModule:Activate()
-	if self.Active then return end
+--[[
+	PerformLineOfSightCheck (Server-Side Validation - Stage 2)
+	ตรวจสอบว่ามีสิ่งกีดขวางระหว่างผู้โจมตีกับเป้าหมายหรือไม่
+]]
+local function PerformLineOfSightCheck(attackerRoot: BasePart, targetRoot: BasePart, filterInstances: {Instance}): boolean
+	if not attackerRoot or not targetRoot then return false end -- ไม่มี Root Part
 
-	self.Active = true
-	self.StartTime = tick()
-	self.HitTargets = {}
+	local origin = attackerRoot.Position
+	local direction = (targetRoot.Position - origin)
+	local distance = direction.Magnitude
 
-	-- เก็บข้อมูล hitbox ลงในตาราง
-	ActiveHitboxes[self.HitboxId] = {
-		Owner = self.Owner,
-		Type = self.Type,
-		WeaponType = self.WeaponType,
-		TeamCheck = self.TeamCheck,
-		RequireCombatMode = self.RequireCombatMode,
-		MaxRange = self.MaxRange
-	}
+	if distance < 0.1 then return true end -- อยู่ใกล้กันมาก ถือว่าเห็น
 
-	-- ส่งข้อมูลให้ client เพื่อแสดงผล debug mode
-	if RunService:IsServer() and DEBUG_MODE then
-		local baseCFrame = self:GetBaseCFrame()
-		VisualizeHitboxEvent:FireAllClients(
-			self.HitboxId,
-			self.Type,
-			baseCFrame,
-			self.Size,
-			self.Duration,
-			self.DebugColor
-		)
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+	-- Filter ผู้โจมตีและเป้าหมาย เพื่อไม่ให้ Raycast โดนตัวเอง
+	raycastParams.FilterDescendantsInstances = filterInstances
+	raycastParams.IgnoreWater = true
+
+	local result = workspace:Raycast(origin, direction.Unit * distance, raycastParams)
+
+	if result then
+		-- มีบางอย่างขวางอยู่ ตรวจสอบว่าเป็นส่วนหนึ่งของเป้าหมายหรือไม่ (เผื่อโดนแขนขาตัวเอง)
+		if result.Instance:IsDescendantOf(targetRoot.Parent) then
+			-- print("LoS clear (hit part of target)")
+			return true -- โดนส่วนอื่นของเป้าหมายเอง ไม่นับว่า Blocked
+		else
+			-- print("LoS blocked by:", result.Instance:GetFullName(), "between", attackerRoot.Parent.Name, "and", targetRoot.Parent.Name)
+			return false -- มีสิ่งกีดขวางอื่น
+		end
+	else
+		-- ไม่มีอะไรขวาง
+		-- print("LoS clear between", attackerRoot.Parent.Name, "and", targetRoot.Parent.Name)
+		return true
+	end
+end
+
+
+--[[ Visualizer Functions (เหมือนเดิม แต่ปรับปรุงเล็กน้อย) ]]
+
+local function CreateVisualizer(hitboxInstance: table)
+	local visualizerFolder = game:GetService("ReplicatedStorage"):FindFirstChild("HitboxVisualizers")
+	if not visualizerFolder then
+		visualizerFolder = Instance.new("Folder")
+		visualizerFolder.Name = "HitboxVisualizers"
+		visualizerFolder.Parent = game:GetService("ReplicatedStorage")
 	end
 
-	-- ทำการตรวจสอบการชนเป็นระยะ
-	self.UpdateConnection = RunService.Heartbeat:Connect(function(deltaTime)
-		self:Update(deltaTime)
+	local visualizer = Instance.new("Part")
+	visualizer.Name = "HitboxVisualizer_" .. hitboxInstance.UniqueId
+	visualizer.Transparency = 0.7
+	visualizer.BrickColor = BrickColor.Red()
+	visualizer.CanCollide = false
+	visualizer.CanQuery = false
+	visualizer.CanTouch = false
+	visualizer.Anchored = true
+	visualizer.Material = Enum.Material.Neon
+	visualizer.Parent = visualizerFolder -- เก็บใน ReplicatedStorage
+
+	if hitboxInstance.Shape == "Box" then
+		visualizer.Shape = Enum.PartType.Block
+		visualizer.Size = hitboxInstance.Size
+	elseif hitboxInstance.Shape == "Sphere" then
+		visualizer.Shape = Enum.PartType.Ball
+		local diameter = hitboxInstance.Size * 2
+		visualizer.Size = Vector3.new(diameter, diameter, diameter)
+	end
+	-- ตั้งค่า Network Ownership เป็น Server เพื่อป้องกัน Client เปลี่ยนตำแหน่ง (ไม่จำเป็นมากนักเพราะอยู่ใน RS)
+	-- visualizer:SetNetworkOwner(nil)
+
+	hitboxInstance.Visualizer = visualizer
+	-- ส่ง Event บอก Client ให้สร้าง (ถ้าต้องการ)
+	-- game.ReplicatedStorage.HitboxVisualizeEvent:FireAllClients("Create", hitboxInstance.UniqueId, hitboxInstance:GetCFrame(), hitboxInstance.Shape, hitboxInstance.Size)
+end
+
+local function UpdateVisualizer(hitboxInstance: table)
+	if hitboxInstance.Visualizer and hitboxInstance.Visualizer.Parent then
+		local cframe = hitboxInstance:GetCFrame()
+		-- ใช้ TweenService เพื่อให้การเคลื่อนที่ของ Visualizer ใน ReplicatedStorage ดู Smooth ขึ้น (ถ้า Client ดึงไปใช้)
+		-- หรือจะ Update ตรงๆ ก็ได้ถ้า Client สร้าง Visualizer ของตัวเองตาม Event
+		hitboxInstance.Visualizer.CFrame = cframe
+		-- ส่ง Event บอก Client ให้อัปเดต
+		-- game.ReplicatedStorage.HitboxVisualizeEvent:FireAllClients("Update", hitboxInstance.UniqueId, cframe)
+	elseif hitboxInstance.Visualizer and not hitboxInstance.Visualizer.Parent then
+		-- Visualizer ถูกลบไปแล้ว (อาจจะจาก Code อื่น)
+		hitboxInstance.Visualizer = nil
+	end
+end
+
+local function CleanupVisualizer(hitboxInstance: table)
+	if hitboxInstance.Visualizer then
+		-- ส่ง Event บอก Client ให้ลบ
+		-- game.ReplicatedStorage.HitboxVisualizeEvent:FireAllClients("Destroy", hitboxInstance.UniqueId)
+		hitboxInstance.Visualizer:Destroy()
+		hitboxInstance.Visualizer = nil
+	end
+end
+
+
+--[[
+	ProcessConfirmedHit (Internal Helper)
+	จัดการหลังจาก Hit ผ่านการตรวจสอบทั้งหมด (LoS included)
+]]
+local function ProcessConfirmedHit(hitboxInstance: table, hitPart: BasePart, humanoid: Humanoid)
+	local currentTime = tick()
+
+	-- 1. Apply I-Frames (Server-Side)
+	if hitboxInstance.IFramesEnabled then
+		ApplyIFrames(humanoid, hitboxInstance.IFrameDuration)
+	end
+
+	-- 2. Update Debounce Table (Server-Side)
+	hitboxInstance.HitTargetsDebounce[humanoid] = currentTime
+
+	-- 3. Update Confirmed Hits List & Counter (Server-Side)
+	table.insert(hitboxInstance.ConfirmedHitList, humanoid)
+	hitboxInstance.ConfirmedHits = hitboxInstance.ConfirmedHits + 1
+	-- print("Confirmed hit on", humanoid.Parent.Name, "- Total hits:", hitboxInstance.ConfirmedHits)
+
+
+	-- 4. Fire OnHit Event (Server-Side - Signifies a CONFIRMED hit)
+	-- ใช้ task.spawn เพื่อไม่ให้ Listener ที่ใช้เวลานาน Block การทำงานหลัก
+	task.spawn(function()
+		-- ส่ง Part ที่โดน, Humanoid, และ Damage ที่กำหนดไว้
+		hitboxInstance.OnHit:Fire(hitPart, humanoid, hitboxInstance.Damage)
 	end)
 
-	-- ตั้งเวลาสิ้นสุดการทำงาน
-	delay(self.Duration, function()
-		self:Deactivate()
-	end)
-
-	return self
+	-- 5. Check Max Hits (Server-Side)
+	if hitboxInstance.MaxHits and hitboxInstance.ConfirmedHits >= hitboxInstance.MaxHits then
+		-- print("Max hits reached for hitbox:", hitboxInstance.UniqueId)
+		hitboxInstance:Stop() -- หยุด Hitbox ทันทีเมื่อถึง MaxHits
+	end
 end
 
--- อัพเดทและตรวจสอบการชนในแต่ละเฟรม
-function HitBoxModule:Update(deltaTime)
-	if not self.Active or not self.Owner or not self.Owner.Character then
-		self:Deactivate()
+--[[
+	PerformCast (Server-Side Detection - Revised Logic)
+	ใช้ OverlapParams, กรองเบื้องต้น, ตรวจสอบ LoS, แล้วจึงยืนยัน Hit
+]]
+local function PerformCast(hitboxInstance: table)
+	-- ตรวจสอบว่า Hitbox ยัง Active อยู่หรือไม่ ก่อนเริ่ม Cast
+	if not hitboxInstance.IsActive then return end
+
+	local hitboxCFrame = hitboxInstance:GetCFrame()
+	local results
+
+	-- ตรวจสอบความสมเหตุสมผลของตำแหน่ง Hitbox (ป้องกันการ Exploit ตำแหน่ง)
+	local attackerRoot = hitboxInstance.AttackerCharacter and hitboxInstance.AttackerCharacter:FindFirstChild("HumanoidRootPart")
+	if attackerRoot and (hitboxCFrame.Position - attackerRoot.Position).Magnitude > MAX_DISTANCE_CHECK then
+		warn("Hitbox position ("..tostring(hitboxCFrame.Position)..") is too far from attacker ("..tostring(attackerRoot.Position).."). Stopping hitbox.", hitboxInstance.AttackerCharacter.Name)
+		hitboxInstance:Stop() -- หยุด Hitbox ที่น่าสงสัย
 		return
 	end
 
-	-- อัพเดทความเร็ว
-	if self.OwnerHRP then
-		local newPosition = self.OwnerHRP.Position
-		self.Velocity = (newPosition - self.LastPosition) / deltaTime
-		self.LastPosition = newPosition
+	-- Perform the appropriate spatial query
+	if hitboxInstance.Shape == "Box" then
+		results = workspace:GetPartBoundsInBox(
+			hitboxCFrame,
+			hitboxInstance.Size,
+			hitboxInstance.CastParams
+		)
+	elseif hitboxInstance.Shape == "Sphere" then
+		results = workspace:GetPartBoundsInRadius(
+			hitboxCFrame.Position,
+			hitboxInstance.Size, -- Radius
+			hitboxInstance.CastParams
+		)
+	else
+		warn("Invalid Hitbox Shape for Casting:", hitboxInstance.Shape)
+		return
 	end
 
-	-- ตรวจสอบการชน
-	self:CheckCollisions()
-end
+	-- ใช้ Dictionary เพื่อป้องกันการประมวลผล Humanoid เดียวกันซ้ำซ้อนใน Cast เดียว
+	local processedHumanoidsInCast = {}
 
--- ฟังก์ชันตรวจสอบการชน
-function HitBoxModule:CheckCollisions()
-	local baseCFrame = self:GetBaseCFrame()
-	local potentialTargets = self:GetPotentialTargets()
+	for _, hitPart in ipairs(results) do
+		-- Stage 1: Initial Filtering (Health, Self-Hit, I-Frames, Debounce)
+		local isValid, humanoid, targetCharacter = IsValidTarget(hitPart, hitboxInstance)
 
-	for _, target in ipairs(potentialTargets) do
-		if not self.HitTargets[target] then
-			local hit, position = self:TestHitbox(baseCFrame, target)
+		if isValid and humanoid and targetCharacter and not processedHumanoidsInCast[humanoid] then
+			processedHumanoidsInCast[humanoid] = true -- Mark as processed for this cast cycle
 
-			if hit then
-				self.HitTargets[target] = true
+			-- Stage 2: Line of Sight (LoS) Check (ถ้าเปิดใช้งาน)
+			local targetRoot = targetCharacter:FindFirstChild("HumanoidRootPart")
+			local losPassed = true -- Assume true if LoS check is disabled or no roots found
 
-				-- Client: ส่งข้อมูลการโจมตีไปยัง server
-				if RunService:IsClient() then
-					local character = target.Parent
-					if character then
-						HitEvent:FireServer(
-							character,
-							self.HitboxId,
-							position,
-							self.Damage,
-							self.Knockback,
-							self.HitEffects
-						)
-					end
-				end
+			if LOS_CHECK_ENABLED and attackerRoot and targetRoot then
+				-- สร้าง Filter List สำหรับ LoS Raycast: กรองผู้โจมตีและเป้าหมาย
+				local losFilter = {hitboxInstance.AttackerCharacter, targetCharacter}
+				-- อาจจะเพิ่ม Visualizer เข้าไปด้วย ถ้ามันอยู่ใน Workspace (แต่ตอนนี้อยู่ใน RS)
+				-- if hitboxInstance.Visualizer and hitboxInstance.Visualizer.Parent == workspace then
+				--    table.insert(losFilter, hitboxInstance.Visualizer)
+				-- end
+				losPassed = PerformLineOfSightCheck(attackerRoot, targetRoot, losFilter)
+			elseif LOS_CHECK_ENABLED and (not attackerRoot or not targetRoot) then
+				warn("Cannot perform LoS check: Attacker or Target HumanoidRootPart not found.")
+				losPassed = false -- ถ้าหา Root ไม่เจอ ถือว่า LoS ไม่ผ่านเพื่อความปลอดภัย
+			end
 
-				-- Server: ทำความเสียหายโดยตรง
-				if RunService:IsServer() then
-					local character = target.Parent
-					if character then
-						local player = Players:GetPlayerFromCharacter(character)
-						if player and CanDamage(self.Owner, player, ActiveHitboxes[self.HitboxId]) then
-							ApplyDamage(player, self.Owner, self.Damage, self.WeaponType, position, self.Knockback, self.HitEffects)
-						end
-					end
+			-- Stage 3: Process Confirmed Hit (ถ้า LoS ผ่าน)
+			if losPassed then
+				-- *** ยืนยัน Hit และดำเนินการต่อ ***
+				ProcessConfirmedHit(hitboxInstance, hitPart, humanoid)
+
+				-- ตรวจสอบอีกครั้งว่า MaxHits ทำให้ Hitbox หยุดทำงานไปหรือยัง
+				if not hitboxInstance.IsActive then
+					break -- หยุดวน Loop ของ Cast นี้ ถ้า Hitbox ถูก Stop ไปแล้ว
 				end
 			end
 		end
 	end
 end
 
--- หยุดการทำงานของ hitbox
-function HitBoxModule:Deactivate()
-	if not self.Active then return end
 
-	self.Active = false
+-- // Hitbox Class Methods
 
-	-- ทำลายการเชื่อมต่อกับ RunService
-	if self.UpdateConnection then
-		self.UpdateConnection:Disconnect()
-		self.UpdateConnection = nil
+function HitboxService.new(params: table)
+	assert(RunService:IsServer(), "HitboxService.new should only be called from the server!")
+
+	local self = setmetatable({}, HitboxService)
+
+	-- Validate required parameters (เหมือนเดิม)
+	assert(params.Shape and (params.Shape == "Box" or params.Shape == "Sphere"), "Hitbox requires a valid Shape ('Box' or 'Sphere')")
+	assert(params.Size and (typeof(params.Size) == "Vector3" or typeof(params.Size) == "number"), "Hitbox requires a valid Size (Vector3 for Box, number for Sphere radius)")
+	if params.Shape == "Box" then assert(typeof(params.Size) == "Vector3", "Box shape requires a Vector3 Size") end
+	if params.Shape == "Sphere" then assert(typeof(params.Size) == "number", "Sphere shape requires a number Size (radius)") end
+	assert(params.Attachment or params.Part, "Hitbox requires either an Attachment or a Part to attach to")
+	if params.Attachment then assert(params.Attachment:IsA("Attachment"), "Attachment parameter must be an Attachment instance") end
+	if params.Part then assert(params.Part:IsA("BasePart"), "Part parameter must be a BasePart instance") end
+	assert(params.AttackerCharacter and params.AttackerCharacter:IsA("Model") and params.AttackerCharacter:FindFirstChild("Humanoid"), "Hitbox requires a valid AttackerCharacter (Model with Humanoid)")
+
+	-- Assign properties
+	self.UniqueId = HttpService:GenerateGUID(false)
+	self.Shape = params.Shape
+	self.Size = params.Size
+	self.Attachment = params.Attachment
+	self.Part = params.Part
+	self.AttackerCharacter = params.AttackerCharacter
+	self.Offset = params.Offset or CFrame.new()
+	self.CastParams = params.CastParams or Instance.new("OverlapParams")
+	self.Visualize = params.Visualize or false
+	self.Duration = params.Duration -- nil means infinite until Stop()
+	self.Debounce = params.Debounce or DEFAULT_DEBOUNCE
+	self.MaxHits = params.MaxHits -- nil means infinite hits
+	self.IFramesEnabled = params.IFramesEnabled == nil and true or params.IFramesEnabled
+	self.IFrameDuration = params.IFrameDuration or DEFAULT_IFRAME_DURATION
+	self.Damage = params.Damage or 10 -- Default damage if not specified
+
+	-- Internal state (Server-Side)
+	self.IsActive = false
+	self.StartTime = 0
+	self.HitTargetsDebounce = {} -- [Humanoid] = lastHitTime (for Debounce)
+	self.ConfirmedHitList = {} -- List of humanoids confirmed hit (for reference/debugging)
+	self.ConfirmedHits = 0 -- Counter for MaxHits
+	self.Visualizer = nil
+
+	-- Events (Server-Side)
+	self.OnHit = Instance.new("BindableEvent") -- Fires with CONFIRMED hits (passed LoS, Debounce, I-Frames)
+
+	-- Ensure CastParams filter includes the attacker character
+	-- (Important: Do this *after* potentially creating default OverlapParams)
+	if self.CastParams.FilterType == Enum.RaycastFilterType.Blacklist then
+		local alreadyFiltered = false
+		for _, instance in ipairs(self.CastParams.FilterDescendantsInstances) do
+			if instance == self.AttackerCharacter then
+				alreadyFiltered = true
+				break
+			end
+		end
+		if not alreadyFiltered then
+			-- สร้าง Table ใหม่เพื่อหลีกเลี่ยงการแก้ไข Table ที่อาจใช้ร่วมกัน
+			local newFilter = table.clone(self.CastParams.FilterDescendantsInstances)
+			table.insert(newFilter, self.AttackerCharacter)
+			self.CastParams.FilterDescendantsInstances = newFilter
+			-- print("Added attacker to blacklist filter:", self.AttackerCharacter.Name)
+		end
+	elseif self.CastParams.FilterType == Enum.RaycastFilterType.Whitelist then
+		-- Whitelist mode: Ensure the attacker is NOT in the whitelist unless intended
+		local newFilter = {}
+		local attackerFound = false
+		for _, instance in ipairs(self.CastParams.FilterDescendantsInstances) do
+			if instance ~= self.AttackerCharacter then
+				table.insert(newFilter, instance)
+			else
+				attackerFound = true -- Found the attacker in the whitelist
+			end
+		end
+		-- Only update if the attacker was actually removed
+		if attackerFound then
+			self.CastParams.FilterDescendantsInstances = newFilter
+			-- print("Removed attacker from whitelist filter:", self.AttackerCharacter.Name)
+		end
 	end
+	-- print("Final Filter Instances:", self.CastParams.FilterDescendantsInstances)
 
-	-- ลบออกจากตาราง active hitboxes
-	ActiveHitboxes[self.HitboxId] = nil
+
+	-- Create visualizer representation if requested
+	if self.Visualize then
+		CreateVisualizer(self)
+	end
 
 	return self
 end
 
--- รับ CFrame พื้นฐานสำหรับ hitbox จากตำแหน่งของผู้เล่น
-function HitBoxModule:GetBaseCFrame()
-	if not self.OwnerHRP then
-		return CFrame.new(0, 0, 0)
-	end
-
-	return self.OwnerHRP.CFrame * self.Offset
-end
-
--- ค้นหาเป้าหมายที่อาจถูกโจมตี
-function HitBoxModule:GetPotentialTargets()
-	local results = {}
-	local baseCFrame = self:GetBaseCFrame()
-	local center = baseCFrame.Position
-
-	-- คำนวณรัศมีค้นหาจากขนาดของ hitbox
-	local radius = math.max(self.Size.X, self.Size.Y, self.Size.Z) * 1.5
-
-	-- ตรวจสอบผู้เล่นทั้งหมดในระยะที่กำหนด
-	for _, player in ipairs(Players:GetPlayers()) do
-		if player ~= self.Owner and player.Character then
-			local humanoidRootPart = player.Character:FindFirstChild("HumanoidRootPart")
-
-			if humanoidRootPart then
-				local distance = (humanoidRootPart.Position - center).Magnitude
-
-				if distance <= radius then
-					-- ใช้ HumanoidRootPart เป็นส่วนหลักในการตรวจสอบ
-					table.insert(results, humanoidRootPart)
-				end
-			end
+function HitboxService:GetCFrame(): CFrame
+	if self.Attachment and self.Attachment.Parent then
+		return self.Attachment.WorldCFrame * self.Offset
+	elseif self.Part and self.Part.Parent then
+		return self.Part.CFrame * self.Offset
+	else
+		-- Anchor หายไป -> หยุด Hitbox เพื่อป้องกัน Error และพฤติกรรมไม่คาดคิด
+		if self.IsActive then
+			warn("Hitbox anchor (Part/Attachment) not found for active hitbox. Stopping hitbox.", self.UniqueId)
+			self:Stop()
 		end
-	end
-
-	-- ทำการค้นหา NPCs ด้วย (ถ้ามี)
-	-- ปรับแต่งส่วนนี้ตามระบบ NPC ของเกมของคุณ
-
-	return results
-end
-
--- ทดสอบว่า hitbox ชนกับเป้าหมายหรือไม่
-function HitBoxModule:TestHitbox(baseCFrame, target)
-	if not target then return false, nil end
-
-	local targetPosition = target.Position
-	local targetSize = target.Size
-
-	if self.Type == "Box" then
-		-- ตรวจสอบการชนแบบ Box
-		return TestBoxCollision(baseCFrame, self.Size, target), targetPosition
-
-	elseif self.Type == "Sphere" then
-		-- ตรวจสอบการชนแบบ Sphere
-		local radius = math.max(self.Size.X, self.Size.Y, self.Size.Z) / 2
-		local center = baseCFrame.Position
-		local distance = (targetPosition - center).Magnitude
-
-		-- ใช้ radius และขนาดของเป้าหมายในการพิจารณา
-		local targetRadius = math.max(targetSize.X, targetSize.Y, targetSize.Z) / 2
-		return distance <= (radius + targetRadius), targetPosition
-
-	elseif self.Type == "Capsule" then
-		-- ตรวจสอบการชนแบบ Capsule (เช่น สำหรับอาวุธประเภทดาบหรือหอก)
-		return TestCapsuleCollision(baseCFrame, self.Size, target), targetPosition
-	end
-
-	return false, nil
-end
-
--- ฟังก์ชันทดสอบการชนแบบ Box
-function TestBoxCollision(boxCFrame, boxSize, target)
-	-- แปลงตำแหน่งของเป้าหมายเข้าสู่ local space ของ box
-	local targetPosition = boxCFrame:PointToObjectSpace(target.Position)
-	local targetSize = target.Size
-
-	-- คำนวณระยะห่างระหว่างจุดศูนย์กลางของทั้งสอง
-	local halfBoxSize = boxSize / 2
-	local halfTargetSize = targetSize / 2
-
-	-- ตรวจสอบว่าระยะห่างน้อยกว่าครึ่งหนึ่งของขนาดรวมกันหรือไม่
-	local dx = math.abs(targetPosition.X) - (halfBoxSize.X + halfTargetSize.X)
-	local dy = math.abs(targetPosition.Y) - (halfBoxSize.Y + halfTargetSize.Y)
-	local dz = math.abs(targetPosition.Z) - (halfBoxSize.Z + halfTargetSize.Z)
-
-	return dx <= 0 and dy <= 0 and dz <= 0
-end
-
--- ฟังก์ชันทดสอบการชนแบบ Capsule
-function TestCapsuleCollision(capsuleCFrame, capsuleSize, target)
-	-- Capsule ประกอบด้วยส่วนกลาง (cylinder) และส่วนปลาย (hemispheres)
-	local capsuleDirection = capsuleCFrame.LookVector
-	local capsuleLength = capsuleSize.Z
-	local capsuleRadius = math.max(capsuleSize.X, capsuleSize.Y) / 2
-
-	local targetPosition = target.Position
-	local targetSize = target.Size
-	local targetRadius = math.max(targetSize.X, targetSize.Y, targetSize.Z) / 2
-
-	-- คำนวณจุดใกล้ที่สุดบนแกนของ capsule กับเป้าหมาย
-	local capsuleStart = capsuleCFrame.Position - capsuleDirection * (capsuleLength / 2 - capsuleRadius)
-	local capsuleEnd = capsuleCFrame.Position + capsuleDirection * (capsuleLength / 2 - capsuleRadius)
-
-	local t = math.clamp(((targetPosition - capsuleStart):Dot(capsuleDirection)) / (capsuleEnd - capsuleStart).Magnitude, 0, 1)
-	local closestPoint = capsuleStart + t * (capsuleEnd - capsuleStart)
-
-	-- คำนวณระยะห่างระหว่างจุดใกล้ที่สุดกับเป้าหมาย
-	local distance = (targetPosition - closestPoint).Magnitude
-
-	-- ตรวจสอบว่าระยะห่างน้อยกว่ารัศมีรวมกันหรือไม่
-	return distance <= (capsuleRadius + targetRadius)
-end
-
--- แสดงผล hitbox (สำหรับ debug mode)
-function VisualizeHitbox(hitboxType, cf, size, duration, color)
-	local visualization
-
-	if hitboxType == "Box" then
-		visualization = Instance.new("Part")
-		visualization.Size = size
-		visualization.CFrame = cf
-		visualization.Anchored = true
-		visualization.CanCollide = false
-		visualization.Transparency = 0.8
-		visualization.Color = color
-		visualization.Name = "HitboxDebug"
-		visualization.Material = Enum.Material.SmoothPlastic
-
-	elseif hitboxType == "Sphere" then
-		visualization = Instance.new("Part")
-		local radius = math.max(size.X, size.Y, size.Z) / 2
-		visualization.Shape = Enum.PartType.Ball
-		visualization.Size = Vector3.new(radius * 2, radius * 2, radius * 2)
-		visualization.CFrame = cf
-		visualization.Anchored = true
-		visualization.CanCollide = false
-		visualization.Transparency = 0.8
-		visualization.Color = color
-		visualization.Name = "HitboxDebug"
-		visualization.Material = Enum.Material.SmoothPlastic
-
-	elseif hitboxType == "Capsule" then
-		-- สร้างส่วน cylinder และ hemispheres (ด้วย parts ปกติ)
-		visualization = Instance.new("Model")
-		visualization.Name = "CapsuleHitboxDebug"
-
-		local cylinder = Instance.new("Part")
-		cylinder.Size = Vector3.new(size.X, size.Y, size.Z - size.X)
-		cylinder.CFrame = cf
-		cylinder.Anchored = true
-		cylinder.CanCollide = false
-		cylinder.Transparency = 0.8
-		cylinder.Color = color
-		cylinder.Material = Enum.Material.SmoothPlastic
-		cylinder.Parent = visualization
-
-		-- เพิ่มส่วนหัวและท้าย
-		local sphere1 = Instance.new("Part")
-		sphere1.Shape = Enum.PartType.Ball
-		local radius = size.X / 2
-		sphere1.Size = Vector3.new(size.X, size.X, size.X)
-		sphere1.CFrame = cf * CFrame.new(0, 0, -size.Z/2 + radius)
-		sphere1.Anchored = true
-		sphere1.CanCollide = false
-		sphere1.Transparency = 0.8
-		sphere1.Color = color
-		sphere1.Material = Enum.Material.SmoothPlastic
-		sphere1.Parent = visualization
-
-		local sphere2 = Instance.new("Part")
-		sphere2.Shape = Enum.PartType.Ball
-		sphere2.Size = Vector3.new(size.X, size.X, size.X)
-		sphere2.CFrame = cf * CFrame.new(0, 0, size.Z/2 - radius)
-		sphere2.Anchored = true
-		sphere2.CanCollide = false
-		sphere2.Transparency = 0.8
-		sphere2.Color = color
-		sphere2.Material = Enum.Material.SmoothPlastic
-		sphere2.Parent = visualization
-	end
-
-	if visualization then
-		visualization.Parent = workspace.Terrain
-
-		-- ลบ visualization หลังจากหมดเวลา
-		game:GetService("Debris"):AddItem(visualization, duration)
+		-- Return a default CFrame or the last known good CFrame if available
+		return CFrame.new(0, -10000, 0) -- ส่งไปไกลๆ เพื่อไม่ให้เกิด Hit โดยบังเอิญ
 	end
 end
 
--- ฟังก์ชันสร้าง i-frames สำหรับผู้เล่น (ใช้กับระบบหลบ)
-function HitBoxModule.SetInvincible(player, duration)
+function HitboxService:Start()
+	if not RunService:IsServer() then
+		warn("HitboxService:Start() can only be called from the server.")
+		return
+	end
+	if self.IsActive then return end
+
+	-- ตรวจสอบว่า Anchor ยังอยู่ดีไหมก่อนเริ่ม
+	if (self.Attachment and not self.Attachment.Parent) or (self.Part and not self.Part.Parent) then
+		warn("Cannot start hitbox: Anchor (Part/Attachment) not found.", self.UniqueId)
+		self:Destroy() -- ทำลายไปเลยถ้า Anchor หายไปก่อนเริ่ม
+		return
+	end
+
+	self.IsActive = true
+	self.StartTime = tick()
+	self.HitTargetsDebounce = {} -- Reset debounce list
+	self.ConfirmedHitList = {} -- Reset confirmed hit list
+	self.ConfirmedHits = 0 -- Reset counter
+
+	-- Add to the global server-side update loop
+	HitboxService.ActiveHitboxes[self] = true
+	-- print("Hitbox started:", self.UniqueId)
+
+
+	-- ถ้า Visualize, อัปเดตตำแหน่งเริ่มต้นและส่ง Event (ถ้าใช้ Event)
+	if self.Visualize then
+		UpdateVisualizer(self) -- Update position once at start
+		-- game.ReplicatedStorage.HitboxVisualizeEvent:FireAllClients("Create", self.UniqueId, self:GetCFrame(), self.Shape, self.Size)
+	end
+end
+
+function HitboxService:Stop()
+	if not RunService:IsServer() then return end -- ควรมี Guard Clause เสมอ
+	if not self.IsActive then return end
+
+	self.IsActive = false
+	-- Remove from the global update loop (weak table handles removal eventually)
+	HitboxService.ActiveHitboxes[self] = nil -- Explicit removal is still good practice
+	-- print("Hitbox stopped:", self.UniqueId)
+
+	-- ถ้า Visualize, ส่ง Event หยุดให้ Client และ Cleanup ทันที
+	if self.Visualize then
+		CleanupVisualizer(self) -- Cleanup server-side visualizer part
+		-- game.ReplicatedStorage.HitboxVisualizeEvent:FireAllClients("Destroy", self.UniqueId)
+	end
+end
+
+function HitboxService:Destroy()
 	if not RunService:IsServer() then return end
 
-	CachedHitData[player.UserId] = CachedHitData[player.UserId] or {}
-	CachedHitData[player.UserId].Invincible = true
-	CachedHitData[player.UserId].InvincibleStartTime = tick()
-	CachedHitData[player.UserId].InvincibleDuration = duration or 0.5
+	self:Stop() -- Ensure it's stopped first
 
-	-- รีเซ็ตสถานะหลังหมดเวลา
-	delay(duration, function()
-		if CachedHitData[player.UserId] then
-			CachedHitData[player.UserId].Invincible = false
-		end
-	end)
+	-- Clean up events
+	if self.OnHit then
+		self.OnHit:Destroy()
+		self.OnHit = nil -- Clear reference
+	end
+
+	-- Clean up visualizer just in case Stop() didn't catch it
+	CleanupVisualizer(self)
+
+	-- Explicitly remove from active list if somehow still there
+	HitboxService.ActiveHitboxes[self] = nil
+
+	-- Clear references (weak table helps, but explicit nil is clearer for other fields)
+	for k in pairs(self) do
+		self[k] = nil
+	end
+	setmetatable(self, nil) -- Remove metatable
+	-- print("Hitbox destroyed")
 end
 
--- ฟังก์ชันตั้งค่าสถานะ combat mode
-function HitBoxModule.SetCombatMode(player, enabled)
+-- // Global Server-Side Update Loop
+
+RunService.Heartbeat:Connect(function(deltaTime)
+	-- Loop นี้ทำงานบน Server เท่านั้น
 	if not RunService:IsServer() then return end
 
-	CachedHitData[player.UserId] = CachedHitData[player.UserId] or {}
-	CachedHitData[player.UserId].CombatMode = enabled
-end
-
--- ทำความเสียหายให้กับเป้าหมาย
-function ApplyDamage(victim, attacker, damage, weaponType, position, knockback, hitEffects)
-	if not RunService:IsServer() then return end
-	if not victim or not victim.Character then return end
-
-	local humanoid = victim.Character:FindFirstChild("Humanoid")
-	if not humanoid then return end
-
-	-- ทำความเสียหาย
-	humanoid:TakeDamage(damage)
-
-	-- สร้างเอฟเฟกต์ knockback
-	if knockback > 0 then
-		local hrp = victim.Character:FindFirstChild("HumanoidRootPart")
-		if hrp then
-			local direction = (hrp.Position - position).Unit
-			local knockbackForce = direction * knockback
-
-			-- ใช้ BodyVelocity ในการทำ knockback
-			local bodyVel = Instance.new("BodyVelocity")
-			bodyVel.MaxForce = Vector3.new(1000000, 1000000, 1000000)
-			bodyVel.Velocity = knockbackForce
-			bodyVel.Parent = hrp
-
-			-- ลบ BodyVelocity หลังจาก 0.1 วินาที
-			game:GetService("Debris"):AddItem(bodyVel, 0.1)
-		end
-	end
-
-	-- แสดงเอฟเฟกต์การโจมตี
-	for _, effect in ipairs(hitEffects or {}) do
-		if effect.Type == "Sound" then
-			local sound = Instance.new("Sound")
-			sound.SoundId = effect.SoundId
-			sound.Volume = effect.Volume or 1
-			sound.PlaybackSpeed = effect.PlaybackSpeed or 1
-			sound.Parent = victim.Character.HumanoidRootPart
-			sound:Play()
-			game:GetService("Debris"):AddItem(sound, sound.TimeLength + 0.1)
-
-		elseif effect.Type == "Particle" then
-			-- สร้าง ParticleEmitter
-			local emitter = Instance.new("ParticleEmitter")
-			-- ตั้งค่าคุณสมบัติของ ParticleEmitter ตามข้อมูลใน effect
-			emitter.Parent = victim.Character.HumanoidRootPart
-			emitter:Emit(effect.Count or 10)
-			game:GetService("Debris"):AddItem(emitter, effect.Duration or 1)
-
-		elseif effect.Type == "Animation" then
-			local anim = Instance.new("Animation")
-			anim.AnimationId = effect.AnimationId
-			local animTrack = humanoid:LoadAnimation(anim)
-			animTrack:Play()
-		end
-	end
-
-	-- ส่งข้อมูลการทำความเสียหายไปยัง client (อาจใช้สำหรับแสดงผล damage numbers)
-	local damageEvent = RemoteFolder:FindFirstChild("DamageEffect")
-	if damageEvent then
-		damageEvent:FireClient(victim, damage, position, weaponType)
-	end
-end
-
--- เช็คและทำความสะอาดข้อมูลเป็นระยะ
-game:GetService("RunService").Heartbeat:Connect(function()
-	-- ทำความสะอาด hit registry
 	local currentTime = tick()
-	for key, hitTime in pairs(HitRegistry) do
-		if currentTime - hitTime > HIT_COOLDOWN * 3 then
-			HitRegistry[key] = nil
-		end
-	end
 
-	-- ทำความสะอาด active hitboxes ที่หมดอายุ
-	for id, hitboxData in pairs(ActiveHitboxes) do
-		if hitboxData.CreationTime and currentTime - hitboxData.CreationTime > MAX_HITBOX_LIFETIME * 2 then
-			ActiveHitboxes[id] = nil
+	-- ใช้ pairs บน weak table ได้ปกติ, การวนซ้ำจะไม่เก็บ Reference ถาวร
+	for hitboxInstance, _ in pairs(HitboxService.ActiveHitboxes) do
+		-- Double-check if the instance is still valid and active
+		-- (It might have been destroyed or stopped during the loop iteration)
+		if not hitboxInstance or not hitboxInstance.IsActive then
+			continue
 		end
+
+		-- ตรวจสอบว่า Anchor (Part/Attachment) ยังอยู่หรือไม่
+		if (hitboxInstance.Attachment and not hitboxInstance.Attachment.Parent) or (hitboxInstance.Part and not hitboxInstance.Part.Parent) then
+			if hitboxInstance.IsActive then -- เช็คอีกครั้งก่อน Destroy
+				warn("Hitbox anchor lost during update loop. Destroying hitbox.", hitboxInstance.UniqueId)
+				hitboxInstance:Destroy() -- ทำลาย Hitbox ที่ไม่มี Anchor
+			end
+			continue -- ไปยัง Hitbox ถัดไป
+		end
+
+		-- Update CFrame for visualizer (if enabled)
+		if hitboxInstance.Visualize then
+			UpdateVisualizer(hitboxInstance)
+		end
+
+		-- Check duration (if set)
+		if hitboxInstance.Duration and (currentTime - hitboxInstance.StartTime) >= hitboxInstance.Duration then
+			-- print("Hitbox duration ended:", hitboxInstance.UniqueId)
+			hitboxInstance:Stop()
+			continue -- หยุดและไป Hitbox ถัดไป
+		end
+
+		-- Perform detection (Shapecasting, LoS, Hit Confirmation)
+		-- *** Function นี้จะจัดการเรื่อง Hit Confirmation และ Stop ถ้าถึง MaxHits ด้วย ***
+		PerformCast(hitboxInstance)
+
 	end
 end)
 
-return HitBoxModule
+
+return HitboxService
