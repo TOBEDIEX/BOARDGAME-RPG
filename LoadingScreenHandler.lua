@@ -1,6 +1,6 @@
 -- LoadingScreenHandler.lua
 -- Manages game loading screen and player status display
--- Version: 4.0.0 (Properly Fixed with Correct Lua Syntax)
+-- Version: 4.1.0 (Improved Transition Logic)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -41,10 +41,10 @@ local loadingState = {
 	minRequired = 2,
 	maxPlayers = 4,
 	isAssetsLoaded = false,
-	allPlayersReady = false,
+	allPlayersReady = false, -- Server determines actual readiness
 	assetLoadedSent = false,
-	autoReadyTimerId = nil,
-	loadingComplete = false
+	serverSignaledTransition = false, -- Flag to track server signal
+	loadingComplete = false -- Tracks if client-side loading finished
 }
 
 -- Track connections
@@ -62,7 +62,7 @@ local lastUpdateTime = 0
 local updateThreshold = 0.05 -- 50ms
 
 -- Forward declaration of functions
-local startAutoReadySystem, sendReadySignal, checkIfReadyToAdvance
+local sendReadySignal, transitionToClassSelection
 
 -- Ensure all other UI screens are disabled during loading
 local function disableOtherScreens()
@@ -134,8 +134,9 @@ local function initializeUI()
 	LoadingBarFill.Size = UDim2.new(0, 0, 1, 0)
 	LoadingText.Text = "Loading game... 0%"
 	PlayersReadyText.Text = "Players ready: 0/0"
+	PlayersReadyText.TextColor3 = Color3.fromRGB(255, 255, 0) -- Yellow initially
 
-	-- Show LoadingScreen and hide other UIs
+	-- *** CRITICAL: Ensure LoadingScreen is enabled and others are disabled ***
 	LoadingScreen.Enabled = true
 	disableOtherScreens()
 
@@ -156,13 +157,13 @@ local function connectRemoteEvents()
 	if not uiRemotes or not gameRemotes then return false end
 
 	-- Reference RemoteEvents
-	remotes.updateLoading = uiRemotes:WaitForChild("UpdateLoading", 3)
+	remotes.updateLoading = uiRemotes:WaitForChild("UpdateLoading", 3) -- Server might send progress updates
 	remotes.updatePlayersReady = uiRemotes:WaitForChild("UpdatePlayersReady", 3)
-	remotes.showClassSelection = uiRemotes:WaitForChild("ShowClassSelection", 3)
-	remotes.assetsLoaded = gameRemotes:WaitForChild("AssetsLoaded", 3)
+	remotes.showClassSelection = uiRemotes:WaitForChild("ShowClassSelection", 3) -- *** Signal to transition ***
+	remotes.assetsLoaded = gameRemotes:WaitForChild("AssetsLoaded", 3) -- Client sends this when done
 
 	-- Validate connections
-	if not remotes.updateLoading or not remotes.updatePlayersReady or 
+	if not remotes.updateLoading or not remotes.updatePlayersReady or
 		not remotes.showClassSelection or not remotes.assetsLoaded then
 		warn("LoadingScreenHandler: Some RemoteEvents missing")
 		return false
@@ -179,26 +180,36 @@ local function updateLoadingProgress(progress)
 	if currentTime - lastUpdateTime < updateThreshold then return end
 	lastUpdateTime = currentTime
 
-	-- Record progress
+	-- Clamp progress between 0 and 1
+	progress = math.clamp(progress, 0, 1)
 	loadingState.assetsProgress = progress
 
 	debugLog("Updating loading progress: " .. math.floor(progress * 100) .. "%")
 
 	-- Update LoadingBar with tween
-	createTween(LoadingBarFill, {Size = UDim2.new(progress, 0, 1, 0)}, 0.2):Play()
+	if LoadingBarFill then
+		createTween(LoadingBarFill, {Size = UDim2.new(progress, 0, 1, 0)}, 0.2):Play()
+	end
 
 	-- Update text
-	LoadingText.Text = "Loading game... " .. math.floor(progress * 100) .. "%"
+	if LoadingText then
+		LoadingText.Text = "Loading game... " .. math.floor(progress * 100) .. "%"
+	end
 
 	-- Check if loading complete
-	if progress >= 1 then
+	if progress >= 1 and not loadingState.loadingComplete then
 		loadingState.isAssetsLoaded = true
-		LoadingText.Text = "Loading complete 100%"
-		checkIfReadyToAdvance()
+		loadingState.loadingComplete = true -- Mark client-side loading as done
+		if LoadingText then
+			LoadingText.Text = "Loading complete! Waiting for server..."
+			LoadingText.TextColor3 = Color3.fromRGB(150, 255, 150) -- Light green
+		end
+		debugLog("Client-side asset loading finished.")
+		sendReadySignal() -- Send signal now that client is done
 	end
 end
 
--- Update player ready status
+-- Update player ready status (from server)
 local function updatePlayersReadyStatus(playersReady, totalPlayers)
 	-- Validate received values
 	if type(playersReady) ~= "number" or type(totalPlayers) ~= "number" then return end
@@ -208,30 +219,20 @@ local function updatePlayersReadyStatus(playersReady, totalPlayers)
 		return
 	end
 
-	debugLog("Updating players ready: " .. playersReady .. "/" .. totalPlayers)
+	debugLog("Updating players ready (from server): " .. playersReady .. "/" .. totalPlayers)
 
 	-- Record new state
 	loadingState.playersReady = playersReady
 	loadingState.totalPlayers = totalPlayers
-
-	-- Count actual players for accuracy
-	local actualPlayerCount = #Players:GetPlayers()
-	if totalPlayers ~= actualPlayerCount then
-		totalPlayers = actualPlayerCount
-		loadingState.totalPlayers = actualPlayerCount
-	end
 
 	-- Update text
 	if PlayersReadyText then
 		PlayersReadyText.Text = "Players ready: " .. playersReady .. "/" .. totalPlayers
 	end
 
-	-- Check if all players ready and enough players
-	loadingState.allPlayersReady = (playersReady >= totalPlayers and totalPlayers >= loadingState.minRequired)
-
-	-- Update text color based on status
+	-- Update text color based on server status (more reliable)
 	if PlayersReadyText then
-		if loadingState.allPlayersReady then
+		if playersReady >= totalPlayers and totalPlayers >= loadingState.minRequired then
 			PlayersReadyText.TextColor3 = Color3.fromRGB(0, 255, 0) -- Green
 		elseif totalPlayers < loadingState.minRequired then
 			PlayersReadyText.TextColor3 = Color3.fromRGB(255, 0, 0) -- Red
@@ -240,97 +241,67 @@ local function updatePlayersReadyStatus(playersReady, totalPlayers)
 		end
 	end
 
-	-- Check if ready to advance
-	checkIfReadyToAdvance()
+	-- Note: No transition logic here. Transition is handled by ShowClassSelection event.
 end
 
 -- Send ready signal to Server
-sendReadySignal = function(forceReady)
+sendReadySignal = function()
 	if not remotes.assetsLoaded then return false end
 
-	if loadingState.isAssetsLoaded or forceReady then
+	-- Only send if assets are loaded and haven't sent before
+	if loadingState.isAssetsLoaded and not loadingState.assetLoadedSent then
 		debugLog("Sending assets loaded signal to server")
 		remotes.assetsLoaded:FireServer()
+		loadingState.assetLoadedSent = true -- Mark as sent
 		return true
 	end
 
 	return false
 end
 
--- Auto-ready system
-startAutoReadySystem = function()
-	-- Cancel previous timer
-	if loadingState.autoReadyTimerId then return end
-
-	debugLog("Starting auto-ready system")
-	loadingState.autoReadyTimerId = true
-	spawn(function()
-		while true do
-			if loadingState.isAssetsLoaded and LoadingScreen and LoadingScreen.Enabled then
-				sendReadySignal(true)
-				wait(2)
-			else
-				break
-			end
-		end
-	end)
-end
-
--- Check if ready for next screen
-checkIfReadyToAdvance = function()
-	if loadingState.isAssetsLoaded and loadingState.allPlayersReady and not loadingState.loadingComplete then
-		debugLog("Ready to advance to next screen")
-
-		-- Show ready message
-		LoadingText.Text = "Ready to start game!"
-		LoadingText.TextColor3 = Color3.fromRGB(0, 255, 0)
-
-		-- Mark loading as complete to prevent multiple transitions
-		loadingState.loadingComplete = true
-
-		-- Send ready signal
-		if not loadingState.assetLoadedSent then
-			loadingState.assetLoadedSent = true
-			sendReadySignal(true)
-			startAutoReadySystem()
-		end
+-- Transition to class selection (Called ONLY by ShowClassSelection event)
+transitionToClassSelection = function()
+	-- Prevent multiple transitions
+	if loadingState.serverSignaledTransition then
+		debugLog("Transition already in progress or completed.")
+		return
 	end
-end
+	loadingState.serverSignaledTransition = true -- Set flag immediately
 
--- Transition to class selection
-local function transitionToClassSelection()
-	debugLog("Transitioning to class selection")
+	debugLog("Received ShowClassSelection signal. Transitioning...")
 
 	-- Fade out LoadingScreen
 	local fadeOutTween = createTween(Background, {BackgroundTransparency = 1}, 0.5)
 	fadeOutTween:Play()
 
 	fadeOutTween.Completed:Connect(function()
-		-- Disable LoadingScreen
+		-- Disable LoadingScreen *after* fade
 		LoadingScreen.Enabled = false
+		debugLog("LoadingScreen disabled.")
 
 		-- Look for class selection screen
-		local ClassSelection = PlayerGui:WaitForChild("ClassSelection", 5)
+		local ClassSelection = PlayerGui:FindFirstChild("ClassSelection") -- Use FindFirstChild, it might be disabled
 		if ClassSelection then
+			debugLog("Found ClassSelection screen. Enabling...")
 			-- Set properties before enabling to avoid flashing
 			local classBackground = ClassSelection:FindFirstChild("Background")
 			if classBackground then
-				classBackground.BackgroundTransparency = 1
+				classBackground.BackgroundTransparency = 1 -- Start transparent
 			end
 
 			-- Enable class selection with fade in
-			ClassSelection.Enabled = true
+			ClassSelection.Enabled = true -- *** Enable it NOW ***
 
 			if classBackground then
 				createTween(classBackground, {BackgroundTransparency = 0}, 0.5):Play()
 			end
 
-			debugLog("Class selection screen shown")
+			debugLog("Class selection screen shown and faded in.")
 		else
-			warn("LoadingScreenHandler: Class selection screen not found")
+			warn("LoadingScreenHandler: Class selection screen not found during transition")
 		end
 
-		-- Clean up
+		-- Clean up loading connections
 		cleanupConnections()
 	end)
 end
@@ -342,12 +313,7 @@ local function preloadAssets()
 	debugLog("Starting asset preloading")
 
 	-- Group assets by type
-	local assetsToLoad = {
-		images = {},
-		sounds = {},
-		meshes = {},
-		others = {}
-	}
+	local assetsToLoad = {} -- Simpler list
 
 	-- Find main UIs to preload
 	local uiToPreload = {
@@ -357,107 +323,85 @@ local function preloadAssets()
 		PlayerGui:FindFirstChild("GameOverScreen")
 	}
 
-	-- Count total assets
-	local totalAssets = 0
-
 	-- Collect assets
 	for _, ui in ipairs(uiToPreload) do
 		if ui then
 			for _, descendant in ipairs(ui:GetDescendants()) do
-				local assetType = "others"
-
-				if descendant:IsA("ImageLabel") or descendant:IsA("ImageButton") then
-					assetType = "images"
-				elseif descendant:IsA("Sound") then
-					assetType = "sounds"
-				elseif descendant:IsA("MeshPart") or descendant:IsA("SpecialMesh") then
-					assetType = "meshes"
-				elseif descendant:IsA("Decal") or descendant:IsA("Texture") then
-					assetType = "images"
-				end
-
-				if assetType ~= "others" or descendant:IsA("Script") or descendant:IsA("LocalScript") then
-					table.insert(assetsToLoad[assetType], descendant)
-					totalAssets = totalAssets + 1
+				-- Preload common asset types
+				if descendant:IsA("ImageLabel") or descendant:IsA("ImageButton") or
+					descendant:IsA("Sound") or descendant:IsA("MeshPart") or
+					descendant:IsA("SpecialMesh") or descendant:IsA("Decal") or
+					descendant:IsA("Texture") or descendant:IsA("Script") or
+					descendant:IsA("LocalScript") or descendant:IsA("ModuleScript") then
+					table.insert(assetsToLoad, descendant)
 				end
 			end
 		end
 	end
 
+	-- Add other critical assets if needed (e.g., from ReplicatedStorage)
+
+	local totalAssets = #assetsToLoad
 	debugLog("Found " .. totalAssets .. " assets to preload")
 
 	-- If no assets to load
 	if totalAssets == 0 then
-		updateLoadingProgress(1)
-		wait(0.5)
-		loadingState.isAssetsLoaded = true
-		checkIfReadyToAdvance()
+		debugLog("No assets found to preload.")
+		updateLoadingProgress(1) -- Mark as complete
 		return
 	end
 
-	-- Simulated progress system
-	local startTime = tick()
-	local simulatedProgress = 0
-	local progressConnection = nil
-
-	-- Simulate progress if ContentProvider doesn't report
-	progressConnection = RunService.Heartbeat:Connect(function()
-		local elapsed = tick() - startTime
-		local maxTime = 8 -- Maximum expected loading time
-
-		-- Increase progress towards 90%
-		simulatedProgress = math.min(0.9, (elapsed / maxTime) * 1.5)
-		updateLoadingProgress(simulatedProgress)
-	end)
-
-	table.insert(connections, progressConnection)
-
-	-- Assets loaded counter
+	-- Use ContentProvider:PreloadAsync with progress tracking
 	local loadedAssets = 0
+	local preloadConnection = nil
 
-	-- Batch loading function
-	local function loadBatch(assets, batchName)
-		if #assets == 0 then return end
-
-		debugLog("Loading batch: " .. batchName .. " (" .. #assets .. " assets)")
-
-		local success = pcall(function()
-			ContentProvider:PreloadAsync(assets)
+	-- Use a coroutine for preloading
+	coroutine.wrap(function()
+		local success, err = pcall(function()
+			ContentProvider:PreloadAsync(assetsToLoad, function(assetId, status)
+				if status == Enum.AssetFetchStatus.Success or status == Enum.AssetFetchStatus.Failure then
+					loadedAssets = loadedAssets + 1
+					local progress = loadedAssets / totalAssets
+					-- Update progress on the main thread using spawn or bindable event if needed
+					task.spawn(updateLoadingProgress, progress)
+				end
+			end)
 		end)
 
-		loadedAssets = loadedAssets + #assets
-		local actualProgress = loadedAssets / totalAssets
+		if not success then
+			warn("Asset preloading failed:", err)
+			-- Still mark as loaded to proceed, but log the error
+			task.spawn(updateLoadingProgress, 1)
+		else
+			debugLog("Asset preloading complete (via PreloadAsync callback).")
+			-- Ensure 100% is shown if callback didn't quite reach it
+			if loadingState.assetsProgress < 1 then
+				task.spawn(updateLoadingProgress, 1)
+			end
+		end
+	end)()
 
-		-- Never decrease progress
-		simulatedProgress = math.max(simulatedProgress, actualProgress * 0.9)
-		updateLoadingProgress(simulatedProgress)
+	-- Fallback timer in case PreloadAsync hangs or doesn't report fully
+	local startTime = tick()
+	local maxTime = 15 -- Max time before forcing completion
+	preloadConnection = RunService.Heartbeat:Connect(function()
+		if loadingState.loadingComplete then
+			preloadConnection:Disconnect()
+			preloadConnection = nil
+			return
+		end
 
-		wait(0.05) -- Brief pause
-	end
-
-	-- Load each batch
-	loadBatch(assetsToLoad.images, "Images")
-	loadBatch(assetsToLoad.sounds, "Sounds")
-	loadBatch(assetsToLoad.meshes, "Models")
-	loadBatch(assetsToLoad.others, "Others")
-
-	-- Cancel progress simulation
-	if progressConnection then
-		progressConnection:Disconnect()
-		progressConnection = nil
-	end
-
-	-- Show 100% completion
-	updateLoadingProgress(1)
-	debugLog("Asset preloading complete")
-
-	-- Pause to show completion
-	wait(0.5)
-
-	-- Set assets loaded state
-	loadingState.isAssetsLoaded = true
-	checkIfReadyToAdvance()
+		local elapsed = tick() - startTime
+		if elapsed > maxTime then
+			warn("Preloading timed out after " .. maxTime .. "s. Forcing completion.")
+			preloadConnection:Disconnect()
+			preloadConnection = nil
+			updateLoadingProgress(1) -- Force complete
+		end
+	end)
+	table.insert(connections, preloadConnection)
 end
+
 
 -- Setup event connections
 local function setupEventConnections()
@@ -466,55 +410,47 @@ local function setupEventConnections()
 	debugLog("Setting up event connections")
 
 	-- Connect to RemoteEvents
-	if remotes.updateLoading then
-		local connection = remotes.updateLoading.OnClientEvent:Connect(updateLoadingProgress)
-		table.insert(connections, connection)
-	end
+	-- Note: UpdateLoading might not be needed if progress is client-driven
+	-- if remotes.updateLoading then
+	-- 	local connection = remotes.updateLoading.OnClientEvent:Connect(updateLoadingProgress)
+	-- 	table.insert(connections, connection)
+	-- end
 
 	if remotes.updatePlayersReady then
 		local connection = remotes.updatePlayersReady.OnClientEvent:Connect(updatePlayersReadyStatus)
 		table.insert(connections, connection)
 	end
 
+	-- *** CRITICAL: Listen for the server signal to transition ***
 	if remotes.showClassSelection then
-		local connection = remotes.showClassSelection.OnClientEvent:Connect(function()
-			-- Double-check we're really done loading before transition
-			if loadingState.isAssetsLoaded and loadingState.allPlayersReady then
-				transitionToClassSelection()
-			else
-				debugLog("Received show class selection event but not ready yet")
-				-- Force transition after a timeout
-				spawn(function()
-					wait(2)
-					if LoadingScreen.Enabled then
-						debugLog("Forcing transition to class selection")
-						transitionToClassSelection()
-					end
-				end)
-			end
-		end)
+		local connection = remotes.showClassSelection.OnClientEvent:Connect(transitionToClassSelection)
 		table.insert(connections, connection)
+		debugLog("Connected to ShowClassSelection event.")
 	end
 
-	-- Track player count changes
-	local connection = Players.PlayerAdded:Connect(function()
+	-- Track player count changes locally (for UI text updates)
+	local function updateLocalPlayerCount()
 		local currentPlayers = #Players:GetPlayers()
-		updatePlayersReadyStatus(loadingState.playersReady, currentPlayers)
-	end)
+		-- Only update totalPlayers if it differs, let server control ready count
+		if loadingState.totalPlayers ~= currentPlayers then
+			updatePlayersReadyStatus(loadingState.playersReady, currentPlayers)
+		end
+	end
+
+	local connection = Players.PlayerAdded:Connect(updateLocalPlayerCount)
 	table.insert(connections, connection)
 
 	connection = Players.PlayerRemoving:Connect(function()
-		wait()
-		local currentPlayers = #Players:GetPlayers()
-		updatePlayersReadyStatus(loadingState.playersReady, currentPlayers)
+		task.wait() -- Wait a frame for player list to update
+		updateLocalPlayerCount()
 	end)
 	table.insert(connections, connection)
 
 	-- F9 key to accelerate loading (for testing)
 	connection = UserInputService.InputBegan:Connect(function(input)
-		if input.KeyCode == Enum.KeyCode.F9 and loadingState.assetsProgress < 1 then
+		if input.KeyCode == Enum.KeyCode.F9 and not loadingState.loadingComplete then
 			debugLog("F9 pressed - fast-forwarding loading")
-			updateLoadingProgress(1)
+			updateLoadingProgress(1) -- Force client loading complete
 		end
 	end)
 	table.insert(connections, connection)
@@ -526,7 +462,7 @@ end
 local function initialize()
 	debugLog("Initializing LoadingScreenHandler")
 
-	-- Setup UI
+	-- Setup UI (Ensures LoadingScreen is enabled, others disabled)
 	if not initializeUI() then
 		warn("LoadingScreenHandler: Unable to initialize UI")
 		return
@@ -538,22 +474,15 @@ local function initialize()
 		return
 	end
 
-	-- Setup event connections
+	-- Setup event connections (Crucially connects ShowClassSelection)
 	setupEventConnections()
 
-	-- Start loading assets
+	-- Start loading assets (Will call updateLoadingProgress and sendReadySignal when done)
 	preloadAssets()
 
-	-- Start auto-ready system after delay
-	spawn(function()
-		wait(5)
-		if not loadingState.allPlayersReady and loadingState.isAssetsLoaded then
-			sendReadySignal(true)
-			startAutoReadySystem()
-		end
-	end)
+	-- No automatic transition logic here anymore. Waiting for server signal.
 
-	debugLog("LoadingScreenHandler initialization complete")
+	debugLog("LoadingScreenHandler initialization complete. Waiting for assets and server signal.")
 end
 
 -- Cleanup on player leave
@@ -576,11 +505,7 @@ initialize()
 -- Export public functions
 local LoadingScreenHandler = {
 	EnableDebug = enableDebugMode,
-	ForceTransition = function() 
-		if LoadingScreen.Enabled then
-			transitionToClassSelection()
-		end
-	end
+	-- ForceTransition removed, should be server-driven
 }
 
 return LoadingScreenHandler
