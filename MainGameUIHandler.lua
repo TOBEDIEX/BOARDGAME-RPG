@@ -1,6 +1,6 @@
 -- MainGameUIHandler.lua
 -- Handles main game UI updates, status bars, turn indicators, and notifications.
--- Version: 6.1.2 (Notify instead of disabling UI Interaction during Combat)
+-- Version: 6.1.3 (Fix MainGameUI not enabling after closing popup during combat)
 
 --[ Services ]--
 local Players = game:GetService("Players")
@@ -102,7 +102,7 @@ local currentPlayerStats = { hp = 100, maxHp = 100, mp = 50, maxMp = 50, attack 
 local isCombatStateActive = false -- Track combat state
 local combatTimerEndTime = 0 -- Store end time for combat timer
 local combatTimerConnection = nil -- Connection for combat timer loop
-local isUIInteractionDisabled = false -- Flag used for logic checks
+local isUIInteractionDisabled = false -- Flag used for logic checks (primarily for *opening* popups or specific actions)
 
 --[ Remote Events ]--
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -223,11 +223,6 @@ updateMyStatusBar = function(stats)
 	if stats.exp then playerClassInfo.exp = stats.exp end
 	if stats.nextLevelExp then playerClassInfo.nextLevelExp = stats.nextLevelExp end
 
-	-- Debug print for EXP update
-	if stats.exp or stats.nextLevelExp then
-		--print("[UI DEBUG] EXP Data Updated: " .. tostring(stats.exp or playerClassInfo.exp) .. "/" .. tostring(stats.nextLevelExp or playerClassInfo.nextLevelExp))
-	end
-
 	-- Update UI elements
 	if myStatusBar:FindFirstChild("PlayerName") then myStatusBar.PlayerName.Text = player.Name end
 	if stats.level and myStatusBar:FindFirstChild("PlayerLevel") then (myStatusBar.PlayerLevel:FindFirstChild("LevelLabel") or myStatusBar.PlayerLevel).Text = "Lv." .. stats.level end
@@ -299,9 +294,6 @@ updateMyStatusBar = function(stats)
 
 		-- Calculate ratio and clamp it between 0 and 1
 		local ratio = math.clamp(currentExp / neededExp, 0, 1)
-
-		-- Debug print
-		--print("[UI DEBUG] Updating EXP Bar: " .. currentExp .. "/" .. neededExp .. " (Ratio: " .. ratio .. ")")
 
 		-- Update the fill
 		createTween(expFill, {Size = UDim2.new(ratio, 0, 1, 0)}, 0.5):Play()
@@ -454,10 +446,14 @@ setupButtonHandlers = function()
 		if uiElement and closeButton and not closeButton:GetAttribute("Connected") then
 			closeButton.MouseButton1Click:Connect(function()
 				uiElement.Visible = false
-				-- Show main game UI only if no other popups are visible AND UI interaction is not disabled
-				if (not InventoryUI or not InventoryUI.Visible) and (not QuestUI or not QuestUI.Visible) and not isUIInteractionDisabled then
-					MainGameUI.Enabled = true
+				--[[ *** MODIFIED LOGIC START *** ]]
+				-- Re-enable MainGameUI IF no other popups are currently visible.
+				-- The combat state (isUIInteractionDisabled) should NOT prevent this.
+				if (not InventoryUI or not InventoryUI.Visible) and (not QuestUI or not QuestUI.Visible) then
+					MainGameUI.Enabled = true -- Re-enable the main UI regardless of combat state
 				end
+				--[[ *** MODIFIED LOGIC END *** ]]
+
 				-- Reset associated button color
 				if associatedButton then associatedButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50) end
 			end)
@@ -479,10 +475,7 @@ setupButtonHandlers = function()
 		local arrowButton = arrowButtonFrame:FindFirstChild("Button")
 		if arrowButton and not arrowButton:GetAttribute("Connected") then
 			arrowButton.MouseButton1Click:Connect(function()
-				-- Check if UI interaction is disabled (Combat Active)
 				-- Allow status bar interaction even during combat
-				-- if isUIInteractionDisabled then return end
-
 				local playerStatusBar = StatusBarContainer:FindFirstChild("MyPlayerStatusBar")
 				if not playerStatusBar then return end
 				statusExpanded = not statusExpanded
@@ -532,10 +525,11 @@ end
 handleCombatStateChange = function(isActive, duration)
 	print("[UI DEBUG] Received SetCombatState:", isActive, duration)
 	isCombatStateActive = isActive
-	isUIInteractionDisabled = isActive -- Directly link UI interaction state to combat state
+	isUIInteractionDisabled = isActive -- Link UI interaction state (used for *opening* popups) to combat state
 
-	-- REMOVED: Enable/Disable Buttons INTERACTABILITY is removed
-	-- Buttons will now check isUIInteractionDisabled in their click handlers
+	-- REMOVED: Direct enabling/disabling of MainGameUI or Buttons based on combat state.
+	-- Interaction logic is now handled within individual button clicks (setupActionButton)
+	-- and the close button logic (setupCloseButton) ensures MainGameUI is re-enabled correctly.
 
 	if not CurrentTurnIndicator then return end
 
@@ -562,6 +556,7 @@ handleCombatStateChange = function(isActive, duration)
 	else
 		-- Exit Combat State
 		isCombatStateActive = false
+		isUIInteractionDisabled = false -- Allow opening popups again
 		if combatTimerConnection then combatTimerConnection:Disconnect(); combatTimerConnection = nil end
 
 		if CombatTimerText then CombatTimerText.Visible = false end
@@ -577,8 +572,6 @@ handleCombatStateChange = function(isActive, duration)
 		end
 		-- Refresh the normal turn timer if it was active
 		if turnTimerActive and updateTurnTimerEvent then
-			-- We might need the server to resend the current turn time
-			-- Or estimate based on when the turn started if we stored that info
 			print("[UI DEBUG] Combat ended, normal turn timer needs refresh (requesting might be needed).")
 		end
 	end
@@ -589,7 +582,6 @@ end
 
 updatePlayerStatsEvent.OnClientEvent:Connect(function(playerId, stats)
 	if playerId == player.UserId then
-		--print("[UI DEBUG] Received UpdatePlayerStats event with data:", stats)
 		updateMyStatusBar(stats)
 	end
 end)
@@ -599,56 +591,42 @@ if statChangedEvent then
 		local statsToUpdate = {}
 		for stat, values in pairs(changedStats) do
 			statsToUpdate[stat] = values.newValue
-			-- Update local cache immediately
 			currentPlayerStats[stat] = values.newValue
 		end
-		-- Ensure MaxHP/MaxMP are included if HP/MP changed
 		if statsToUpdate.hp and not statsToUpdate.maxHp then statsToUpdate.maxHp = currentPlayerStats.maxHp end
 		if statsToUpdate.mp and not statsToUpdate.maxMp then statsToUpdate.maxMp = currentPlayerStats.maxMp end
-
-		--print("[UI DEBUG] Received StatChanged event with updates:", statsToUpdate)
 		updateMyStatusBar(statsToUpdate)
 	end)
 end
 
 updateTurnEvent.OnClientEvent:Connect(function(currentPlayerId)
-	-- This event provides only the ID, create basic details
 	local details = {
 		playerId = currentPlayerId,
-		playerName = "Unknown", -- Will likely be updated by TurnDetails event
-		turnNumber = (turnDetailsData and turnDetailsData.turnNumber or 0) + 1, -- Estimate next turn number
+		playerName = "Unknown",
+		turnNumber = (turnDetailsData and turnDetailsData.turnNumber or 0) + 1,
 		playerClass = "Unknown",
 		playerLevel = 1
 	}
 	local foundPlayer = Players:GetPlayerByUserId(currentPlayerId)
 	if foundPlayer then details.playerName = foundPlayer.Name end
-	updateTurnIndicator(details) -- Update with basic info, expecting full details soon
+	updateTurnIndicator(details)
 end)
 
 if updateTurnDetailsEvent then
-	updateTurnDetailsEvent.OnClientEvent:Connect(updateTurnIndicator) -- Receives full details table
+	updateTurnDetailsEvent.OnClientEvent:Connect(updateTurnIndicator)
 end
 
 if updateTurnTimerEvent then
 	updateTurnTimerEvent.OnClientEvent:Connect(updateTurnTimer)
 end
 
--- Completely reworked to properly handle EXP updates
 if updateExpEvent then
 	updateExpEvent.OnClientEvent:Connect(function(expData)
-		--print("[UI DEBUG] Received UpdateExperience event with data:", expData)
-
-		-- Update internal state first
 		if expData.exp ~= nil then playerClassInfo.exp = expData.exp end
 		if expData.nextLevelExp ~= nil then playerClassInfo.nextLevelExp = expData.nextLevelExp end
 		if expData.classExp ~= nil then playerClassInfo.classExp = expData.classExp end
 		if expData.nextClassLevelExp ~= nil then playerClassInfo.nextClassLevelExp = expData.nextClassLevelExp end
 		if expData.level ~= nil then playerClassInfo.level = expData.level end
-
-		-- Debug print to verify values
-		--print("[UI DEBUG] Updated EXP state:", playerClassInfo.exp, "/", playerClassInfo.nextLevelExp)
-
-		-- Create a dedicated update for EXP bar with this specific data
 		updateMyStatusBar({
 			exp = playerClassInfo.exp,
 			nextLevelExp = playerClassInfo.nextLevelExp,
@@ -658,34 +636,18 @@ if updateExpEvent then
 end
 
 levelUpEvent.OnClientEvent:Connect(function(newLevel, statIncreases)
-	--print("[UI DEBUG] Received LevelUp event: Level " .. newLevel)
-
-	-- Update internal state
 	playerClassInfo.level = newLevel
-
-	-- Update UI Level display - Make sure to include EXP data for bar update
 	updateMyStatusBar({
 		level = newLevel,
 		exp = playerClassInfo.exp,
 		nextLevelExp = playerClassInfo.nextLevelExp
 	})
-
-	-- Show notification
 	showLevelUpNotification(newLevel, statIncreases)
-
-	-- Note: Server should follow up with UpdatePlayerStats for actual stat changes
 end)
 
 classLevelUpEvent.OnClientEvent:Connect(function(newClassLevel, statIncreases, nextClass)
-	--print("[UI DEBUG] Received ClassLevelUp event: Class Level " .. newClassLevel)
-
-	-- Update internal state
 	playerClassInfo.classLevel = newClassLevel
-
-	-- Show notification
 	showClassLevelUpNotification(newClassLevel, statIncreases, nextClass)
-
-	-- Note: Server might follow up with UpdatePlayerStats if base stats change
 end)
 
 endGameEvent.OnClientEvent:Connect(function(reason)
@@ -693,14 +655,13 @@ endGameEvent.OnClientEvent:Connect(function(reason)
 	if gameOverScreen then
 		gameOverScreen.Enabled = true
 		MainGameUI.Enabled = false
-		if PopupUI then PopupUI.Enabled = false end -- Disable popup container too
+		if PopupUI then PopupUI.Enabled = false end
 		local background = gameOverScreen:FindFirstChild("Background")
 		local announcement = background and background:FindFirstChild("WinnerAnnouncement")
 		if announcement then announcement.Text = reason end
 	end
 end)
 
--- NEW: Connect to Combat State Change Event
 if setCombatStateEvent then
 	setCombatStateEvent.OnClientEvent:Connect(handleCombatStateChange)
 	print("[MainGameUIHandler] Connected to SetCombatState event.")
@@ -710,28 +671,23 @@ end
 
 --[ Initialization ]--
 
--- Set initial UI states
 MainGameUI.Enabled = false -- Start disabled, enabled by game state manager
 if PopupUI then
-	PopupUI.Enabled = true -- Popup container itself is always enabled
+	PopupUI.Enabled = true
 	if InventoryUI then InventoryUI.Visible = false end
 	if QuestUI then QuestUI.Visible = false end
 end
 
--- Setup initial references and connect handlers
-setupPlayerStatusBar() -- Find the status bar initially
+setupPlayerStatusBar()
 setupButtonHandlers()
 
--- Ensure status bar reference is updated if MainGameUI is enabled later
 MainGameUI:GetPropertyChangedSignal("Enabled"):Connect(function()
 	if MainGameUI.Enabled then
-		setupPlayerStatusBar() -- Re-check or find status bar if it wasn't found initially
-		-- Refresh status bar when UI becomes enabled to ensure latest data is shown
+		setupPlayerStatusBar()
 		if myStatusBar then
-			--print("[UI DEBUG] MainGameUI enabled - refreshing status bar with current stats")
 			updateMyStatusBar(currentPlayerStats)
 		end
 	end
 end)
 
-print("[MainGameUIHandler] Initialized (v6.1.2) - Notify on disabled UI Interaction.")
+print("[MainGameUIHandler] Initialized (v6.1.3) - Fixed close button logic during combat.")
