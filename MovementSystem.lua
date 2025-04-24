@@ -1,9 +1,9 @@
--- DashSystem.lua
--- Module for managing dash abilities in combat
--- Version: 1.2.3 (Vanish effect duration now uses SpeedBoostDuration for Thief)
+-- MovementSystem.lua
+-- Module for managing movement abilities including dash and running
+-- Version: 1.0.0 (Combined Dash and Running features)
 
-local DashSystem = {}
-DashSystem.__index = DashSystem
+local MovementSystem = {}
+MovementSystem.__index = MovementSystem
 
 -- Services
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -19,6 +19,10 @@ local THIEF_BOOST_ENDTIME_ATTR = "ThiefBoostEndTime" -- Attribute name
 local THIEF_BOOST_SPEED_ATTR = "ThiefBoostSpeed" -- Stores boosted speed
 local ORIGINAL_SPEED_ATTR = "OriginalWalkSpeed" -- Stores original speed
 
+-- Running Constants
+local RUN_SPEED_MULTIPLIER = 1.6 -- 60% faster when running
+local DOUBLE_TAP_WINDOW = 0.3 -- Time window in seconds for double tap detection
+
 -- Class Settings
 local CLASS_DASH_SETTINGS = {
 	Warrior = {
@@ -33,22 +37,35 @@ local CLASS_DASH_SETTINGS = {
 	}
 }
 
+-- Class Running Settings
+local CLASS_RUN_SETTINGS = {
+	Warrior = { SpeedMultiplier = 3 }, -- Warriors are faster
+	Mage = { SpeedMultiplier = 3 }, -- Mages are slower
+	Thief = { SpeedMultiplier = 3 } -- Thieves are fastest
+}
+
 local DEFAULT_DASH_SETTINGS = { Distance = 14, Duration = 0.35, Cooldown = 2.5, Effect = "Roll", EffectColor = Color3.fromRGB(200, 200, 200), AnimationRequired = true, SpeedBoost = 0, SpeedBoostDuration = 0 }
+local DEFAULT_RUN_SETTINGS = { SpeedMultiplier = 1.6 }
 local DASH_ANIMATIONS = { Front = "rbxassetid://14103831900", Back = "rbxassetid://14103833544", Left = "rbxassetid://14103834807", Right = "rbxassetid://14103836416" }
 
 -- Constructor
-function DashSystem.new(combatService)
-	local self = setmetatable({}, DashSystem)
+function MovementSystem.new(combatService)
+	local self = setmetatable({}, MovementSystem)
 	self.combatService = combatService
 	self.activeDashes = {}
 	self.playerCooldowns = {} -- Structure: {userId = {Default = time, Special = time}}
+
+	-- Running specific state
+	self.playerRunning = {} -- Structure: {userId = isRunning}
+	self.lastWKeyPress = {} -- Structure: {userId = lastPressTime}
+
 	self:SetupCollisionGroup()
 	self:SetupRemoteEvents()
 	return self
 end
 
 -- Setup Collision Group
-function DashSystem:SetupCollisionGroup()
+function MovementSystem:SetupCollisionGroup()
 	local success, result = pcall(function() return PhysicsService:GetCollisionGroupId(DASH_COLLISION_GROUP) end)
 	if not success or not result then
 		pcall(function()
@@ -60,7 +77,7 @@ function DashSystem:SetupCollisionGroup()
 end
 
 -- Set up remote events
-function DashSystem:SetupRemoteEvents()
+function MovementSystem:SetupRemoteEvents()
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
 	local combatRemotes = remotes:FindFirstChild("CombatRemotes") or Instance.new("Folder", remotes)
 	combatRemotes.Name = "CombatRemotes"
@@ -74,16 +91,32 @@ function DashSystem:SetupRemoteEvents()
 	self.dashCooldown = combatRemotes:FindFirstChild("DashCooldown") or Instance.new("RemoteEvent", combatRemotes)
 	self.dashCooldown.Name = "DashCooldown"
 
+	-- New remote events for running feature
+	self.runRequest = combatRemotes:FindFirstChild("RunRequest") or Instance.new("RemoteEvent", combatRemotes)
+	self.runRequest.Name = "RunRequest"
+	self.runState = combatRemotes:FindFirstChild("RunState") or Instance.new("RemoteEvent", combatRemotes)
+	self.runState.Name = "RunState"
+
+	-- เพิ่ม RemoteEvent สำหรับส่งค่าความเร็วโดยตรง
+	self.setSpeedEvent = combatRemotes:FindFirstChild("SetSpeed") or Instance.new("RemoteEvent", combatRemotes)
+	self.setSpeedEvent.Name = "SetSpeed"
+
 	self.dashRequest.OnServerEvent:Connect(function(player, direction)
+		print("[MovementSystem] Received dashRequest from player: " .. player.Name .. ", direction: " .. tostring(direction))
 		self:ProcessDashRequest(player, direction, "Default")
 	end)
 	self.specialDashRequest.OnServerEvent:Connect(function(player, direction)
+		print("[MovementSystem] Received specialDashRequest from player: " .. player.Name .. ", direction: " .. tostring(direction))
 		self:ProcessDashRequest(player, direction, "Special")
+	end)
+	self.runRequest.OnServerEvent:Connect(function(player, isRunning)
+		print("[MovementSystem] Received runRequest from player: " .. player.Name .. ", isRunning: " .. tostring(isRunning))
+		self:SetPlayerRunningState(player, isRunning)
 	end)
 end
 
 -- Process dash request
-function DashSystem:ProcessDashRequest(player, direction, dashType)
+function MovementSystem:ProcessDashRequest(player, direction, dashType)
 	local playerId = player.UserId
 
 	if not self.combatService or not self.combatService:IsCombatActive() then return false end
@@ -130,8 +163,62 @@ function DashSystem:ProcessDashRequest(player, direction, dashType)
 	return success
 end
 
+-- Set player running state
+function MovementSystem:SetPlayerRunningState(player, isRunning)
+	local playerId = player.UserId
+
+	-- Add debug
+	print("[MovementSystem] SetPlayerRunningState called for " .. player.Name .. ", isRunning: " .. tostring(isRunning))
+
+	-- Don't allow running during dash
+	if self.activeDashes[playerId] then 
+		print("[MovementSystem] Can't run during dash")
+		return 
+	end
+
+	-- ต้องอยู่ในโหมดต่อสู้เท่านั้นจึงจะวิ่งได้
+	if not self.combatService or not self.combatService:IsCombatActive() then 
+		print("[MovementSystem] Can't run outside of combat")
+		return 
+	end
+
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+	if not humanoid then 
+		print("[MovementSystem] No humanoid found")
+		return 
+	end
+
+	-- Update running state
+	self.playerRunning[playerId] = isRunning
+
+	-- Calculate speed based on running state
+	if isRunning then
+		local playerClass = self:GetPlayerClass(player)
+		local runSettings = CLASS_RUN_SETTINGS[playerClass] or DEFAULT_RUN_SETTINGS
+
+		-- คำนวณความเร็ววิ่งจากค่าพื้นฐานเสมอ
+		local runSpeed = DEFAULT_WALKSPEED * runSettings.SpeedMultiplier
+
+		print("[MovementSystem] Player " .. player.Name .. " started running. Speed: " .. runSpeed)
+
+		-- แทนที่จะตั้งค่า WalkSpeed โดยตรง ให้ส่งค่าไปที่ client แทน
+		self.setSpeedEvent:FireClient(player, runSpeed)
+	else
+		-- รีเซ็ตความเร็วเป็นค่าปกติ
+		print("[MovementSystem] Player " .. player.Name .. " stopped running. Speed: " .. DEFAULT_WALKSPEED)
+
+		-- ส่งค่าความเร็วปกติไปที่ client
+		self.setSpeedEvent:FireClient(player, DEFAULT_WALKSPEED)
+	end
+
+	-- Notify clients about running state change
+	self.runState:FireAllClients(playerId, isRunning)
+end
+
 -- Get player's class
-function DashSystem:GetPlayerClass(player)
+function MovementSystem:GetPlayerClass(player)
 	local gameManager = _G.GameManager
 	if gameManager then
 		if gameManager.classSystem and gameManager.classSystem.GetPlayerClass then
@@ -151,9 +238,8 @@ function DashSystem:GetPlayerClass(player)
 	return "Unknown"
 end
 
-
 -- Perform dash
-function DashSystem:PerformDash(player, direction, dashSettings, dashType)
+function MovementSystem:PerformDash(player, direction, dashSettings, dashType)
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	local hrp = character and character:FindFirstChild("HumanoidRootPart")
@@ -162,6 +248,13 @@ function DashSystem:PerformDash(player, direction, dashSettings, dashType)
 	if self.activeDashes[player.UserId] then return false end
 	if humanoid:GetState() == Enum.HumanoidStateType.Jumping or humanoid:GetState() == Enum.HumanoidStateType.Freefall then return false end
 
+	-- If running, store running state and temporarily stop running during dash
+	local playerId = player.UserId
+	local wasRunning = self.playerRunning[playerId]
+	if wasRunning then
+		self:SetPlayerRunningState(player, false)
+	end
+
 	local dashData = {
 		player = player,
 		settings = dashSettings,
@@ -169,7 +262,8 @@ function DashSystem:PerformDash(player, direction, dashSettings, dashType)
 		completed = false,
 		originalCollisionGroup = {},
 		directionString = direction,
-		dashType = dashType
+		dashType = dashType,
+		wasRunning = wasRunning -- Store whether player was running before dash
 	}
 	self.activeDashes[player.UserId] = dashData
 
@@ -182,17 +276,16 @@ function DashSystem:PerformDash(player, direction, dashSettings, dashType)
 
 	local animationId = dashSettings.AnimationRequired and self:DetermineAnimationId(direction) or nil
 
-	-- *** MODIFICATION START: Determine effect duration based on effect type ***
+	-- Determine effect duration based on effect type
 	local effectDuration
 	if dashSettings.Effect == "Vanish" and dashSettings.SpeedBoostDuration and dashSettings.SpeedBoostDuration > 0 then
 		-- For Vanish (Thief Special), use SpeedBoostDuration for the visual effect duration
 		effectDuration = dashSettings.SpeedBoostDuration
-		print("[DashSystem] Using SpeedBoostDuration for Vanish effect:", effectDuration) -- Debug
+		print("[MovementSystem] Using SpeedBoostDuration for Vanish effect:", effectDuration) -- Debug
 	else
 		-- For other effects (like Roll), use the movement duration
 		effectDuration = dashSettings.Duration
 	end
-	-- *** MODIFICATION END ***
 
 	-- Fire effect to the dashing player
 	self.dashEffect:FireClient(player, direction, dashData.settings.Effect, dashData.settings.EffectColor, animationId, nil, dashType, effectDuration)
@@ -212,7 +305,7 @@ function DashSystem:PerformDash(player, direction, dashSettings, dashType)
 end
 
 -- Get direction vector
-function DashSystem:GetDirectionVector(directionString, character)
+function MovementSystem:GetDirectionVector(directionString, character)
 	local hrp = character:FindFirstChild("HumanoidRootPart")
 	if not hrp then return Vector3.zAxis end
 	local lookVector = hrp.CFrame.LookVector
@@ -224,12 +317,12 @@ function DashSystem:GetDirectionVector(directionString, character)
 end
 
 -- Determine animation ID
-function DashSystem:DetermineAnimationId(direction)
+function MovementSystem:DetermineAnimationId(direction)
 	return DASH_ANIMATIONS[direction] or DASH_ANIMATIONS.Front
 end
 
 -- Apply dash velocity
-function DashSystem:ApplyDashVelocity(dashData)
+function MovementSystem:ApplyDashVelocity(dashData)
 	local player = dashData.player
 	local character = player.Character
 	local hrp = character and character:FindFirstChild("HumanoidRootPart")
@@ -271,7 +364,7 @@ function DashSystem:ApplyDashVelocity(dashData)
 end
 
 -- Clean up after dash
-function DashSystem:CleanupDash(userId)
+function MovementSystem:CleanupDash(userId)
 	local dashData = self.activeDashes[userId]
 	if not dashData or dashData.completed then
 		if self.activeDashes[userId] then self.activeDashes[userId] = nil end
@@ -322,13 +415,27 @@ function DashSystem:CleanupDash(userId)
 						currentHum:SetAttribute(THIEF_BOOST_ENDTIME_ATTR, nil)
 						currentHum:SetAttribute(THIEF_BOOST_SPEED_ATTR, nil)
 						currentHum:SetAttribute(ORIGINAL_SPEED_ATTR, nil)
+
+						-- Resume running if player was running before dash
+						if dashData.wasRunning then
+							task.delay(0.1, function() -- Small delay to ensure consistent behavior
+								self:SetPlayerRunningState(player, true)
+							end)
+						end
 					end
 				end
 			end)
 		else
-			local originalSpeedToRestore = humanoid:GetAttribute(ORIGINAL_SPEED_ATTR) or DEFAULT_WALKSPEED
-			if math.abs(humanoid.WalkSpeed - originalSpeedToRestore) > 0.1 then
-				humanoid.WalkSpeed = originalSpeedToRestore
+			-- Resume running if player was running before dash
+			if dashData.wasRunning then
+				task.delay(0.1, function() -- Small delay to ensure consistent behavior
+					self:SetPlayerRunningState(player, true)
+				end)
+			else
+				local originalSpeedToRestore = humanoid:GetAttribute(ORIGINAL_SPEED_ATTR) or DEFAULT_WALKSPEED
+				if math.abs(humanoid.WalkSpeed - originalSpeedToRestore) > 0.1 then
+					humanoid.WalkSpeed = originalSpeedToRestore
+				end
 			end
 		end
 	end
@@ -341,9 +448,8 @@ function DashSystem:CleanupDash(userId)
 	self.activeDashes[userId] = nil
 end
 
-
 -- Clear cooldown
-function DashSystem:ClearCooldown(player, dashType)
+function MovementSystem:ClearCooldown(player, dashType)
 	local playerId = typeof(player) == "Instance" and player.UserId or player
 	if not playerId then return end
 
@@ -367,13 +473,13 @@ function DashSystem:ClearCooldown(player, dashType)
 	end
 end
 
-
 -- Initialize player
-function DashSystem:InitializePlayer(player)
+function MovementSystem:InitializePlayer(player)
 	local userId = player.UserId
 	if self.activeDashes[userId] then
 		self:CleanupDash(userId)
 	end
+
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	if humanoid then
@@ -382,26 +488,31 @@ function DashSystem:InitializePlayer(player)
 		humanoid:SetAttribute(ORIGINAL_SPEED_ATTR, nil)
 		humanoid.WalkSpeed = DEFAULT_WALKSPEED
 	end
+
 	self.playerCooldowns[userId] = {Default = 0, Special = 0}
 	self.activeDashes[userId] = nil
+	self.playerRunning[userId] = false
+	self.lastWKeyPress[userId] = 0
 end
 
 -- Register system
-function DashSystem:Register()
+function MovementSystem:Register()
 	local gameManager = _G.GameManager
 	if gameManager then
-		gameManager.dashSystem = self
-		print("[DashSystem] Registered with GameManager")
+		gameManager.movementSystem = self
+		print("[MovementSystem] Registered with GameManager")
 	else
-		warn("[DashSystem] GameManager not found")
+		warn("[MovementSystem] GameManager not found")
 	end
 
 	Players.PlayerAdded:Connect(function(player)
 		self:InitializePlayer(player)
 	end)
+
 	for _, player in pairs(Players:GetPlayers()) do
 		task.spawn(self.InitializePlayer, self, player)
 	end
+
 	Players.PlayerRemoving:Connect(function(player)
 		local userId = player.UserId
 		local character = player.Character
@@ -413,8 +524,11 @@ function DashSystem:Register()
 		end
 		self.playerCooldowns[userId] = nil
 		self.activeDashes[userId] = nil
+		self.playerRunning[userId] = nil
+		self.lastWKeyPress[userId] = nil
 	end)
-	print("[DashSystem] Registration complete")
+
+	print("[MovementSystem] Registration complete")
 end
 
-return DashSystem
+return MovementSystem
