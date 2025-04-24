@@ -1,7 +1,7 @@
 -- ClassService.server.lua
 -- Handles class selection and management on the server side
 -- Location: ServerScriptService/Services/ClassService.server.lua
--- Version: 1.0.2 (Added Debug Level Up Listener)
+-- Version: 1.1.0 (Removed readiness checks and UI triggers, relies on GameManager)
 
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -23,29 +23,32 @@ local ClassSystem = require(Modules:WaitForChild("ClassSystem"))
 local SharedModules = ReplicatedStorage:WaitForChild("SharedModules")
 local ClassData = require(SharedModules:WaitForChild("ClassData"))
 
--- Get GameManager from global
+-- Get GameManager from global (Keep this helper function)
 local function getGameManager()
 	local startTime = tick()
 	local attempts = 0
 	local maxAttempts = 20
 	while not _G.GameManager and attempts < maxAttempts do
-		wait(0.5)
+		task.wait(0.5) -- Use task.wait
 		attempts = attempts + 1
 	end
 	if not _G.GameManager then
 		warn("[ClassService] Failed to get GameManager after " .. maxAttempts .. " attempts.")
 	else
-		debugLog("GameManager found successfully.")
+		-- debugLog("GameManager found successfully.") -- Reduce log spam
 	end
 	return _G.GameManager
 end
 
--- Initialize player selection tracking
-local playerSelections = {}
-local playerReadyStatus = {}
-local classSelectionFinished = false -- Flag to prevent multiple finishes
+-- REMOVED: playerReadyStatus tracking (Handled by GameManager)
+-- local playerReadyStatus = {}
 
--- Initialize remote events
+-- Initialize player selection tracking (Keep this for actual class choices)
+local playerSelections = {}
+-- REMOVED: classSelectionFinished flag (GameManager controls game state)
+-- local classSelectionFinished = false
+
+-- Initialize remote events (Keep this function)
 local function initializeRemoteEvents()
 	debugLog("Initializing remote events...")
 
@@ -67,18 +70,18 @@ local function initializeRemoteEvents()
 
 	-- UI Remotes
 	local classAssignedEvent = ensureRemoteEvent(uiRemotes, "ClassAssigned")
-	local playerSelectedClassEvent = ensureRemoteEvent(uiRemotes, "PlayerSelectedClass")
-	local updateClassSelectionEvent = ensureRemoteEvent(uiRemotes, "UpdateClassSelection")
-	local showMainGameUIEvent = ensureRemoteEvent(uiRemotes, "ShowMainGameUI")
+	local playerSelectedClassEvent = ensureRemoteEvent(uiRemotes, "PlayerSelectedClass") -- Client fires this when selecting
+	local updateClassSelectionEvent = ensureRemoteEvent(uiRemotes, "UpdateClassSelection") -- Server fires this to update UI
+	local showMainGameUIEvent = ensureRemoteEvent(uiRemotes, "ShowMainGameUI") -- Fired by GameManager
 	local levelUpEvent = ensureRemoteEvent(uiRemotes, "LevelUp")
 	local classLevelUpEvent = ensureRemoteEvent(uiRemotes, "ClassLevelUp")
 	local updatePlayerStatsEvent = ensureRemoteEvent(uiRemotes, "UpdatePlayerStats")
-	local showClassSelectionEvent = ensureRemoteEvent(uiRemotes, "ShowClassSelection")
+	local showClassSelectionEvent = ensureRemoteEvent(uiRemotes, "ShowClassSelection") -- Fired by GameManager
 	local classUpgradeAvailableEvent = ensureRemoteEvent(uiRemotes, "ClassUpgradeAvailable")
 	local updateExperienceEvent = ensureRemoteEvent(uiRemotes, "UpdateExperience")
 
 	-- Game Remotes (Ensure StartGame and AddExpDebug exist)
-	local startGameEvent = ensureRemoteEvent(gameRemotes, "StartGame")
+	local startGameEvent = ensureRemoteEvent(gameRemotes, "StartGame") -- Fired by GameManager
 	local addExpDebugEvent = ensureRemoteEvent(gameRemotes, "AddExpDebug") -- Ensure debug event exists
 
 
@@ -100,222 +103,87 @@ local function initializeRemoteEvents()
 	}
 end
 
--- Finish class selection and transition to game
+-- REMOVED: finishClassSelection function
+-- This entire logic block is now handled within GameManager's state transitions
+-- (specifically StartClassSelectionTimeout and StartGame)
+--[[
 local function finishClassSelection(remotes)
-	if classSelectionFinished then
-		debugLog("finishClassSelection called again, ignoring.")
-		return -- Prevent running multiple times
-	end
-	classSelectionFinished = true -- Set flag
-	debugLog("Finishing class selection...")
-
-	local gameManager = getGameManager()
-	if not gameManager then
-		warn("[ClassService] GameManager not found, cannot finish class selection")
-		classSelectionFinished = false -- Reset flag if failed
-		return
-	end
-
-	-- Step 1: Assign classes to all players first
-	for userId, className in pairs(playerSelections) do
-		local player = Players:GetPlayerByUserId(userId)
-		if player then
-			local classInfo = ClassData:GetClassInfo(className)
-			debugLog("Assigning class " .. className .. " to player " .. player.Name)
-
-			if gameManager.classSystem then
-				gameManager.classSystem:AssignClassToPlayer(player, className)
-			else
-				warn("[ClassService] ClassSystem not found during finishClassSelection for " .. player.Name)
-			end
-
-			if gameManager.playerManager then
-				gameManager.playerManager:SetPlayerClass(player, className)
-			else
-				warn("[ClassService] PlayerManager not found during finishClassSelection for " .. player.Name)
-			end
-		else
-			warn("[ClassService] Player not found for UserId " .. userId .. " during finishClassSelection.")
-		end
-	end
-
-	-- Step 2: Wait a moment
-	debugLog("Waiting briefly after class assignment...")
-	task.wait(1) -- Use task.wait instead of wait()
-
-	-- Step 3: Update UI and Humanoid health
-	debugLog("Syncing final stats and Humanoid health for all players...")
-	for _, player in pairs(Players:GetPlayers()) do
-		if playerSelections[player.UserId] then
-			local playerData = gameManager.playerManager and gameManager.playerManager:GetPlayerData(player)
-			if playerData and playerData.stats then
-				-- PlayerManager's SyncPlayerStats should handle Humanoid updates now
-				gameManager.playerManager:SyncPlayerStats(player)
-
-				debugLog(string.format("Final Sync: Synced stats/humanoid for %s: HP=%d/%d, Class=%s",
-					player.Name, playerData.stats.hp, playerData.stats.maxHp, playerData.class))
-			else
-				warn("[ClassService] Final Sync: Failed to get playerData for " .. player.Name)
-			end
-		end
-	end
-
-	-- Show main game UI
-	debugLog("Transitioning to main game UI...")
-	remotes.showMainGameUI:FireAllClients()
-	debugLog("All players transitioned to main game UI")
-
-	-- Start game via GameManager or directly trigger TurnSystem start
-	if gameManager.StartGame then
-		debugLog("Calling gameManager:StartGame()...")
-		gameManager:StartGame()
-	elseif gameManager.turnSystem then
-		debugLog("Starting turn system directly...")
-		if gameManager.playerManager then
-			local success = gameManager.turnSystem:CreateTurnOrderFromActivePlayers(gameManager.playerManager)
-			if success then
-				gameManager.turnSystem:StartTurnSystem()
-			else
-				warn("[ClassService] Failed to create turn order.")
-			end
-		else
-			warn("[ClassService] Cannot start TurnSystem directly, PlayerManager not found.")
-		end
-	else
-		warn("[ClassService] Cannot start game, TurnSystem not found.")
-	end
+	-- ... (code removed) ...
 end
+--]]
 
-
--- Check if all players are loaded (ready for class selection)
+-- REMOVED: areAllPlayersReady function (Handled by GameManager)
+--[[
 local function areAllPlayersReady()
-	local allPlayers = Players:GetPlayers()
-	if #allPlayers == 0 then return false end -- Need at least one player
-
-	local readyCount = 0
-	for _, player in ipairs(allPlayers) do
-		if playerReadyStatus[player.UserId] == true then
-			readyCount = readyCount + 1
-		end
-	end
-	debugLog(string.format("areAllPlayersReady Check: %d / %d players ready.", readyCount, #allPlayers))
-	return readyCount == #allPlayers
+	-- ... (code removed) ...
 end
+--]]
 
--- Monitor player ready state from GameManager
+-- REMOVED: monitorPlayerReadyState function (Handled by GameManager)
+--[[
 local function monitorPlayerReadyState(gameManager, remotes)
-	if not gameManager then return end
-	debugLog("Starting player ready state monitoring...")
-
-	local gameRemotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("GameRemotes")
-	local assetsLoadedEvent = gameRemotes:WaitForChild("AssetsLoaded")
-
-	assetsLoadedEvent.OnServerEvent:Connect(function(player)
-		if not playerReadyStatus[player.UserId] then
-			playerReadyStatus[player.UserId] = true
-			debugLog("Player assets loaded: " .. player.Name)
-
-			if areAllPlayersReady() then
-				debugLog("All players assets loaded. Triggering class selection UI.")
-				remotes.showClassSelection:FireAllClients()
-			end
-		end
-	end)
-
-	Players.PlayerAdded:Connect(function(player)
-		playerReadyStatus[player.UserId] = false
-		debugLog("Player joined: " .. player.Name .. " (Marked as not ready)")
-	end)
-
-	Players.PlayerRemoving:Connect(function(player)
-		local userId = player.UserId
-		playerReadyStatus[userId] = nil
-		local wasSelected = playerSelections[userId]
-		playerSelections[userId] = nil
-		debugLog("Player left: " .. player.Name .. (wasSelected and " (Had selected class: "..wasSelected..")" or " (Had not selected class)"))
-
-		if not classSelectionFinished then
-			local allRemainingSelected = true
-			local currentPlayers = Players:GetPlayers()
-			if #currentPlayers > 0 then
-				for _, plr in pairs(currentPlayers) do
-					if not playerSelections[plr.UserId] then
-						allRemainingSelected = false
-						break
-					end
-				end
-			else
-				allRemainingSelected = false
-			end
-
-			if allRemainingSelected then
-				debugLog("Player left, but all remaining players have now selected. Finishing selection.")
-				finishClassSelection(remotes)
-			else
-				remotes.updateClassSelection:FireAllClients(userId, nil)
-			end
-		end
-	end)
-
-	for _, player in pairs(Players:GetPlayers()) do
-		if playerReadyStatus[player.UserId] == nil then
-			playerReadyStatus[player.UserId] = false
-		end
-	end
-
-	debugLog("Player ready state monitoring initialized.")
+	-- ... (code removed) ...
 end
+--]]
 
 
--- Handle player selection
+-- Handle player selection event from client
 local function handlePlayerSelection(player, className, remotes)
 	if not player or not className then
 		debugLog("Invalid player selection parameters")
 		return
 	end
 
-	if classSelectionFinished then
-		debugLog("Ignoring class selection from " .. player.Name .. ", selection already finished.")
+	local gameManager = getGameManager()
+	if not gameManager then
+		warn("[ClassService] GameManager not found when handling player selection for " .. player.Name)
+		return
+	end
+
+	-- Check if the game is actually in the class selection phase via GameManager state
+	if not gameManager.gameState or not gameManager.gameState.isClassSelection then
+		warn("[ClassService] Ignoring class selection from " .. player.Name .. ", game not in class selection phase.")
 		return
 	end
 
 	local classInfo = ClassData:GetClassInfo(className)
 	if not classInfo then
 		debugLog("Invalid class selected by " .. player.Name .. ": " .. tostring(className))
+		-- Optional: Notify client of invalid selection?
 		return
 	end
 
-	playerSelections[player.UserId] = className
-	debugLog(player.Name .. " selected class: " .. className)
+	-- Store selection locally in ClassService if needed for other logic,
+	-- but GameManager is the primary handler now.
+	-- playerSelections[player.UserId] = className
+	-- debugLog(player.Name .. " selected class: " .. className .. " (local ClassService tracking)")
 
-	remotes.updateClassSelection:FireAllClients(player.UserId, className)
+	-- *** CRITICAL CHANGE: Delegate the handling to GameManager ***
+	if gameManager.OnPlayerSelectedClass then
+		debugLog("Forwarding player selection ("..className..") for " .. player.Name .. " to GameManager.")
+		gameManager:OnPlayerSelectedClass(player, className)
+	else
+		warn("[ClassService] gameManager:OnPlayerSelectedClass function not found!")
+	end
 
+	-- REMOVED: Logic to check if all selected and call finishClassSelection
+	-- GameManager's StartClassSelectionTimeout loop handles this now.
+	--[[
 	local allSelected = true
-	local currentPlayers = Players:GetPlayers()
-	if #currentPlayers == 0 then
-		allSelected = false
-	end
-
-	for _, plr in pairs(currentPlayers) do
-		if not playerSelections[plr.UserId] then
-			allSelected = false
-			debugLog("Waiting for player " .. plr.Name .. " to select.")
-			break
-		end
-	end
-
+	-- ... (check logic removed) ...
 	if allSelected then
 		debugLog("All currently connected players have selected classes.")
 		finishClassSelection(remotes)
 	end
+	--]]
 end
 
 
--- Reset player selections (e.g., for a new round)
+-- Reset player selections (Called by GameManager if needed)
 local function resetPlayerSelections()
 	playerSelections = {}
-	classSelectionFinished = false -- Reset finished flag
-	debugLog("Player selections reset. Ready for new selection.")
+	-- REMOVED: classSelectionFinished = false
+	debugLog("ClassService: Player selections table reset.")
 end
 
 -- Initialize service
@@ -330,80 +198,93 @@ local function initializeClassService()
 	local gameManager = getGameManager()
 	if not gameManager then
 		warn("[ClassService] FATAL: GameManager not found after wait. Service cannot fully initialize.")
-		gameManager = {}
-		_G.GameManager = gameManager
+		-- Avoid creating a dummy GameManager here, let it fail if necessary
+		return nil
 	end
 
 	-- Create ClassSystem if needed and assign to GameManager
+	-- This assumes ClassSystem is primarily managed/used via GameManager
 	if not gameManager.classSystem then
 		debugLog("Creating new ClassSystem and assigning to gameManager.classSystem")
 		gameManager.classSystem = ClassSystem.new()
+		-- Ensure ClassSystem has necessary references if it needs them independently
+		-- gameManager.classSystem:Initialize() -- If an init method exists
+	elseif not gameManager.classSystem.new then
+		warn("[ClassService] gameManager.classSystem exists but seems invalid (missing .new). Recreating.")
+		gameManager.classSystem = ClassSystem.new()
+	else
+		debugLog("ClassSystem already exists in GameManager.")
 	end
 
-	-- Set up class assignment handler
-	local function handleClassAssignment(player, className, classData)
-		debugLog("Handling class assignment notification for " .. player.Name .. ": " .. className)
-		remotes.classAssigned:FireClient(player, className, classData)
+	-- Set up class assignment handler (This seems like internal ClassSystem logic)
+	-- Let's connect these callbacks directly to the instance in GameManager
+	if gameManager.classSystem then
+		local function handleClassAssignment(player, className, classData)
+			-- This might be redundant if PlayerManager/GameManager handles stats/UI updates
+			debugLog("ClassSystem assigned " .. className .. " to " .. player.Name .. ". Firing ClassAssigned event.")
+			remotes.classAssigned:FireClient(player, className, classData)
+		end
+
+		gameManager.classSystem.onClassAssigned = handleClassAssignment
+		gameManager.classSystem.onLevelUp = function(player, newLevel, oldLevel, statIncreases)
+			debugLog(player.Name .. " Leveled Up: " .. oldLevel .. " -> " .. newLevel)
+			remotes.levelUp:FireClient(player, newLevel, statIncreases)
+			-- Also update general stats UI
+			remotes.updatePlayerStats:FireClient(player, gameManager.playerManager:GetPlayerData(player).stats)
+			remotes.updateExperience:FireClient(player, gameManager.classSystem:GetPlayerExperience(player), gameManager.classSystem:GetExpForNextLevel(newLevel))
+		end
+		gameManager.classSystem.onClassLevelUp = function(player, newClassLevel, oldClassLevel, statIncreases, nextClass)
+			debugLog(player.Name .. " Class Leveled Up: " .. oldClassLevel .. " -> " .. newClassLevel)
+			remotes.classLevelUp:FireClient(player, newClassLevel, statIncreases, nextClass)
+			-- Also update general stats UI
+			remotes.updatePlayerStats:FireClient(player, gameManager.playerManager:GetPlayerData(player).stats)
+		end
+		gameManager.classSystem.onExperienceChanged = function(player, currentExp, requiredExp)
+			remotes.updateExperience:FireClient(player, currentExp, requiredExp)
+		end
+		gameManager.classSystem.onUpgradeAvailable = function(player, available)
+			remotes.classUpgradeAvailable:FireClient(player, available)
+		end
+		debugLog("Connected ClassSystem callbacks (onLevelUp, etc.)")
+	else
+		warn("[ClassService] ClassSystem not available in GameManager to connect internal callbacks.")
 	end
 
 	-- Connect to player selected class event from client
 	remotes.playerSelectedClass.OnServerEvent:Connect(function(player, className)
 		handlePlayerSelection(player, className, remotes)
 	end)
+	debugLog("Connected PlayerSelectedClass listener.")
 
-	-- Connect internal event handlers within ClassSystem
-	if gameManager.classSystem then
-		gameManager.classSystem.onClassAssigned = handleClassAssignment
-		gameManager.classSystem.onLevelUp = function(player, newLevel, oldLevel, statIncreases)
-			debugLog(player.Name .. " Leveled Up: " .. oldLevel .. " -> " .. newLevel)
-			remotes.levelUp:FireClient(player, newLevel, statIncreases)
-		end
-		gameManager.classSystem.onClassLevelUp = function(player, newClassLevel, oldClassLevel, statIncreases, nextClass)
-			debugLog(player.Name .. " Class Leveled Up: " .. oldClassLevel .. " -> " .. newClassLevel)
-			remotes.classLevelUp:FireClient(player, newClassLevel, statIncreases, nextClass)
-		end
-	else
-		warn("[ClassService] ClassSystem not available to connect internal callbacks.")
-	end
-
-	-- Set up player ready monitoring
-	monitorPlayerReadyState(gameManager, remotes)
+	-- REMOVED: Call to monitorPlayerReadyState
+	-- monitorPlayerReadyState(gameManager, remotes)
 
 	-- Add public methods/functions to GameManager for other services to use
-	gameManager.resetPlayerSelections = resetPlayerSelections
-	gameManager.triggerClassSelectionUI = function()
-		resetPlayerSelections()
-		if areAllPlayersReady() then
-			debugLog("Triggering class selection UI for all players.")
-			remotes.showClassSelection:FireAllClients()
-		else
-			debugLog("Cannot trigger class selection UI, not all players are ready.")
-			-- remotes.showClassSelection:FireAllClients() -- Option to force show
-		end
-	end
+	-- Make sure these functions exist/are needed in GameManager context
+	gameManager.resetPlayerSelections = resetPlayerSelections -- Keep if GameManager needs to clear ClassService's local table
+	-- REMOVED: gameManager.triggerClassSelectionUI assignment
 
-	-- Function to add experience to a player
+	-- Function to add experience to a player (Delegate to ClassSystem via GameManager)
 	gameManager.addExperienceToPlayer = function(player, amount)
 		if gameManager.classSystem then
 			return gameManager.classSystem:AddExperience(player, amount)
 		end
-		warn("[ClassService] addExperienceToPlayer: ClassSystem not available.")
+		warn("[ClassService Proxy] addExperienceToPlayer: ClassSystem not available in GameManager.")
 		return false
 	end
 
-	-- Function to upgrade a player's class
+	-- Function to upgrade a player's class (Delegate to ClassSystem via GameManager)
 	gameManager.upgradePlayerClass = function(player)
 		if gameManager.classSystem then
 			return gameManager.classSystem:UpgradePlayerClass(player)
 		end
-		warn("[ClassService] upgradePlayerClass: ClassSystem not available.")
+		warn("[ClassService Proxy] upgradePlayerClass: ClassSystem not available in GameManager.")
 		return false, "ClassSystem not available"
 	end
 
 	-- Get GameRemotes reference (ensure it's done after initializeRemoteEvents)
 	local gameRemotesFolder = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("GameRemotes")
 
-	-- >> เพิ่มโค้ดส่วนนี้เข้าไป <<
 	-- Listener for Debug Add EXP/Level RemoteEvent
 	local addExpDebugEvent = gameRemotesFolder:WaitForChild("AddExpDebug") -- Use reference from above
 	if addExpDebugEvent then
@@ -420,8 +301,7 @@ local function initializeClassService()
 
 			-- ดึงข้อมูลเลเวลและ EXP ปัจจุบัน
 			local currentLevel = classSystem:GetPlayerLevel(player)
-			-- Assuming playerExp is accessible like this, adjust if needed based on ClassSystem structure
-			local currentExp = classSystem.playerExp and classSystem.playerExp[userId]
+			local currentExp = classSystem:GetPlayerExperience(player) -- Use specific getter
 
 			-- Check if data retrieval was successful
 			if not currentLevel or currentExp == nil then -- Check for nil specifically for EXP
@@ -433,6 +313,12 @@ local function initializeClassService()
 			-- คำนวณ EXP ที่ต้องการสำหรับเลเวลถัดไป
 			local expForNextLevel = classSystem:GetExpForNextLevel(currentLevel)
 
+			-- Handle case where expForNextLevel might be nil or 0 (max level?)
+			if not expForNextLevel or expForNextLevel <= 0 then
+				debugLog(string.format("%s is already at max level or EXP requirement is invalid (Lvl %d). Cannot add EXP via debug.", player.Name, currentLevel))
+				return
+			end
+
 			-- คำนวณ EXP ที่ต้องเพิ่มเพื่อให้ถึงเลเวลถัดไปพอดี + 1
 			local expToAdd = (expForNextLevel - currentExp) + 1
 			-- ป้องกันกรณีที่ค่าติดลบ (ถ้าเกิดข้อผิดพลาด) หรือเป็น 0
@@ -441,7 +327,7 @@ local function initializeClassService()
 			debugLog(string.format("Received AddLevelDebug from %s (Lvl %d, Exp %d). Needs %d for Lvl %d. Adding %d EXP.",
 				player.Name, currentLevel, currentExp, expForNextLevel, currentLevel + 1, expToAdd))
 
-			-- เรียกใช้ฟังก์ชันเพิ่ม EXP
+			-- เรียกใช้ฟังก์ชันเพิ่ม EXP via GameManager proxy
 			if currentManager.addExperienceToPlayer then
 				local success = currentManager.addExperienceToPlayer(player, expToAdd)
 				if success then
@@ -450,14 +336,13 @@ local function initializeClassService()
 					warn(string.format("Failed to add EXP to %s.", player.Name))
 				end
 			else
-				warn("[ClassService] addExperienceToPlayer function not found when handling AddExpDebug.")
+				warn("[ClassService] addExperienceToPlayer function not found in GameManager when handling AddExpDebug.")
 			end
 		end)
-		debugLog("Connected AddLevelDebug listener.") -- อาจจะเปลี่ยนชื่อ Log เป็น AddLevelDebug
+		debugLog("Connected AddLevelDebug listener.")
 	else
 		warn("[ClassService] AddExpDebug RemoteEvent not found in GameRemotes.")
 	end
-	-- >> สิ้นสุดโค้ดส่วนที่เพิ่ม <<
 
 	debugLog("ClassService initialization complete")
 	return gameManager -- Return the potentially modified gameManager
@@ -478,3 +363,4 @@ local gameManagerInstance = initializeClassService()
 -- Return the service itself or the modified gameManager?
 -- Returning gameManager seems appropriate as this service modifies it.
 return gameManagerInstance
+
