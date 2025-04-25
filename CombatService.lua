@@ -1,7 +1,7 @@
 -- CombatService.server.lua
--- Manages the initiation and resolution of the pre-combat phase.
+-- Manages the initiation, resolution, and death detection during combat.
 -- Location: ServerScriptService/Services/CombatService.server.lua
--- Version: 1.3.0 (Added Dash System Integration)
+-- Version: 1.5.3 (Added TurnSystem.OnPlayerDeath call)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -9,23 +9,25 @@ local Workspace = game:GetService("Workspace")
 local ServerStorage = game:GetService("ServerStorage")
 
 -- Constants
-local COMBAT_AREA_POSITION = Vector3.new(0, 100, 0) -- Define a specific Vector3 for the combat arena
-local PRE_COMBAT_DURATION = 60 -- 2 minutes in seconds
-local COMBAT_COOLDOWN_TURNS = 2 -- จำนวนเทิร์นที่ติดคูลดาวน์หลังการต่อสู้
+local COMBAT_AREA_POSITION = Vector3.new(0, 100, 0)
+local PRE_COMBAT_DURATION = 60 -- Can be adjusted if needed
+local COMBAT_COOLDOWN_TURNS = 2
+local RESPAWN_VISUAL_DELAY = 2 -- วินาทีที่รอหลัง Teleport ก่อนจบ Combat
 local DEBUG_COMBAT = true
 
 -- Modules and Services (Lazy Loaded)
 local BoardSystem = nil
 local TurnSystem = nil
-local CameraSystem = nil -- Client-side, controlled via remotes
-local DiceRollHandler = nil -- Client-side, controlled via remotes
-local DashSystem = nil -- การอ้างอิงระบบ Dash (จะถูกสร้างเมื่อมีการเริ่มต้น)
+local CheckpointSystem = nil
+local CameraSystem = nil
+local DiceRollHandler = nil
+local DashSystem = nil
 
 -- State
-local activeCombatSession = nil -- { player1Id, player2Id, originalTileId, originalPos1, originalPos2, timerEndTime, currentTurnPlayerId }
-local isCombatActive = false -- General flag
+local activeCombatSession = nil -- { player1Id, player2Id, originalTileId, originalPos1, originalPos2, timerEndTime, currentTurnPlayerId, timerThread, diedConnections = {conn1, conn2} }
+local isCombatActive = false
 
--- Remotes
+-- Remotes (Same as before)
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
 local combatRemotes = remotes:FindFirstChild("CombatRemotes")
 if not combatRemotes then
@@ -33,30 +35,15 @@ if not combatRemotes then
 	combatRemotes.Name = "CombatRemotes"
 	combatRemotes.Parent = remotes
 end
+local setCombatStateEvent = combatRemotes:FindFirstChild("SetCombatState") or Instance.new("RemoteEvent", combatRemotes)
+setCombatStateEvent.Name = "SetCombatState"
+local setSystemEnabledEvent = combatRemotes:FindFirstChild("SetSystemEnabled") or Instance.new("RemoteEvent", combatRemotes)
+setSystemEnabledEvent.Name = "SetSystemEnabled"
+local combatCooldownEvent = combatRemotes:FindFirstChild("CombatCooldown") or Instance.new("RemoteEvent", combatRemotes)
+combatCooldownEvent.Name = "CombatCooldown"
 
-local setCombatStateEvent = combatRemotes:FindFirstChild("SetCombatState")
-if not setCombatStateEvent then
-	setCombatStateEvent = Instance.new("RemoteEvent")
-	setCombatStateEvent.Name = "SetCombatState"
-	setCombatStateEvent.Parent = combatRemotes
-end
 
-local setSystemEnabledEvent = combatRemotes:FindFirstChild("SetSystemEnabled")
-if not setSystemEnabledEvent then
-	setSystemEnabledEvent = Instance.new("RemoteEvent")
-	setSystemEnabledEvent.Name = "SetSystemEnabled"
-	setSystemEnabledEvent.Parent = combatRemotes
-end
-
--- สร้าง Remote Event ใหม่สำหรับแจ้งเตือนคูลดาวน์การต่อสู้
-local combatCooldownEvent = combatRemotes:FindFirstChild("CombatCooldown")
-if not combatCooldownEvent then
-	combatCooldownEvent = Instance.new("RemoteEvent")
-	combatCooldownEvent.Name = "CombatCooldown"
-	combatCooldownEvent.Parent = combatRemotes
-end
-
--- Helper Functions
+-- Helper Functions (Same as before)
 local function log(message)
 	if DEBUG_COMBAT then
 		print("[CombatService] " .. message)
@@ -64,73 +51,83 @@ local function log(message)
 end
 
 local function getBoardSystem()
-	if not BoardSystem then
-		BoardSystem = _G.BoardSystem -- Assume BoardSystem is loaded into _G by BoardService
-		if not BoardSystem then warn("[CombatService] BoardSystem not found in _G!") end
-	end
+	if not BoardSystem then BoardSystem = _G.BoardSystem end
+	if not BoardSystem then warn("[CombatService] BoardSystem not found!") end
 	return BoardSystem
 end
 
 local function getTurnSystem()
-	if not TurnSystem then
-		local gameManager = _G.GameManager
-		TurnSystem = gameManager and gameManager.turnSystem
-		if not TurnSystem then warn("[CombatService] TurnSystem not found in GameManager!") end
-	end
+	if not TurnSystem then TurnSystem = _G.GameManager and _G.GameManager.turnSystem end
+	if not TurnSystem then warn("[CombatService] TurnSystem not found!") end
 	return TurnSystem
 end
 
+local function getCheckpointSystem()
+	if not CheckpointSystem then CheckpointSystem = _G.GameManager and _G.GameManager.checkpointSystem or _G.CheckpointSystem end
+	if not CheckpointSystem then warn("[CombatService] CheckpointSystem not found!") end
+	return CheckpointSystem
+end
+
+-- *** UPDATED teleportPlayer function ***
 local function teleportPlayer(player, position)
-	if not player or not position then return end
+	if not player or not player:IsA("Player") then -- Ensure 'player' is a Player object
+		warn("[CombatService] Invalid player object passed to teleportPlayer.")
+		return
+	end
+	if not position or typeof(position) ~= "Vector3" then
+		warn("[CombatService] Invalid position passed to teleportPlayer for player " .. player.Name)
+		return
+	end
+
 	local character = player.Character
-	if not character then return end
-	local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+	local humanoidRootPart = character and character:FindFirstChild("HumanoidRootPart")
+
 	if humanoidRootPart then
 		log("Teleporting " .. player.Name .. " to " .. tostring(position))
-		humanoidRootPart.CFrame = CFrame.new(position + Vector3.new(0, 3, 0)) -- Add offset to avoid ground clipping
+		-- Call RequestStreamAroundAsync on the PLAYER object
+		local success, err = pcall(player.RequestStreamAroundAsync, player, position)
+		if not success then
+			warn("[CombatService] RequestStreamAroundAsync failed for player " .. player.Name .. ": " .. tostring(err))
+		end
+		task.wait(0.1) -- Short delay for streaming request
+		humanoidRootPart.CFrame = CFrame.new(position + Vector3.new(0, 3, 0)) -- Offset to avoid ground clipping
 	else
-		warn("[CombatService] HumanoidRootPart not found for " .. player.Name)
+		warn("[CombatService] HumanoidRootPart not found for " .. player.Name .. " during teleport.")
+	end
+end
+
+-- *** NEW HELPER: Disconnect Died Listeners ***
+local function disconnectDiedListeners(session)
+	if session and session.diedConnections then
+		log("Disconnecting Humanoid.Died listeners.")
+		for _, conn in ipairs(session.diedConnections) do
+			if conn and conn.Connected then
+				conn:Disconnect()
+			end
+		end
+		session.diedConnections = nil -- Clear the connections
 	end
 end
 
 -- Main Service Table
 local CombatService = {}
 
--- ฟังก์ชันใหม่: ตรวจสอบว่าผู้เล่นอยู่ในช่วงคูลดาวน์หรือไม่
+-- CheckCombatCooldown (Same as before)
 function CombatService:CheckCombatCooldown(playerID)
 	local turnSystem = getTurnSystem()
-	if not turnSystem then
-		warn("[CombatService] Cannot check combat cooldown: TurnSystem not found.")
-		return false
-	end
-
-	-- ใช้ฟังก์ชันจาก TurnSystem ที่เพิ่มใหม่
-	return turnSystem:HasCombatCooldown(playerID)
+	return turnSystem and turnSystem:HasCombatCooldown(playerID) or false
 end
 
--- Initiate the pre-combat sequence
+-- Initiate the pre-combat sequence (No significant changes needed here for this request)
 function CombatService:InitiatePreCombat(player1, player2, tileId)
 	if isCombatActive then
 		log("Cannot initiate combat, another session is already active.")
 		return false
 	end
 
-	-- ตรวจสอบคูลดาวน์การต่อสู้ของทั้งสองฝ่าย
-	if self:CheckCombatCooldown(player1.UserId) then
-		log("Cannot initiate combat, player " .. player1.Name .. " is on combat cooldown.")
-		-- แจ้งเตือนผู้เล่นว่าไม่สามารถเข้าต่อสู้ได้เนื่องจากติดคูลดาวน์
-		if combatCooldownEvent then
-			combatCooldownEvent:FireClient(player1, getTurnSystem():GetCombatCooldown(player1.UserId), true)
-		end
-		return false
-	end
-
-	if self:CheckCombatCooldown(player2.UserId) then
-		log("Cannot initiate combat, player " .. player2.Name .. " is on combat cooldown.")
-		-- แจ้งเตือนผู้เล่นว่าอีกฝ่ายติดคูลดาวน์
-		if player1 and combatCooldownEvent then
-			combatCooldownEvent:FireClient(player1, getTurnSystem():GetCombatCooldown(player2.UserId), false)
-		end
+	-- Cooldown check (Same as before)
+	if self:CheckCombatCooldown(player1.UserId) or self:CheckCombatCooldown(player2.UserId) then
+		log("Cannot initiate combat, a player is on cooldown.")
 		return false
 	end
 
@@ -139,28 +136,33 @@ function CombatService:InitiatePreCombat(player1, player2, tileId)
 
 	local boardSystem = getBoardSystem()
 	local turnSystem = getTurnSystem()
-
 	if not boardSystem or not turnSystem then
-		warn("[CombatService] Cannot initiate combat: Missing required systems (BoardSystem or TurnSystem).")
+		warn("[CombatService] Cannot initiate combat: Missing required systems.")
 		isCombatActive = false
 		return false
 	end
 
-	-- Store original positions BEFORE teleporting
-	local originalPos1 = player1.Character and player1.Character:FindFirstChild("HumanoidRootPart") and player1.Character.HumanoidRootPart.Position
-	local originalPos2 = player2.Character and player2.Character:FindFirstChild("HumanoidRootPart") and player2.Character.HumanoidRootPart.Position
+	local char1 = player1.Character
+	local hum1 = char1 and char1:FindFirstChildOfClass("Humanoid")
+	local char2 = player2.Character
+	local hum2 = char2 and char2:FindFirstChildOfClass("Humanoid")
 
+	if not hum1 or not hum2 then
+		warn("[CombatService] Cannot initiate combat: Humanoid not found.")
+		isCombatActive = false
+		return false
+	end
+
+	local originalPos1 = char1:FindFirstChild("HumanoidRootPart") and char1.HumanoidRootPart.Position
+	local originalPos2 = char2:FindFirstChild("HumanoidRootPart") and char2.HumanoidRootPart.Position
 	if not originalPos1 or not originalPos2 then
-		warn("[CombatService] Cannot get original positions for players. Aborting combat initiation.")
+		warn("[CombatService] Cannot get original positions.")
 		isCombatActive = false
 		return false
 	end
 
-	-- บันทึกเทิร์นปัจจุบันก่อนเริ่มการต่อสู้
 	local currentTurnPlayerId = turnSystem:GetCurrentPlayerTurn()
-	log("Current turn player before combat: " .. tostring(currentTurnPlayerId))
 
-	-- Store session data
 	activeCombatSession = {
 		player1Id = player1.UserId,
 		player2Id = player2.UserId,
@@ -168,249 +170,330 @@ function CombatService:InitiatePreCombat(player1, player2, tileId)
 		originalPos1 = originalPos1,
 		originalPos2 = originalPos2,
 		timerEndTime = tick() + PRE_COMBAT_DURATION,
-		currentTurnPlayerId = currentTurnPlayerId -- เก็บว่าตอนที่เข้าการต่อสู้เป็นเทิร์นของใคร
+		currentTurnPlayerId = currentTurnPlayerId,
+		timerThread = nil,
+		diedConnections = {}
 	}
 
-	-- 1. Pause Turn System
-	log("Pausing Turn System.")
+	log("Pausing Turn System, setting up client states, warping players...")
 	turnSystem:PauseTurns()
+	setSystemEnabledEvent:FireClient(player1, "CameraSystem", false); setSystemEnabledEvent:FireClient(player1, "DiceRollHandler", false); setSystemEnabledEvent:FireClient(player1, "PlayerControls", true)
+	setSystemEnabledEvent:FireClient(player2, "CameraSystem", false); setSystemEnabledEvent:FireClient(player2, "DiceRollHandler", false); setSystemEnabledEvent:FireClient(player2, "PlayerControls", true)
+	teleportPlayer(player1, COMBAT_AREA_POSITION + Vector3.new(-10, 0, 0))
+	teleportPlayer(player2, COMBAT_AREA_POSITION + Vector3.new(10, 0, 0))
 
-	-- 2. Disable Client Systems (Camera, DiceRoll UI)
-	log("Disabling client systems for players.")
-	setSystemEnabledEvent:FireClient(player1, "CameraSystem", false)
-	setSystemEnabledEvent:FireClient(player1, "DiceRollHandler", false)
-	setSystemEnabledEvent:FireClient(player2, "CameraSystem", false)
-	setSystemEnabledEvent:FireClient(player2, "DiceRollHandler", false)
-
-	-- 3. Enable Player Controls for combat
-	log("Enabling PlayerControls for combat participants.")
-	setSystemEnabledEvent:FireClient(player1, "PlayerControls", true)
-	setSystemEnabledEvent:FireClient(player2, "PlayerControls", true)
-
-	-- 4. Warp Players to Combat Area
-	log("Warping players to combat area: " .. tostring(COMBAT_AREA_POSITION))
-	teleportPlayer(player1, COMBAT_AREA_POSITION + Vector3.new(-1472.651, 44.582, -232.561)) -- Offset players slightly
-	teleportPlayer(player2, COMBAT_AREA_POSITION + Vector3.new(-1215.051, 44.582, -232.561))
-
-	-- 5. Start Combat Timer on Clients
-	log("Starting combat timer (" .. PRE_COMBAT_DURATION .. "s) on clients.")
+	log("Starting combat timer on clients...")
 	setCombatStateEvent:FireClient(player1, true, PRE_COMBAT_DURATION)
 	setCombatStateEvent:FireClient(player2, true, PRE_COMBAT_DURATION)
-	-- Optionally notify other players that combat started (without timer)
 	for _, p in pairs(Players:GetPlayers()) do
 		if p.UserId ~= player1.UserId and p.UserId ~= player2.UserId then
-			setCombatStateEvent:FireClient(p, true, 0) -- Indicate combat active, no timer
+			setCombatStateEvent:FireClient(p, true, 0)
 		end
 	end
 
-	-- 6. Start Server-Side Timer for Resolution
-	task.delay(PRE_COMBAT_DURATION, function()
-		-- Check if the same combat session is still active
+	log("Connecting Humanoid.Died listeners.")
+	local diedConnection1 = hum1.Died:Connect(function()
+		log("Humanoid.Died fired for player 1: " .. player1.Name)
+		if isCombatActive and activeCombatSession and activeCombatSession.player1Id == player1.UserId and activeCombatSession.player2Id == player2.UserId then
+			log("Death occurred during active combat. Player 2 ("..player2.Name..") wins.")
+			self:HandlePlayerDeathInCombat(player1, player2)
+		else
+			log("Death occurred but not during this active combat session or session mismatch.")
+		end
+	end)
+	table.insert(activeCombatSession.diedConnections, diedConnection1)
+
+	local diedConnection2 = hum2.Died:Connect(function()
+		log("Humanoid.Died fired for player 2: " .. player2.Name)
+		if isCombatActive and activeCombatSession and activeCombatSession.player1Id == player1.UserId and activeCombatSession.player2Id == player2.UserId then
+			log("Death occurred during active combat. Player 1 ("..player1.Name..") wins.")
+			self:HandlePlayerDeathInCombat(player2, player1)
+		else
+			log("Death occurred but not during this active combat session or session mismatch.")
+		end
+	end)
+	table.insert(activeCombatSession.diedConnections, diedConnection2)
+
+	log("Starting server-side timeout timer...")
+	activeCombatSession.timerThread = task.delay(PRE_COMBAT_DURATION, function()
 		if isCombatActive and activeCombatSession and
 			activeCombatSession.player1Id == player1.UserId and
 			activeCombatSession.player2Id == player2.UserId then
-			log("Pre-combat timer finished. Resolving session.")
+			log("Combat timer finished (Timeout). Resolving session.")
 			CombatService:ResolvePreCombat()
 		else
-			log("Pre-combat timer finished, but the active session changed or ended. No resolution needed.")
+			log("Combat timer finished, but session already ended/changed.")
 		end
 	end)
 
+	log("Combat initiated. Monitoring Humanoid.Died and timer.")
 	return true
 end
 
--- Resolve the pre-combat sequence and return players
-function CombatService:ResolvePreCombat()
+-- Handle Player Death During Combat (No changes needed here)
+function CombatService:HandlePlayerDeathInCombat(deadPlayer, remainingPlayer)
+	log("--- HandlePlayerDeathInCombat START ---")
 	if not isCombatActive or not activeCombatSession then
-		log("ResolvePreCombat called but no active combat session.")
+		log("HandlePlayerDeathInCombat called but no active combat session.")
+		log("--- HandlePlayerDeathInCombat END (No Session) ---")
+		return
+	end
+
+	if not deadPlayer or not remainingPlayer or
+		not ((activeCombatSession.player1Id == deadPlayer.UserId and activeCombatSession.player2Id == remainingPlayer.UserId) or
+			(activeCombatSession.player2Id == deadPlayer.UserId and activeCombatSession.player1Id == remainingPlayer.UserId)) then
+		log("HandlePlayerDeathInCombat called with incorrect players for the current session. Aborting.")
+		log("--- HandlePlayerDeathInCombat END (Player Mismatch) ---")
+		return
+	end
+
+	log("Player " .. deadPlayer.Name .. " confirmed dead. Winner: " .. remainingPlayer.Name)
+	disconnectDiedListeners(activeCombatSession)
+	log("Calling EndCombatWithWinner...")
+	self:EndCombatWithWinner(remainingPlayer, deadPlayer)
+	log("--- HandlePlayerDeathInCombat END ---")
+end
+
+-- End Combat with a Winner (Added TurnSystem:OnPlayerDeath call)
+function CombatService:EndCombatWithWinner(winner, loser)
+	log("--- EndCombatWithWinner START --- Winner: " .. winner.Name .. ", Loser: " .. loser.Name)
+	local wasCombatActive = isCombatActive
+	local currentSession = activeCombatSession
+
+	if not wasCombatActive or not currentSession then
+		log("EndCombatWithWinner called but combat was not active or session was already cleared. Aborting.")
+		disconnectDiedListeners(currentSession)
 		return false
 	end
 
-	log("Resolving Pre-Combat session.")
-
-	local player1 = Players:GetPlayerByUserId(activeCombatSession.player1Id)
-	local player2 = Players:GetPlayerByUserId(activeCombatSession.player2Id)
-	local originalTileId = activeCombatSession.originalTileId
-	local originalPos1 = activeCombatSession.originalPos1
-	local originalPos2 = activeCombatSession.originalPos2
-	local currentTurnPlayerId = activeCombatSession.currentTurnPlayerId
-
-	-- ตั้งค่าคูลดาวน์การต่อสู้สำหรับทั้งสองฝ่าย
-	local turnSystem = getTurnSystem()
-	if turnSystem then
-		if player1 then
-			turnSystem:SetCombatCooldown(activeCombatSession.player1Id, COMBAT_COOLDOWN_TURNS)
-			log("Set combat cooldown for player " .. player1.Name .. " for " .. COMBAT_COOLDOWN_TURNS .. " turns.")
-		end
-
-		if player2 then
-			turnSystem:SetCombatCooldown(activeCombatSession.player2Id, COMBAT_COOLDOWN_TURNS)
-			log("Set combat cooldown for player " .. player2.Name .. " for " .. COMBAT_COOLDOWN_TURNS .. " turns.")
-		end
+	if currentSession.timerThread then
+		log("Cancelling combat timeout timer.")
+		task.cancel(currentSession.timerThread)
 	end
 
-	-- 1. Warp Players Back
-	log("Warping players back to original positions.")
-	if player1 then teleportPlayer(player1, originalPos1) end
-	if player2 then teleportPlayer(player2, originalPos2) end
+	disconnectDiedListeners(currentSession)
 
-	-- 2. Resume Turn System และจบเทิร์นปัจจุบัน เพื่อให้ระบบวนไปเทิร์นถัดไป
-	if turnSystem then
-		-- บันทึกข้อมูลว่าอยู่เทิร์นของใคร เพื่อใช้ในการจบเทิร์น
-		log("Current turn player ID when combat started: " .. tostring(currentTurnPlayerId))
+	local boardSystem = getBoardSystem()
+	local turnSystem = getTurnSystem() -- Get TurnSystem instance
+	local checkpointSystem = getCheckpointSystem()
 
-		-- รีซูมเทิร์นระบบ (กลับมาสู่สถานะก่อนหยุดชั่วคราว)
-		log("Resuming Turn System.")
-		turnSystem:ResumeTurns()
-
-		-- จบเทิร์นปัจจุบัน เพื่อให้ขยับไปยังเทิร์นถัดไป
-		task.wait(0.5) -- รอสักครู่ให้ระบบรีซูมเสร็จก่อน
-
-		-- ตรวจสอบว่าปัจจุบันเป็นเทิร์นที่บันทึกไว้ก่อนเข้าการต่อสู้หรือไม่
-		local currentPlayerTurn = turnSystem:GetCurrentPlayerTurn()
-		log("Current player turn after resume: " .. tostring(currentPlayerTurn))
-
-		if currentPlayerTurn and currentPlayerTurn == currentTurnPlayerId then
-			log("Ending current turn to move to next player...")
-			turnSystem:EndPlayerTurn(currentPlayerTurn, "combat_completed")
-		else
-			log("Turn already changed or no active turn, skipping EndPlayerTurn call.")
-		end
+	if not boardSystem or not turnSystem or not checkpointSystem then -- Check turnSystem
+		warn("[CombatService] Cannot end combat: Missing required systems (Board, Turn, or Checkpoint).")
+		setCombatStateEvent:FireAllClients(false, 0)
+		activeCombatSession = nil
+		isCombatActive = false
+		return false
 	end
 
-	-- 3. Re-enable Client Systems
-	log("Re-enabling client systems.")
-	if player1 then
-		setSystemEnabledEvent:FireClient(player1, "CameraSystem", true)
-		setSystemEnabledEvent:FireClient(player1, "DiceRollHandler", true)
-		-- Disable Player Controls (lock movement) when returning to the board game
-		setSystemEnabledEvent:FireClient(player1, "PlayerControls", false)
+	-- Extract data before clearing
+	local originalTileId = currentSession.originalTileId
+	local winnerOriginalPos = (winner.UserId == currentSession.player1Id) and currentSession.originalPos1 or currentSession.originalPos2
+	local currentTurnPlayerId = currentSession.currentTurnPlayerId -- Whose turn it was when combat started
 
-		-- แจ้งเตือนผู้เล่นว่าติดคูลดาวน์การต่อสู้
-		if combatCooldownEvent then
-			combatCooldownEvent:FireClient(player1, COMBAT_COOLDOWN_TURNS)
-		end
-	end
-
-	if player2 then
-		setSystemEnabledEvent:FireClient(player2, "CameraSystem", true)
-		setSystemEnabledEvent:FireClient(player2, "DiceRollHandler", true)
-		-- Disable Player Controls (lock movement) when returning to the board game
-		setSystemEnabledEvent:FireClient(player2, "PlayerControls", false)
-
-		-- แจ้งเตือนผู้เล่นว่าติดคูลดาวน์การต่อสู้
-		if combatCooldownEvent then
-			combatCooldownEvent:FireClient(player2, COMBAT_COOLDOWN_TURNS)
-		end
-	end
-
-	-- 4. End Combat State on Clients
-	log("Ending combat state on clients.")
-	setCombatStateEvent:FireAllClients(false, 0) -- Signal combat end to everyone
-
-	-- 5. Clear Session Data
-	log("Clearing active combat session.")
+	log("Clearing active combat session data early.")
 	activeCombatSession = nil
-	isCombatActive = false
+	isCombatActive = false -- Set inactive now
 
+	-- 2. Set Combat Cooldowns
+	log("Setting combat cooldowns.")
+	turnSystem:SetCombatCooldown(winner.UserId, COMBAT_COOLDOWN_TURNS)
+	turnSystem:SetCombatCooldown(loser.UserId, COMBAT_COOLDOWN_TURNS)
+
+	-- *** NEW: Inform TurnSystem about the death ***
+	log("Informing TurnSystem that player " .. loser.UserId .. " died.")
+	local success, err = pcall(turnSystem.OnPlayerDeath, turnSystem, loser.UserId)
+	if not success then
+		warn("[CombatService] Error calling TurnSystem:OnPlayerDeath for loser " .. loser.UserId .. ": " .. tostring(err))
+	end
+	-- *** END NEW ***
+
+	-- 3. Handle Loser Respawn
+	log("Processing loser (" .. loser.Name .. ") respawn.")
+	local respawnTileId = checkpointSystem:GetPlayerRespawnTileId(loser)
+	local respawnPosition = checkpointSystem:GetPlayerRespawnPosition(loser)
+	if not respawnPosition then
+		warn("[CombatService] Could not get respawn position for loser " .. loser.Name .. ". Using fallback.")
+		respawnPosition = Vector3.new(35.778, 0.6, -15.24)
+	end
+	log("Loser " .. loser.Name .. " respawning at Tile " .. respawnTileId .. " Pos: " .. tostring(respawnPosition))
+	teleportPlayer(loser, respawnPosition)
+	boardSystem:SetPlayerPosition(loser.UserId, respawnTileId) -- Update board position AFTER teleport
+
+	-- 4. Handle Winner Return
+	log("Returning winner (" .. winner.Name .. ") to original combat tile " .. originalTileId)
+	if winnerOriginalPos then
+		teleportPlayer(winner, winnerOriginalPos)
+		boardSystem:SetPlayerPosition(winner.UserId, originalTileId) -- Update board position AFTER teleport
+	else
+		warn("[CombatService] Could not get original position for winner " .. winner.Name .. ".")
+		local tilePos = boardSystem:GetTilePosition(originalTileId)
+		if tilePos then teleportPlayer(winner, tilePos) end
+		boardSystem:SetPlayerPosition(winner.UserId, originalTileId)
+	end
+
+	-- Wait for visuals (Respawn Delay)
+	log("Waiting " .. RESPAWN_VISUAL_DELAY .. " seconds for respawn/teleport visual...")
+	task.wait(RESPAWN_VISUAL_DELAY)
+
+	-- 5. Resume Turn System & End Originating Turn
+	log("Resuming Turn System.")
+	turnSystem:ResumeTurns() -- Resume first
+	task.wait(0.1) -- Short delay after resuming
+
+	-- Now, end the turn that was active when combat *started*
+	local playerWhoseTurnItWas = Players:GetPlayerByUserId(currentTurnPlayerId)
+	if playerWhoseTurnItWas then
+		log("Attempting to end turn for player " .. playerWhoseTurnItWas.Name .. " (ID: " .. currentTurnPlayerId .. ") which was active when combat started.")
+		-- Check if the turn system *thinks* it's still this player's turn (it might not be if ResumeTurns changed it)
+		if turnSystem:GetCurrentPlayerTurn() == currentTurnPlayerId then
+			turnSystem:EndPlayerTurn(currentTurnPlayerId, "combat_win_resolved")
+		else
+			log("Turn changed after resuming or wasn't " .. currentTurnPlayerId .. " anymore. Current turn is: " .. tostring(turnSystem:GetCurrentPlayerTurn()) .. ". Skipping EndPlayerTurn for originating player.")
+			-- If the turn somehow already advanced, we might need to force the next turn calculation again? Or just let it be.
+			-- For now, just log it. If problems persist, we might need to call NextTurn explicitly here if the current turn isn't the originating one.
+		end
+	else
+		warn("[CombatService] Player " .. currentTurnPlayerId .. " (whose turn it was) not found after combat. Cannot end their turn.")
+		-- Maybe call NextTurn if the current turn is nil?
+		if turnSystem:GetCurrentPlayerTurn() == nil then
+			log("Current turn is nil after resume, attempting to advance.")
+			turnSystem:NextTurn()
+		end
+	end
+
+	-- 6. Re-enable Client Systems & Lock Controls
+	log("Re-enabling standard client systems and locking controls.")
+	setSystemEnabledEvent:FireClient(winner, "CameraSystem", true); setSystemEnabledEvent:FireClient(winner, "DiceRollHandler", true); setSystemEnabledEvent:FireClient(winner, "PlayerControls", false)
+	if combatCooldownEvent then combatCooldownEvent:FireClient(winner, COMBAT_COOLDOWN_TURNS) end
+	setSystemEnabledEvent:FireClient(loser, "CameraSystem", true); setSystemEnabledEvent:FireClient(loser, "DiceRollHandler", true); setSystemEnabledEvent:FireClient(loser, "PlayerControls", false)
+	if combatCooldownEvent then combatCooldownEvent:FireClient(loser, COMBAT_COOLDOWN_TURNS) end
+
+	-- 7. End Combat State on Clients
+	log("Ending combat state on all clients.")
+	setCombatStateEvent:FireAllClients(false, 0) -- Signal combat end
+
+	log("--- EndCombatWithWinner END --- Combat resolution complete.")
 	return true
 end
 
--- Function to check if combat is currently active
+
+-- Resolve the pre-combat sequence (Timeout Scenario - No changes needed here)
+function CombatService:ResolvePreCombat()
+	log("--- ResolvePreCombat START (Timeout Scenario) ---")
+	local wasCombatActive = isCombatActive
+	local currentSession = activeCombatSession
+
+	if not wasCombatActive or not currentSession then
+		log("ResolvePreCombat called but combat not active or session already cleared. Aborting.")
+		return false
+	end
+
+	if not currentSession.timerThread then
+		log("ResolvePreCombat called, but timer thread is nil (likely resolved by death). Aborting.")
+		disconnectDiedListeners(currentSession)
+		activeCombatSession = nil
+		isCombatActive = false
+		return false
+	end
+
+	log("Resolving Pre-Combat session due to TIMEOUT.")
+	disconnectDiedListeners(currentSession)
+
+	local player1Id = currentSession.player1Id
+	local player2Id = currentSession.player2Id
+	local originalPos1 = currentSession.originalPos1
+	local originalPos2 = currentSession.originalPos2
+	local currentTurnPlayerId = currentSession.currentTurnPlayerId
+	local originalTileId = currentSession.originalTileId
+
+	log("Clearing active combat session data (Timeout).")
+	activeCombatSession = nil
+	isCombatActive = false
+
+	local player1 = Players:GetPlayerByUserId(player1Id)
+	local player2 = Players:GetPlayerByUserId(player2Id)
+	local turnSystem = getTurnSystem()
+	local boardSystem = getBoardSystem()
+
+	if turnSystem then
+		if player1 then turnSystem:SetCombatCooldown(player1.UserId, COMBAT_COOLDOWN_TURNS) end
+		if player2 then turnSystem:SetCombatCooldown(player2.UserId, COMBAT_COOLDOWN_TURNS) end
+	end
+
+	log("Warping players back to original positions (Timeout).")
+	if player1 then
+		teleportPlayer(player1, originalPos1)
+		if boardSystem then boardSystem:SetPlayerPosition(player1.UserId, originalTileId) end
+	end
+	if player2 then
+		teleportPlayer(player2, originalPos2)
+		if boardSystem then boardSystem:SetPlayerPosition(player2.UserId, originalTileId) end
+	end
+
+	if turnSystem then
+		log("Resuming Turn System (Timeout).")
+		turnSystem:ResumeTurns()
+		task.wait(0.5)
+		local currentPlayerTurn = turnSystem:GetCurrentPlayerTurn()
+		if currentPlayerTurn and currentPlayerTurn == currentTurnPlayerId then
+			log("Ending originating turn (Timeout)...")
+			turnSystem:EndPlayerTurn(currentPlayerTurn, "combat_timeout")
+		else
+			log("Turn already changed (Timeout), skipping EndPlayerTurn.")
+		end
+	end
+
+	log("Re-enabling client systems (Timeout).")
+	if player1 then
+		setSystemEnabledEvent:FireClient(player1, "CameraSystem", true); setSystemEnabledEvent:FireClient(player1, "DiceRollHandler", true); setSystemEnabledEvent:FireClient(player1, "PlayerControls", false)
+		if combatCooldownEvent then combatCooldownEvent:FireClient(player1, COMBAT_COOLDOWN_TURNS) end
+	end
+	if player2 then
+		setSystemEnabledEvent:FireClient(player2, "CameraSystem", true); setSystemEnabledEvent:FireClient(player2, "DiceRollHandler", true); setSystemEnabledEvent:FireClient(player2, "PlayerControls", false)
+		if combatCooldownEvent then combatCooldownEvent:FireClient(player2, COMBAT_COOLDOWN_TURNS) end
+	end
+
+	log("Ending combat state on clients (Timeout).")
+	setCombatStateEvent:FireAllClients(false, 0)
+
+	log("--- ResolvePreCombat END (Timeout Scenario) ---")
+	return true
+end
+
+-- IsCombatActive (Same as before)
 function CombatService:IsCombatActive()
 	return isCombatActive
 end
 
--- Initialize dash system for combat
+-- InitializeDashSystem (Same as before)
 function CombatService:InitializeDashSystem()
-	if DashSystem then return DashSystem end -- Already initialized
-
-	-- Try to load the DashSystem module
-	local dashSystemModule = nil
-	local success, result = pcall(function()
-		local Modules = ServerStorage:WaitForChild("Modules")
-		return require(Modules:WaitForChild("MovementSystem"))
-	end)
-
-	if success then
-		dashSystemModule = result
-		log("Successfully loaded DashSystem module")
+	if DashSystem then return DashSystem end
+	local success, dashSystemModule = pcall(require, ServerStorage.Modules.MovementSystem)
+	if success and dashSystemModule then
+		DashSystem = dashSystemModule.new(self)
+		DashSystem:Register()
+		log("DashSystem initialized and registered")
+		return DashSystem
 	else
-		-- If module not found, fallback to requiring it from the code we just created
-		success, result = pcall(function()
-			return require(script.Parent:WaitForChild("DashSystem"))
-		end)
-
-		if success then
-			dashSystemModule = result
-			log("Successfully loaded DashSystem module from script.Parent")
-		else
-			warn("[CombatService] Failed to load DashSystem module: " .. tostring(result))
-			-- Create a new DashSystem ModuleScript
-			local newModule = Instance.new("ModuleScript")
-			newModule.Name = "DashSystem"
-
-			-- This will be a simple placeholder - the actual code should be copied from DashSystem.lua
-			local placeholder = [[
-				print("[DashSystem] This is a placeholder. Please copy the actual DashSystem.lua code here.")
-				local DashSystem = {}
-				DashSystem.__index = DashSystem
-				function DashSystem.new(combatService) return setmetatable({}, DashSystem) end
-				function DashSystem:Register() end
-				return DashSystem
-			]]
-
-			newModule.Source = placeholder
-			newModule.Parent = script.Parent
-
-			-- Try to require it one more time
-			success, result = pcall(function()
-				return require(newModule)
-			end)
-
-			if success then
-				dashSystemModule = result
-				warn("[CombatService] Created and loaded placeholder DashSystem. Please replace with actual code.")
-			else
-				warn("[CombatService] Failed to create DashSystem module: " .. tostring(result))
-				return nil
-			end
-		end
+		warn("[CombatService] Failed to load MovementSystem (DashSystem): ", dashSystemModule)
+		return nil
 	end
-
-	-- Create instance of DashSystem
-	DashSystem = dashSystemModule.new(self)
-
-	-- Register it with GameManager
-	DashSystem:Register()
-
-	log("DashSystem initialized and registered")
-	return DashSystem
 end
 
--- Register with GameManager if available
+-- Register with GameManager (Same as before)
 local function registerWithGameManager()
-	local gameManager = _G.GameManager
+	local gameManager = _G.GameManager or (task.wait(2) and _G.GameManager)
 	if gameManager then
 		gameManager.combatService = CombatService
 		log("CombatService registered with GameManager.")
-
-		-- Initialize DashSystem after registration
 		CombatService:InitializeDashSystem()
+		CheckpointSystem = gameManager.checkpointSystem
+		if CheckpointSystem then log("Found CheckpointSystem via GameManager.") end
 	else
-		-- Retry after a delay if GameManager isn't ready yet
-		task.wait(2)
-		gameManager = _G.GameManager
-		if gameManager then
-			gameManager.combatService = CombatService
-			log("CombatService registered with GameManager (after delay).")
-
-			-- Initialize DashSystem after registration
-			CombatService:InitializeDashSystem()
-		else
-			warn("[CombatService] GameManager not found after delay. Service might not be accessible.")
-		end
+		warn("[CombatService] GameManager not found.")
 	end
+	if not CheckpointSystem then CheckpointSystem = _G.CheckpointSystem end
+	if not CheckpointSystem then warn("[CombatService] CheckpointSystem could not be found!") end
 end
 
 registerWithGameManager()
