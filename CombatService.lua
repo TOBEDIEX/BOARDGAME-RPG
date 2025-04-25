@@ -1,7 +1,7 @@
 -- CombatService.server.lua
 -- Manages the initiation and resolution of the pre-combat phase.
 -- Location: ServerScriptService/Services/CombatService.server.lua
--- Version: 1.2.1 (Fixed Turn Progression Bug)
+-- Version: 1.3.0 (Added death-based combat resolution)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -10,13 +10,15 @@ local ServerStorage = game:GetService("ServerStorage")
 
 -- Constants
 local COMBAT_AREA_POSITION = Vector3.new(0, 100, 0) -- Define a specific Vector3 for the combat arena
-local PRE_COMBAT_DURATION = 10 -- 2 minutes in seconds
+local PRE_COMBAT_DURATION = 120 -- 2 minutes in seconds
 local COMBAT_COOLDOWN_TURNS = 2 -- จำนวนเทิร์นที่ติดคูลดาวน์หลังการต่อสู้
 local DEBUG_COMBAT = true
+local RESPAWN_WAIT_TIMEOUT = 20 -- เวลาที่รอให้ผู้เล่นที่ตายเกิดใหม่ (วินาที)
 
 -- Modules and Services (Lazy Loaded)
 local BoardSystem = nil
 local TurnSystem = nil
+local PlayerManager = nil -- Added for tracking player death
 local CameraSystem = nil -- Client-side, controlled via remotes
 local DiceRollHandler = nil -- Client-side, controlled via remotes
 
@@ -55,6 +57,14 @@ if not combatCooldownEvent then
 	combatCooldownEvent.Parent = combatRemotes
 end
 
+-- สร้าง Remote Event ใหม่สำหรับแจ้งเตือนผลลัพธ์การต่อสู้
+local combatResultEvent = combatRemotes:FindFirstChild("CombatResult")
+if not combatResultEvent then
+	combatResultEvent = Instance.new("RemoteEvent")
+	combatResultEvent.Name = "CombatResult"
+	combatResultEvent.Parent = combatRemotes
+end
+
 -- Helper Functions
 local function log(message)
 	if DEBUG_COMBAT then
@@ -77,6 +87,15 @@ local function getTurnSystem()
 		if not TurnSystem then warn("[CombatService] TurnSystem not found in GameManager!") end
 	end
 	return TurnSystem
+end
+
+local function getPlayerManager()
+	if not PlayerManager then
+		local gameManager = _G.GameManager
+		PlayerManager = gameManager and gameManager.playerManager
+		if not PlayerManager then warn("[CombatService] PlayerManager not found in GameManager!") end
+	end
+	return PlayerManager
 end
 
 local function teleportPlayer(player, position)
@@ -107,7 +126,48 @@ function CombatService:CheckCombatCooldown(playerID)
 	return turnSystem:HasCombatCooldown(playerID)
 end
 
--- Initiate the pre-combat sequence
+-- ฟังก์ชันใหม่: ตรวจสอบว่าผู้เล่นมีชีวิตอยู่หรือไม่
+function CombatService:IsPlayerAlive(playerID)
+	local playerManager = getPlayerManager()
+	if not playerManager then
+		warn("[CombatService] Cannot check player alive state: PlayerManager not found.")
+		return true -- Default to alive if we can't check
+	end
+
+	local player = Players:GetPlayerByUserId(playerID)
+	if not player then return false end
+
+	local playerData = playerManager:GetPlayerData(player)
+	if not playerData then return false end
+
+	return playerData.isAlive
+end
+
+-- ฟังก์ชันใหม่: แจ้งเตือนผลลัพธ์การต่อสู้
+function CombatService:NotifyCombatResult(winner, loser)
+	if not winner or not loser then return end
+
+	local winnerName = winner.Name
+	local loserName = loser.Name
+
+	log("Combat result: " .. winnerName .. " defeated " .. loserName)
+
+	-- แจ้งเตือนทั้งสองฝ่าย
+	if combatResultEvent then
+		combatResultEvent:FireClient(winner, true, loserName) -- ส่งค่า true บอกว่าเป็นผู้ชนะ
+		combatResultEvent:FireClient(loser, false, winnerName) -- ส่งค่า false บอกว่าเป็นผู้แพ้
+	end
+
+	-- ส่งประกาศให้ผู้เล่นอื่นทราบ
+	for _, player in pairs(Players:GetPlayers()) do
+		if player.UserId ~= winner.UserId and player.UserId ~= loser.UserId then
+			-- ส่งให้ผู้เล่นอื่นรู้ว่าใครชนะใครแพ้ (null = ดูเฉยๆ)
+			combatResultEvent:FireClient(player, nil, winnerName, loserName)
+		end
+	end
+	end
+
+	-- Initiate the pre-combat sequence
 function CombatService:InitiatePreCombat(player1, player2, tileId)
 	if isCombatActive then
 		log("Cannot initiate combat, another session is already active.")
@@ -167,7 +227,10 @@ function CombatService:InitiatePreCombat(player1, player2, tileId)
 		originalPos1 = originalPos1,
 		originalPos2 = originalPos2,
 		timerEndTime = tick() + PRE_COMBAT_DURATION,
-		currentTurnPlayerId = currentTurnPlayerId -- เก็บว่าตอนที่เข้าการต่อสู้เป็นเทิร์นของใคร
+		currentTurnPlayerId = currentTurnPlayerId, -- เก็บว่าตอนที่เข้าการต่อสู้เป็นเทิร์นของใคร
+		isResolving = false, -- Flag to prevent multiple resolution triggers
+		waitingForRespawn = false, -- Flag to indicate waiting for respawn
+		respawnWaitStart = 0 -- Time when we started waiting for respawn
 	}
 
 	-- 1. Pause Turn System
@@ -207,11 +270,63 @@ function CombatService:InitiatePreCombat(player1, player2, tileId)
 		-- Check if the same combat session is still active
 		if isCombatActive and activeCombatSession and
 			activeCombatSession.player1Id == player1.UserId and
-			activeCombatSession.player2Id == player2.UserId then
+			activeCombatSession.player2Id == player2.UserId and
+			not activeCombatSession.isResolving then
 			log("Pre-combat timer finished. Resolving session.")
-			CombatService:ResolvePreCombat()
+			self:ResolvePreCombat()
 		else
-			log("Pre-combat timer finished, but the active session changed or ended. No resolution needed.")
+			log("Pre-combat timer finished, but the active session changed, ended, or is already resolving. No resolution needed.")
+		end
+	end)
+
+	-- 7. Set up death monitoring - create a loop to check for player death
+	task.spawn(function()
+		while isCombatActive and activeCombatSession and 
+			activeCombatSession.player1Id == player1.UserId and
+			activeCombatSession.player2Id == player2.UserId do
+
+			-- Check for death if not already waiting for respawn
+			if not activeCombatSession.waitingForRespawn then
+				local player1Alive = self:IsPlayerAlive(player1.UserId)
+				local player2Alive = self:IsPlayerAlive(player2.UserId)
+
+				-- If one player is dead, start resolving combat
+				if not player1Alive or not player2Alive then
+					log("Player death detected during combat! " .. 
+						(not player1Alive and player1.Name or player2.Name) .. " was defeated.")
+
+					if not activeCombatSession.isResolving then
+						-- Determine winner and loser
+						local winner = player1Alive and player1 or player2
+						local loser = player1Alive and player2 or player1
+
+						-- Notify about combat result
+						self:NotifyCombatResult(winner, loser)
+
+						-- Set waiting for respawn
+						activeCombatSession.waitingForRespawn = true
+						activeCombatSession.respawnWaitStart = tick()
+						activeCombatSession.defeatedPlayerId = loser.UserId
+						activeCombatSession.winnerPlayerId = winner.UserId
+
+						log("Waiting for " .. loser.Name .. " to respawn before concluding combat.")
+					end
+				end
+			else
+				-- If waiting for respawn, check if player respawned or timeout reached
+				local defeatedPlayerId = activeCombatSession.defeatedPlayerId
+				local isDefeatedPlayerAlive = self:IsPlayerAlive(defeatedPlayerId)
+
+				if isDefeatedPlayerAlive then
+					log("Defeated player has respawned. Resolving combat.")
+					self:ResolvePreCombat()
+				elseif (tick() - activeCombatSession.respawnWaitStart) > RESPAWN_WAIT_TIMEOUT then
+					log("Respawn wait timeout reached. Resolving combat anyway.")
+					self:ResolvePreCombat()
+				end
+			end
+
+			task.wait(0.5) -- Check every half second
 		end
 	end)
 
@@ -225,6 +340,13 @@ function CombatService:ResolvePreCombat()
 		return false
 	end
 
+	-- Set resolving flag to prevent multiple calls
+	if activeCombatSession.isResolving then
+		log("ResolvePreCombat already in progress. Ignoring duplicate call.")
+		return false
+	end
+	activeCombatSession.isResolving = true
+
 	log("Resolving Pre-Combat session.")
 
 	local player1 = Players:GetPlayerByUserId(activeCombatSession.player1Id)
@@ -233,6 +355,16 @@ function CombatService:ResolvePreCombat()
 	local originalPos1 = activeCombatSession.originalPos1
 	local originalPos2 = activeCombatSession.originalPos2
 	local currentTurnPlayerId = activeCombatSession.currentTurnPlayerId
+
+	-- Determine if there was a winner/loser based on waiting for respawn flag
+	local winnerPlayerId = nil
+	local loserPlayerId = nil
+
+	if activeCombatSession.waitingForRespawn then
+		winnerPlayerId = activeCombatSession.winnerPlayerId
+		loserPlayerId = activeCombatSession.defeatedPlayerId
+		log("Combat had a clear outcome. Winner: " .. tostring(winnerPlayerId) .. ", Loser: " .. tostring(loserPlayerId))
+	end
 
 	-- ตั้งค่าคูลดาวน์การต่อสู้สำหรับทั้งสองฝ่าย
 	local turnSystem = getTurnSystem()
@@ -248,10 +380,26 @@ function CombatService:ResolvePreCombat()
 		end
 	end
 
-	-- 1. Warp Players Back
-	log("Warping players back to original positions.")
-	if player1 then teleportPlayer(player1, originalPos1) end
-	if player2 then teleportPlayer(player2, originalPos2) end
+	-- 1. Warp Players Back - MODIFIED for winner/loser scenario
+	if winnerPlayerId and loserPlayerId then
+		-- Combat had a winner and loser
+		local winner = Players:GetPlayerByUserId(winnerPlayerId)
+
+		if winner then
+			-- Winner goes back to the original tile
+			log("Warping winner " .. winner.Name .. " back to original position.")
+			local originalPos = (winnerPlayerId == activeCombatSession.player1Id) and originalPos1 or originalPos2
+			teleportPlayer(winner, originalPos)
+		end
+
+		-- Loser will respawn at their checkpoint/tile 1 automatically via PlayerManager
+		log("Loser will respawn at their checkpoint according to the PlayerManager respawn logic.")
+	else
+		-- Normal timeout, warp both players back
+		log("Warping players back to original positions.")
+		if player1 then teleportPlayer(player1, originalPos1) end
+		if player2 then teleportPlayer(player2, originalPos2) end
+	end
 
 	-- 2. Resume Turn System และจบเทิร์นปัจจุบัน เพื่อให้ระบบวนไปเทิร์นถัดไป
 	if turnSystem then
@@ -279,7 +427,7 @@ function CombatService:ResolvePreCombat()
 
 	-- 3. Re-enable Client Systems
 	log("Re-enabling client systems.")
-	if player1 then
+	if player1 and player1:IsDescendantOf(Players) then
 		setSystemEnabledEvent:FireClient(player1, "CameraSystem", true)
 		setSystemEnabledEvent:FireClient(player1, "DiceRollHandler", true)
 		-- Disable Player Controls (lock movement) when returning to the board game
@@ -291,7 +439,7 @@ function CombatService:ResolvePreCombat()
 		end
 	end
 
-	if player2 then
+	if player2 and player2:IsDescendantOf(Players) then
 		setSystemEnabledEvent:FireClient(player2, "CameraSystem", true)
 		setSystemEnabledEvent:FireClient(player2, "DiceRollHandler", true)
 		-- Disable Player Controls (lock movement) when returning to the board game
