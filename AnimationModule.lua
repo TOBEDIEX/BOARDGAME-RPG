@@ -11,7 +11,7 @@
     - Support for animation groups
     - Automated loading and caching
 ]]
-
+-- ที่ตั้งของไฟล์คือ ReplicatedStorage/SharedModules
 local AnimationFramework = {}
 AnimationFramework.__index = AnimationFramework
 
