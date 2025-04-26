@@ -1,6 +1,6 @@
 -- TurnSystem.lua
 -- Module for managing turn system and player order
--- Version: 3.3.0 (Added Combat Cooldown System)
+-- Version: 3.3.1 (Improved Combat Integration)
 
 local TurnSystem = {}
 TurnSystem.__index = TurnSystem
@@ -15,6 +15,42 @@ local TURN_TIME_LIMIT = 60
 local INACTIVITY_WARNING_TIME = 15
 local MOVEMENT_SAFETY_DELAY = 0.8
 local COMBAT_COOLDOWN_TURNS = 2 -- จำนวนเทิร์นที่ติดคูลดาวน์หลังการต่อสู้
+
+-- Lazy load CombatService reference
+local CombatService = nil
+local function getCombatService()
+	-- Check if already loaded
+	if CombatService then return CombatService end
+
+	-- Try getting from GameManager first
+	local gameManager = _G.GameManager
+	if gameManager and gameManager.combatService then
+		CombatService = gameManager.combatService
+		print("[TurnSystem] Found CombatService via GameManager.")
+		return CombatService
+	end
+
+	-- Fallback: Try requiring directly (assuming standard location)
+	local servicesFolder = game:GetService("ServerScriptService"):FindFirstChild("Services")
+	if servicesFolder then
+		local combatServiceScript = servicesFolder:FindFirstChild("CombatService") -- Assuming name is CombatService.server.lua or CombatService
+		if combatServiceScript then
+			local success, result = pcall(require, combatServiceScript)
+			if success then
+				CombatService = result
+				print("[TurnSystem] Found CombatService via direct require.")
+				return CombatService
+			else
+				warn("[TurnSystem] Error requiring CombatService directly:", result)
+			end
+		end
+	end
+
+	-- If still not found after attempts
+	warn("[TurnSystem] CombatService could not be located!")
+	return nil
+end
+
 
 -- Constructor
 function TurnSystem.new()
@@ -218,7 +254,7 @@ function TurnSystem:StartPlayerTurn(playerID, attemptCount)
 			end
 		end
 		-- Adjust index if removal affected current position
-		if foundAndRemoved then
+		if foundAndRemoved and self.currentTurnIndex > i then -- Only adjust if removed item was before or at current index
 			self.currentTurnIndex = math.max(0, self.currentTurnIndex - 1) -- Decrement index carefully
 		end
 		return self:NextTurn(attemptCount + 1) -- Try the next player
@@ -249,14 +285,14 @@ function TurnSystem:StartPlayerTurn(playerID, attemptCount)
 	if gameManager then
 		-- Reset Inventory Service flags (like item usage)
 		if gameManager.inventoryService and gameManager.inventoryService.ResetTurnFlagsForPlayer then
-			local resetSuccess, resetMsg = pcall(gameManager.inventoryService.ResetTurnFlagsForPlayer, playerID)
+			local resetSuccess, resetMsg = pcall(gameManager.inventoryService.ResetTurnFlagsForPlayer, gameManager.inventoryService, playerID) -- Pass self if it's a method
 			if not resetSuccess then
 				warn("[TurnSystem] Error calling InventoryService.ResetTurnFlagsForPlayer for ID", playerID, ":", resetMsg)
 			else
 				print("[TurnSystem DEBUG] Successfully called InventoryService.ResetTurnFlagsForPlayer for ID", playerID)
 			end
 		else
-			warn("[TurnSystem] InventoryService or ResetTurnFlagsForPlayer function not found in GameManager.")
+			print("[TurnSystem] InventoryService or ResetTurnFlagsForPlayer function not found in GameManager.")
 		end
 	else
 		warn("[TurnSystem] GameManager not found, cannot reset turn flags in other services.")
@@ -282,17 +318,16 @@ function TurnSystem:StartPlayerTurn(playerID, attemptCount)
 	-- Send specific state info to the current player
 	if self.remotes and self.remotes.turnState then
 		-- เพิ่มการส่งข้อมูลคูลดาวน์การต่อสู้ไปยังผู้เล่น
-		local hasCombatCooldown = self:GetCombatCooldown(playerID) > 0
-		self.remotes.turnState:FireClient(player, { 
-			timeLimit = TURN_TIME_LIMIT, 
+		local currentCooldown = self:GetCombatCooldown(playerID)
+		self.remotes.turnState:FireClient(player, {
+			timeLimit = TURN_TIME_LIMIT,
 			isYourTurn = true,
-			combatCooldown = self:GetCombatCooldown(playerID) -- ส่งค่าคูลดาวน์ไปด้วย
+			combatCooldown = currentCooldown -- ส่งค่าคูลดาวน์ไปด้วย
 		})
 
-		-- แจ้งเตือนผู้เล่นถ้ามีคูลดาวน์การต่อสู้
-		if hasCombatCooldown then
-			local cooldown = self:GetCombatCooldown(playerID)
-			self.remotes.combatCooldown:FireClient(player, cooldown)
+		-- แจ้งเตือนผู้เล่นถ้ามีคูลดาวน์การต่อสู้ (อาจซ้ำซ้อนกับ Deccrement แต่ไม่เป็นไร)
+		if currentCooldown > 0 then
+			self.remotes.combatCooldown:FireClient(player, currentCooldown)
 		end
 	else
 		warn("[TurnSystem] Remotes not initialized for TurnState.")
@@ -320,7 +355,7 @@ function TurnSystem:StartTurnTimer()
 		self.turnTimer = nil
 	end
 
-	local startTime = os.time()
+	local startTime = tick() -- Use tick() for higher precision if needed
 	local lastSecond = -1 -- Track the last second updated to avoid excessive remote calls
 
 	-- Use Heartbeat for smooth timer updates
@@ -339,7 +374,7 @@ function TurnSystem:StartTurnTimer()
 			return
 		end
 
-		local elapsedTime = os.time() - startTime
+		local elapsedTime = tick() - startTime
 		local currentSecond = math.floor(elapsedTime)
 		self.turnTimeRemaining = math.max(0, TURN_TIME_LIMIT - elapsedTime)
 
@@ -401,24 +436,25 @@ function TurnSystem:EndPlayerTurn(playerID, reason)
 		return false -- Stop execution if the state is invalid
 	end
 
-	-- Check for pending end turn to avoid multiple calls, unless it's a timeout
-	if self.pendingEndTurn[playerID] and reason ~= "timeout" then
+	-- Check for pending end turn to avoid multiple calls, unless it's a timeout or specific allowed reasons
+	local isPending = self.pendingEndTurn[playerID]
+	if isPending and reason ~= "timeout" and reason ~= "player_death" and reason ~= "player_dead_after_combat" then
 		print("[TurnSystem DEBUG] EndPlayerTurn ignored, already pending for:", playerID) -- DEBUG
 		return false
 	end
 
 	-- If a timeout happens while a move-related end is pending, cancel the pending one and proceed with timeout
-	if reason == "timeout" and self.pendingEndTurn[playerID] then
+	if reason == "timeout" and isPending then
 		print("[TurnSystem DEBUG] Timeout occurred during pending end turn. Cancelling pending.") -- DEBUG
 		self.pendingEndTurn[playerID] = nil -- Clear pending state
 		-- Fall through to ExecuteEndTurn immediately for timeout reason
 		-- Handle delayed end turn for movement completion
-	elseif (reason == "move_complete" or reason == "move_timeout") and not self.pendingEndTurn[playerID] then
+	elseif (reason == "move_complete" or reason == "move_timeout") and not isPending then
 		print("[TurnSystem DEBUG] Pending end turn for movement reason:", reason) -- DEBUG
 		-- Track the pending end request
 		self.pendingEndTurn[playerID] = {
 			reason = reason,
-			timestamp = os.time()
+			timestamp = tick() -- Use tick()
 		}
 
 		-- Delay the actual turn end to allow animations/movement to finish
@@ -439,7 +475,7 @@ function TurnSystem:EndPlayerTurn(playerID, reason)
 		return true -- Indicate that the end turn process has started (pending)
 	end
 
-	-- For non-movement reasons or timeout (when not pending), end turn immediately
+	-- For non-movement reasons, death reasons, or timeout (when not pending), end turn immediately
 	print("[TurnSystem DEBUG] Executing end turn immediately. Reason:", reason) -- DEBUG
 	return self:ExecuteEndTurn(playerID, reason)
 end
@@ -491,6 +527,8 @@ end
 
 -- Move to the next player in the turn order
 function TurnSystem:NextTurn(attemptCount)
+	attemptCount = attemptCount or 0 -- Initialize attempt count if not provided
+
 	-- Check if paused
 	if self.isPaused then
 		print("[TurnSystem DEBUG] Turn system is paused. Cannot move to next turn.")
@@ -505,11 +543,11 @@ function TurnSystem:NextTurn(attemptCount)
 	end
 
 	-- Calculate the index of the next player, wrapping around if necessary
-	if self.currentTurnIndex <= 0 or self.currentTurnIndex >= #self.turnOrder then
-		self.currentTurnIndex = 1 -- Start from the beginning
-	else
-		self.currentTurnIndex = self.currentTurnIndex + 1 -- Move to the next index
+	local nextIndex = self.currentTurnIndex + 1
+	if nextIndex > #self.turnOrder then
+		nextIndex = 1 -- Wrap around to the beginning
 	end
+	self.currentTurnIndex = nextIndex -- Update the index
 
 	local nextPlayerID = self.turnOrder[self.currentTurnIndex]
 	print(string.format("[TurnSystem] NextTurn: Attempting turn for index %d / %d. PlayerID: %s", self.currentTurnIndex, #self.turnOrder, tostring(nextPlayerID))) -- Debug Print
@@ -537,6 +575,18 @@ end
 function TurnSystem:GetCurrentPlayerTurn()
 	return self.currentPlayerTurn
 end
+
+-- Get remaining turn time
+function TurnSystem:GetTurnTimeRemaining()
+	if self.isTurnActive then
+		return self.turnTimeRemaining
+	elseif self.isPaused and self.pausedTurnState then
+		return self.pausedTurnState.timeRemaining
+	else
+		return 0
+	end
+end
+
 
 -- Check if it is currently the specified player's turn
 function TurnSystem:IsPlayerTurn(playerID)
@@ -593,18 +643,15 @@ function TurnSystem:HandlePlayerLeaving(playerID)
 	local wasCurrentTurn = (playerID == self.currentPlayerTurn)
 	local turnIndexBeforeRemoval = self.currentTurnIndex
 	local removed = false
+	local indexRemoved = -1
 
 	-- Remove the player from the turn order array
 	for i = #self.turnOrder, 1, -1 do
 		if self.turnOrder[i] == playerID then
 			table.remove(self.turnOrder, i)
 			removed = true
+			indexRemoved = i
 			print("  > Removed from turn order. New order:", self.turnOrder) -- Debug
-			-- Adjust the current index if the removal shifted positions before it
-			if i <= turnIndexBeforeRemoval then
-				self.currentTurnIndex = math.max(0, turnIndexBeforeRemoval - 1)
-				print("  > Adjusted currentTurnIndex to:", self.currentTurnIndex) -- Debug
-			end
 			break
 		end
 	end
@@ -616,6 +663,21 @@ function TurnSystem:HandlePlayerLeaving(playerID)
 	self.deadPlayers[playerID] = nil
 	self.combatCooldowns[playerID] = nil -- เพิ่มการล้างคูลดาวน์เมื่อผู้เล่นออกจากเกม
 
+	-- If the player was removed and it affected the current index
+	if removed then
+		if indexRemoved < self.currentTurnIndex then
+			-- If the removed player was before the current index, decrement index
+			self.currentTurnIndex = math.max(0, self.currentTurnIndex - 1)
+			print("  > Adjusted currentTurnIndex due to removal before current:", self.currentTurnIndex) -- Debug
+		elseif indexRemoved == self.currentTurnIndex and not wasCurrentTurn then
+			-- If the removed player *was* the current index but *not* the active turn player
+			-- (e.g., removed while turn was paused or between turns), adjust index
+			self.currentTurnIndex = math.max(0, self.currentTurnIndex - 1)
+			print("  > Adjusted currentTurnIndex due to removal at current index (inactive):", self.currentTurnIndex) -- Debug
+		end
+	end
+
+
 	-- If the leaving player was the one whose turn it was
 	if wasCurrentTurn then
 		print("  > Leaving player was current turn. Ending their turn and moving next.") -- Debug
@@ -625,33 +687,52 @@ function TurnSystem:HandlePlayerLeaving(playerID)
 		self.currentPlayerTurn = nil
 		-- Move to the next player only if not paused
 		if not self.isPaused then
+			-- Adjust index *before* calling NextTurn if the last player was removed
+			if #self.turnOrder > 0 and self.currentTurnIndex >= #self.turnOrder then
+				self.currentTurnIndex = #self.turnOrder -1 -- Point to the last valid index before incrementing in NextTurn
+			elseif #self.turnOrder == 0 then
+				-- Handled below
+			else
+				-- Decrement index because NextTurn will increment it. We want the player *after* the leaver.
+				self.currentTurnIndex = math.max(0, indexRemoved - 1)
+			end
 			self:NextTurn()
 		else
 			print("  > Turn system is paused, not moving to next turn.")
 		end
-		-- Adjust index if the removal made the current index out of bounds
-	elseif #self.turnOrder > 0 and self.currentTurnIndex >= #self.turnOrder then
-		self.currentTurnIndex = 0 -- Wrap around or reset (resetting to 0 to prepare for NextTurn increment)
-		print("  > Adjusted currentTurnIndex due to removal making it out of bounds.") -- Debug
 		-- If no players are left, reset the system
 	elseif #self.turnOrder == 0 then
 		print("  > Last player left. Resetting turn system.") -- Debug
 		self:Reset()
+		-- If the removal made the current index invalid (e.g., removed last player, index points beyond new end)
+	elseif removed and #self.turnOrder > 0 and self.currentTurnIndex >= #self.turnOrder then
+		self.currentTurnIndex = #self.turnOrder - 1 -- Adjust to the last valid index
+		print("  > Adjusted currentTurnIndex after removal made it out of bounds:", self.currentTurnIndex) -- Debug
 	end
 	return true
 end
 
--- NEW: Handle player death
+-- NEW: Handle player death (Modified for Combat Integration)
 function TurnSystem:OnPlayerDeath(playerID)
 	print("[TurnSystem] Player", playerID, "has died. Adjusting turn system...")
 
 	-- Mark the player as dead
 	self.deadPlayers[playerID] = true
 
-	-- If it's currently the dead player's turn, end it immediately
-	if self.currentPlayerTurn == playerID and self.isTurnActive then
-		print("[TurnSystem] Ending turn of dead player", playerID)
-		self:EndPlayerTurn(playerID, "player_death")
+	-- Check if combat is active using the helper function
+	local combatService = getCombatService()
+	local isCombatActive = combatService and combatService:IsCombatActive()
+
+	-- If it's currently the dead player's turn AND combat is NOT active, end it immediately
+	if self.currentPlayerTurn == playerID and self.isTurnActive and not isCombatActive then
+		print("[TurnSystem] Ending turn of dead player", playerID, "(Combat not active)")
+		-- Use task.spawn to avoid potential yield issues if EndPlayerTurn calls callbacks
+		task.spawn(self.EndPlayerTurn, self, playerID, "player_death")
+		return true
+	elseif self.currentPlayerTurn == playerID and self.isTurnActive and isCombatActive then
+		-- If combat IS active, just mark as dead. CombatService will handle turn end.
+		print("[TurnSystem] Marked player", playerID, "as dead during active combat. Turn end deferred to CombatService.")
+		-- Let CombatService handle pausing/timer stopping.
 		return true
 	end
 
@@ -659,6 +740,7 @@ function TurnSystem:OnPlayerDeath(playerID)
 	print("[TurnSystem] Marked player", playerID, "as dead. They will be skipped in turn rotation.")
 	return true
 end
+
 
 -- NEW: Handle player respawn
 function TurnSystem:OnPlayerRespawn(playerID)
@@ -676,15 +758,17 @@ function TurnSystem:OnPlayerRespawn(playerID)
 		end
 	end
 
-	-- If player was removed from turn order, add them back
-	if not isInTurnOrder then
+	-- If player was removed from turn order (e.g., left and rejoined), add them back
+	if not isInTurnOrder and #self.turnOrder < Players:GetPlayers() then -- Add only if not already present
 		table.insert(self.turnOrder, playerID)
 		print("[TurnSystem] Added respawned player", playerID, "back to turn order.")
+	elseif isInTurnOrder then
+		print("[TurnSystem] Respawned player", playerID, "is already in turn order.")
 	end
 
-	-- Set player to skip one turn after respawn
-	self.skipTurnPlayers[playerID] = 1
-	print("[TurnSystem] Player", playerID, "will skip next turn after respawn.")
+	-- Set player to skip one turn after respawn (optional game rule)
+	-- self.skipTurnPlayers[playerID] = 1
+	-- print("[TurnSystem] Player", playerID, "will skip next turn after respawn.")
 
 	return true
 end
@@ -723,9 +807,11 @@ function TurnSystem:PauseTurns()
 	print("[TurnSystem] Pausing turns.")
 	self.isPaused = true
 	-- If a turn is active, stop its timer and store state
-	if self.isTurnActive and self.turnTimer then
-		self.turnTimer:Disconnect() -- Disconnect stops the Heartbeat connection
-		self.turnTimer = nil
+	if self.isTurnActive then
+		if self.turnTimer then
+			self.turnTimer:Disconnect() -- Disconnect stops the Heartbeat connection
+			self.turnTimer = nil
+		end
 		self.pausedTurnState = { playerId = self.currentPlayerTurn, timeRemaining = self.turnTimeRemaining }
 		print("  > Stored paused turn state for player", self.pausedTurnState.playerId, "with", self.pausedTurnState.timeRemaining, "s remaining.")
 		-- Optionally notify clients that the turn is paused
@@ -756,12 +842,20 @@ function TurnSystem:ResumeTurns()
 			self.isTurnActive = true
 			self.turnTimeRemaining = pausedState.timeRemaining
 			-- Find the correct index for the resumed player
+			local foundIndex = false
 			for i, id in ipairs(self.turnOrder) do
 				if id == pausedState.playerId then
 					self.currentTurnIndex = i
+					foundIndex = true
 					break
 				end
 			end
+			if not foundIndex then
+				warn("[TurnSystem] Resumed player", pausedState.playerId, "not found in current turn order! Moving next.")
+				self:NextTurn()
+				return -- Exit resume logic
+			end
+
 			self:StartTurnTimer() -- Restart the timer
 			-- Notify clients
 			if self.remotes and self.remotes.updateTurn then
@@ -775,8 +869,8 @@ function TurnSystem:ResumeTurns()
 			self:NextTurn() -- Move to the next player if the paused one is invalid
 		end
 	else
-		-- If no turn was active, just start the next turn
-		print("  > No paused turn state found. Moving to next turn.")
+		-- If no turn was active when paused, just start the next turn based on current index
+		print("  > No paused turn state found or no active turn when paused. Moving to next turn.")
 		self:NextTurn()
 	end
 end
@@ -850,5 +944,71 @@ end
 function TurnSystem:HasCombatCooldown(playerID)
 	return self:GetCombatCooldown(playerID) > 0
 end
+
+-- NEW: Force set the current turn (Use with caution!)
+function TurnSystem:ForceSetCurrentTurn(playerID)
+	print("[TurnSystem WARNING] ForceSetCurrentTurn called for player:", playerID)
+	local player = Players:GetPlayerByUserId(playerID)
+	if not player then
+		warn("  > Player not found. Cannot force turn.")
+		return false
+	end
+
+	-- Stop existing timer if any
+	if self.turnTimer then self.turnTimer:Disconnect(); self.turnTimer = nil end
+
+	-- Find the player's index
+	local foundIndex = -1
+	for i, id in ipairs(self.turnOrder) do
+		if id == playerID then
+			foundIndex = i
+			break
+		end
+	end
+
+	if foundIndex == -1 then
+		warn("  > Player", playerID, "not found in turn order. Cannot force turn.")
+		return false
+	end
+
+	-- Set the state
+	self.currentTurnIndex = foundIndex
+	self.currentPlayerTurn = playerID
+	self.isTurnActive = true -- Mark as active
+	self.isPaused = false -- Ensure not paused
+	self.turnTimeRemaining = TURN_TIME_LIMIT -- Reset timer
+	self.pendingEndTurn[playerID] = nil -- Clear pending end
+
+	print("  > Forcefully set turn index to", foundIndex)
+
+	-- Notify clients
+	if self.remotes and self.remotes.updateTurn then
+		self.remotes.updateTurn:FireAllClients(playerID)
+	end
+	if self.remotes and self.remotes.turnState then
+		self.remotes.turnState:FireClient(player, {
+			timeLimit = TURN_TIME_LIMIT,
+			isYourTurn = true,
+			combatCooldown = self:GetCombatCooldown(playerID)
+		})
+	end
+
+	-- Restart timer
+	self:StartTurnTimer()
+
+	-- Call onTurnStart callback
+	if self.onTurnStart then
+		pcall(self.onTurnStart, playerID)
+	end
+
+	return true
+end
+
+-- Fallback if ForceSetCurrentTurn is not available (less direct)
+function TurnSystem:SetCurrentPlayer(playerID)
+	warn("[TurnSystem] Using fallback SetCurrentPlayer for:", playerID)
+	return self:ForceSetCurrentTurn(playerID) -- Redirect to the main forcing function
+end
+
 
 return TurnSystem
